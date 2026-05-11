@@ -269,14 +269,15 @@ header.hero {
 .top-nav > ul > li > .nav-toggle:checked ~ ul { display: block; }
 .top-nav > ul > li > .nav-toggle:checked ~ .nav-row .nav-caret { transform: rotate(180deg); color: var(--accent); }
 
+.top-nav > ul > li > ul .nav-row > a { flex: 1; }
 .top-nav > ul > li > ul > li > .nav-row > a {
   color: var(--fg-1);
   padding: 8px var(--s-4);
   border-radius: 0;
 }
 .top-nav > ul > li > ul > li > .nav-row > a:hover {
-  background: var(--ink-5);
-  color: var(--accent);
+  background: var(--bg-accent);
+  color: var(--fg-1);
 }
 
 /* Third-level — nested deeper inline */
@@ -289,6 +290,10 @@ header.hero {
   color: var(--fg-2);
   font: var(--type-body-sm);
   padding: 6px var(--s-3);
+}
+.top-nav > ul > li > ul ul .nav-row > a:hover {
+  background: var(--bg-accent);
+  color: var(--fg-1);
 }
 
 /* ===== SEARCH FORM IN TOP BAR ===== */
