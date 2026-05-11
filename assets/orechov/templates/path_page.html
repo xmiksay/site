@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{% if page %}{{ page.path }} – {% endif %}Site{% endblock %}
+{% block content %}
+{% if page %}
+<article class="article-detail">
+    {% if logged_in %}<div class="edit-bar"><a href="/admin/pages/{{ page.id }}/edit" class="edit-link">Edit</a></div>{% endif %}
+    <p class="meta">{{ page.modified_at|timeformat("%d. %m. %Y") }}</p>
+    {% if tags is defined and tags | length > 0 %}
+    <div class="tag-list">
+        {% for t in tags %}
+        <a href="/tag/{{ t.id }}" class="tag">{{ t.name }}</a>
+        {% endfor %}
+    </div>
+    {% endif %}
+    <div class="article-body">
+        {{ body_html | safe }}
+    </div>
+</article>
+{% else %}
+{% if logged_in %}<div class="edit-bar"><a href="/admin/menu/{{ menu_id }}/edit" class="edit-link">Edit</a></div>{% endif %}
+<div class="article-body">
+    {{ body_html | safe }}
+</div>
+{% endif %}
+{% endblock %}

@@ -20,58 +20,46 @@
 </a>
 {% endmacro %}
 
-<header>
-    {{ brand() }}
-    <div class="header-spacer"></div>
-    <a class="header-action" href="/admin">{% if logged_in %}Admin{% else %}Přihlásit{% endif %}</a>
-    <input type="checkbox" id="menu-toggle" hidden="">
-    <label class="hamburger" for="menu-toggle">
-        <span></span>
-        <span></span>
-        <span></span>
-    </label>
+{% macro nav_items(items) %}
+    <ul>
+        {% for item in items %}
+        {% set toggle_id = "nav-" ~ (item.path | replace("/", "-") | replace(" ", "-")) %}
+        <li class="{% if item.children %}has-children{% endif %}">
+            {% if item.children %}<input type="checkbox" id="{{ toggle_id }}" class="nav-toggle">{% endif %}
+            <div class="nav-row">
+                <a href="{{ item.path }}">{{ item.label }}</a>
+                {% if item.children %}<label for="{{ toggle_id }}" class="nav-caret" aria-hidden="true"></label>{% endif %}
+            </div>
+            {% if item.children %}{{ nav_items(item.children) }}{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+{% endmacro %}
+
+<header class="hero">
+    <div class="hero-bar">
+        {{ brand() }}
+        <input type="checkbox" id="menu-toggle" hidden="">
+        <label class="hamburger" for="menu-toggle">
+            <span></span>
+            <span></span>
+            <span></span>
+        </label>
+        <nav class="top-nav" id="top-nav">
+            {{ nav_items(menu_tree) }}
+        </nav>
+        <form class="top-search" action="/search" method="get" role="search">
+            <input type="search" name="q" placeholder="Hledat…" aria-label="Hledat">
+        </form>
+        <a class="header-action" href="/admin">{% if logged_in %}Admin{% else %}Přihlásit{% endif %}</a>
+    </div>
 </header>
 
-<div class="layout">
-    <aside class="sidebar" id="sidebar">
-        <div class="sidebar-body">
-            {% macro nav_items(items) %}
-                <ul>
-                    {% for item in items %}
-                    {% set toggle_id = "nav-" ~ (item.path | replace("/", "-") | replace(" ", "-")) %}
-                    <li class="{% if item.children %}has-children{% endif %}">
-                        {% if item.children %}<input type="checkbox" id="{{ toggle_id }}" class="nav-toggle" checked>{% endif %}
-                        <div class="nav-row">
-                            <a href="{{ item.path }}">{{ item.label }}</a>
-                            {% if item.children %}<label for="{{ toggle_id }}" class="nav-caret" aria-hidden="true"></label>{% endif %}
-                        </div>
-                        {% if item.children %}{{ nav_items(item.children) }}{% endif %}
-                    </li>
-                    {% endfor %}
-                </ul>
-            {% endmacro %}
-            <nav>
-                <ul>
-                    <li class="search-item"><div class="nav-row"><a href="/search">Hledat</a></div></li>
-                </ul>
-                {{ nav_items(menu_tree) }}
-            </nav>
-            <div class="sidebar-bottom">
-                {% if logged_in %}
-                <a href="/admin">Admin</a>
-                {% else %}
-                <a href="/admin">Přihlásit</a>
-                {% endif %}
-            </div>
-        </div>
-    </aside>
-
-    <div class="content">
-        <main>
-            {% block content %}{% endblock %}
-        </main>
-        <footer>&copy; Bíločerný Ořechov, z.s. &middot; <a href="/sitemap.xml">Mapa stránek</a></footer>
-    </div>
+<div class="content">
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <footer>&copy; Bíločerný Ořechov, z.s. &middot; <a href="/sitemap.xml">Mapa stránek</a></footer>
 </div>
 
 <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
@@ -81,7 +69,7 @@
 <script>
     const t = document.getElementById('menu-toggle');
     if (t) t.addEventListener('change', function () {
-        document.getElementById('sidebar').classList.toggle('open', this.checked);
+        document.getElementById('top-nav').classList.toggle('open', this.checked);
     });
 </script>
 </body>
