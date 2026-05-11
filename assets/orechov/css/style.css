@@ -253,6 +253,17 @@ header.hero {
   padding: var(--s-2) 0;
   z-index: 60;
 }
+/* Invisible hover bridge across the 6px gap between the menu item and
+   the dropdown panel — without this the dropdown closes the moment the
+   cursor enters the gap. */
+.top-nav > ul > li.has-children > ul::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 10px;
+}
 .top-nav > ul > li.has-children > .nav-row .nav-caret { color: rgba(255, 255, 255, 0.7); }
 .top-nav > ul > li.has-children:hover > ul,
 .top-nav > ul > li > .nav-toggle:checked ~ ul { display: block; }
