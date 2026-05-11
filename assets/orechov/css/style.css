@@ -119,7 +119,7 @@
 
   /* ---------- Layout ---------- */
   --header-h: 64px;
-  --hero-h: 50vh;
+  --hero-h: 40vh;
   --content-max: 720px;
   --content-wide: 1080px;
   --board-size: min(480px, 70vw);
