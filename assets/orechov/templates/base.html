@@ -50,6 +50,8 @@
         </nav>
         <form class="top-search" action="/search" method="get" role="search">
             <input type="search" name="q" placeholder="Hledat…" aria-label="Hledat">
+            <button type="button" class="top-search-clear" aria-label="Vymazat"
+                    onclick="const i=this.previousElementSibling;i.value='';i.focus();">&times;</button>
         </form>
         <a class="header-action" href="/admin">{% if logged_in %}Admin{% else %}Přihlásit{% endif %}</a>
     </div>

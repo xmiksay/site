@@ -190,6 +190,7 @@ header.hero {
   text-transform: uppercase;
 }
 
+
 /* ===== TOP NAVIGATION ===== */
 .top-nav { flex: 1; min-width: 0; }
 .top-nav > ul {
@@ -204,21 +205,26 @@ header.hero {
 .top-nav ul { list-style: none; margin: 0; padding: 0; }
 .top-nav li { position: relative; }
 
-.top-nav .nav-row { display: flex; align-items: center; }
+.top-nav .nav-row {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  transition: background var(--dur-fast) var(--ease);
+}
 .top-nav .nav-row a {
   display: block;
   padding: 8px 14px;
   color: var(--white);
   font: var(--type-ui);
   border-bottom: 0;
-  border-radius: var(--radius-sm);
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  transition: color var(--dur-fast) var(--ease);
 }
-.top-nav .nav-row a:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: var(--accent);
-  border-bottom: 0;
-}
+.top-nav .nav-row a:hover { border-bottom: 0; }
+/* Hover surface spans the whole row so the dropdown caret sits inside the
+   same hover background as its link. */
+.top-nav > ul > li > .nav-row:hover { background: var(--bg-accent); }
+.top-nav > ul > li > .nav-row:hover > a { color: var(--fg-1); }
+.top-nav > ul > li > .nav-row:hover > .nav-caret { color: var(--fg-1); }
 
 /* Carets (dropdown toggle) */
 .top-nav .nav-toggle { display: none; }
@@ -275,10 +281,12 @@ header.hero {
   padding: 8px var(--s-4);
   border-radius: 0;
 }
-.top-nav > ul > li > ul > li > .nav-row > a:hover {
+.top-nav > ul > li > ul > li > .nav-row > .nav-caret { color: var(--fg-2); }
+.top-nav > ul > li > ul > li > .nav-row:hover {
   background: var(--bg-accent);
   color: var(--fg-1);
 }
+.top-nav > ul > li > ul > li > .nav-row:hover > .nav-caret { color: var(--fg-1); }
 
 /* Third-level — nested deeper inline */
 .top-nav > ul > li > ul ul {
@@ -291,18 +299,20 @@ header.hero {
   font: var(--type-body-sm);
   padding: 6px var(--s-3);
 }
-.top-nav > ul > li > ul ul .nav-row > a:hover {
+.top-nav > ul > li > ul ul .nav-row > .nav-caret { color: var(--fg-2); }
+.top-nav > ul > li > ul ul .nav-row:hover {
   background: var(--bg-accent);
   color: var(--fg-1);
 }
+.top-nav > ul > li > ul ul .nav-row:hover > .nav-caret { color: var(--fg-1); }
 
 /* ===== SEARCH FORM IN TOP BAR ===== */
-.top-search { flex-shrink: 0; }
+.top-search { flex-shrink: 0; position: relative; }
 .top-search input[type="search"] {
   background: rgba(255, 255, 255, 0.12);
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: var(--white);
-  padding: 8px 14px;
+  padding: 8px 32px 8px 14px;
   border-radius: var(--radius-md);
   font: var(--type-ui);
   outline: none;
@@ -315,6 +325,33 @@ header.hero {
   background: rgba(255, 255, 255, 0.2);
   border-color: var(--accent);
 }
+.top-search input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.top-search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: var(--accent);
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.top-search-clear:hover { background: rgba(130, 198, 101, 0.2); color: var(--accent-light); }
+.top-search input[type="search"]:placeholder-shown + .top-search-clear { display: none; }
 
 .header-action {
   font: var(--type-ui);
