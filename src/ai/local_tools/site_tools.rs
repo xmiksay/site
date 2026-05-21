@@ -478,7 +478,7 @@ impl LocalTool for CreateFileTool {
             "mimetype": created.model.mimetype,
             "size_bytes": created.model.size_bytes,
             "has_thumbnail": created.has_thumbnail,
-            "embed": format!("::img{{id={}}}", created.model.id),
+            "embed": format!("<image id=\"{}\">", created.model.id),
         })))
     }
 }

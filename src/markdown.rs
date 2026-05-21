@@ -1,51 +1,61 @@
-//! Markdown rendering with `::tag` directives.
+//! Markdown rendering with `<name ...>` directives.
 //!
-//! Block- and inline-level directives use the `::name{key=value, key=value}`
-//! syntax. Each directive resolves to HTML (or, for `::page`, to markdown
-//! that is recursively re-scanned) before the markdown parser runs.
+//! Block- and inline-level directives use an HTML-tag syntax,
+//! `<name attr="value" ...>`. Each directive resolves to HTML (or, for `<page>`,
+//! to markdown that is recursively re-scanned) and is spliced inline into the
+//! document before the markdown parser runs.
 //!
 //! ```text
-//! ::page{path=infra/desktop/syncthing}
-//! ::page{id=7}
-//! ::file{path=spec.pdf}
-//! ::file{id=42}
-//! ::file{hash=ab12...}
-//! ::img{path=diagram.png}
-//! ::gallery{id=3}
-//! ::gallery{path=holiday-2024}
-//! ::fen{path=opening.fen, size=large}
-//! ::pgn{hash=ab12..., move=12, size=small}
+//! <page path="infra/desktop/syncthing">
+//! <page id="7">
+//! <file path="spec.pdf">
+//! <file id="42">
+//! <file hash="ab12...">
+//! <image path="diagram.png" alt="Architecture">
+//! <gallery id="3">
+//! <gallery path="holiday-2024">
+//! <fen path="opening.fen" size="large">
+//! <pgn hash="ab12..." move="12" size="small">
+//! <fen>rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1</fen>
+//! <pgn move="10">1. e4 e5 2. Nf3 Nc6 ...</pgn>
 //! ```
 //!
-//! Argument values may be unquoted, single-quoted, or double-quoted; quoted
-//! values support `\\` escapes. Multiple args are comma-separated.
+//! Attribute values may be double-quoted, single-quoted, or unquoted (no
+//! whitespace). `<fen>`/`<pgn>` also accept a paired-tag form whose body holds
+//! the position/game inline (multiple lines allowed); a body makes
+//! `path`/`id`/`hash` optional.
 //!
 //! Lookup keys: exactly one of
-//! - file-based (`::file`/`::img`/`::fen`/`::pgn`): `path`, `id`, or `hash` (sha256)
-//! - `::gallery`: `path` or `id`
-//! - `::page`: `path` or `id`
+//! - file-based (`<file>`/`<image>`/`<fen>`/`<pgn>`): `path`, `id`, or `hash` (sha256)
+//! - `<gallery>`: `path` or `id`
+//! - `<page>`: `path` or `id`
 //!
-//! Directives inside fenced code blocks (` ``` `, `~~~`) and inline code spans
-//! (`` ` ``) are passed through verbatim.
+//! Only an allow-list of names is treated as directives; any other `<tag>`
+//! (including a real `<img>`) passes through as raw HTML. Directives inside
+//! fenced code blocks (` ``` `, `~~~`) and inline code spans (`` ` ``) are
+//! passed through verbatim.
 //!
-//! Each directive returns an HTML block buffered into a placeholder so the
-//! markdown parser does not mangle it. Placeholders are restored after parsing.
+//! Each directive's rendered HTML is spliced inline (wrapped in blank lines so
+//! it forms a raw-HTML block) and passes through the markdown parser verbatim.
 
 /// Human-readable summary of the custom markdown directives. Shared by the MCP
 /// server instructions and the assistant system prompt so AI tools know the
 /// exact syntax they should produce.
 pub const MARKDOWN_EXTENSIONS_DOC: &str = "\
-Directives use the `::name{key=value, key=value}` syntax. Lookup keys:
-- file-based (`::file`/`::img`/`::fen`/`::pgn`): exactly one of `path`, `id`, or `hash` (sha256)
-- `::gallery`: exactly one of `path` or `id`
-- `::page`: exactly one of `path` or `id`
+Directives use an HTML-tag syntax `<name attr=\"value\">`. Only the names below
+are directives; any other `<tag>` is passed through as raw HTML. Lookup keys:
+- file-based (`<file>`/`<image>`/`<fen>`/`<pgn>`): exactly one of `path`, `id`, or `hash` (sha256)
+- `<gallery>`: exactly one of `path` or `id`
+- `<page>`: exactly one of `path` or `id`
 
-- `::page{path=section/sub/page}` / `::page{id=N}` — transclude another page's rendered content inline.
-- `::file{path|id|hash=...}` — embeds an image (if mime image/*) or a download link otherwise.
-- `::img{path|id|hash=..., alt=...}` — force image embed (with link to full size and caption).
-- `::gallery{path|id=...}` — embeds a gallery grid of thumbnails.
-- `::fen{path|id|hash=..., size=small|large}` — renders a static chess board position.
-- `::pgn{path|id|hash=..., move=N, size=small|large}` — renders a playable chess game viewer.
+- `<page path=\"section/sub/page\">` / `<page id=\"N\">` — transclude another page's rendered content inline.
+- `<file path=\"...\">` — embeds an image (if mime image/*) or a download link otherwise.
+- `<image path=\"...\" alt=\"...\">` — force image embed (with link to full size and caption).
+- `<gallery path=\"...\">` — embeds a gallery grid of thumbnails.
+- `<fen path=\"...\" size=\"small|large\">` — static chess board from a stored .fen file.
+- `<fen>FEN string</fen>` — static chess board from an inline FEN position.
+- `<pgn path=\"...\" move=\"N\" size=\"small|large\">` — playable game from a stored .pgn file.
+- `<pgn move=\"N\">PGN moves</pgn>` — playable game from an inline PGN (multiple lines allowed).
 - Internal links `[Text](Path/To/Page.md)` are auto-rewritten to lowercase absolute paths.";
 
 use std::collections::{HashMap, HashSet};
@@ -68,8 +78,6 @@ struct RenderCtx<'a> {
     logged_in: bool,
     /// Pages already on the transclusion stack — prevents infinite recursion.
     visited_pages: HashSet<String>,
-    /// HTML blocks held back from the markdown parser, keyed by index.
-    placeholders: Vec<String>,
 }
 
 pub async fn render(
@@ -83,7 +91,6 @@ pub async fn render(
         tmpl,
         logged_in,
         visited_pages: HashSet::new(),
-        placeholders: Vec::new(),
     };
 
     let expanded = expand_directives(md, &mut ctx).await;
@@ -96,16 +103,6 @@ pub async fn render(
     let mut out = String::new();
     html::push_html(&mut out, parser);
 
-    // Reverse order: a parked block created by a transcluding directive
-    // contains markers for the inner directives parked during its recursive
-    // expansion. Those inner placeholders always have lower indices, so
-    // substituting outer-first lets the inner markers surface in `out` before
-    // we try to replace them.
-    for (i, html_block) in ctx.placeholders.iter().enumerate().rev() {
-        let placeholder = format!("<!--SITE_PLACEHOLDER_{i}-->");
-        out = out.replace(&placeholder, html_block);
-    }
-
     rewrite_internal_links(&out)
 }
 
@@ -114,8 +111,12 @@ pub async fn render(
 // ---------------------------------------------------------------------------
 
 struct Directive {
+    /// Internal handler name (`page`/`file`/`img`/`gallery`/`fen`/`pgn`).
     name: String,
     args: HashMap<String, String>,
+    /// Body of a paired container tag (`<fen>…</fen>`, `<pgn>…</pgn>`); `None`
+    /// for void directives.
+    inner: Option<String>,
 }
 
 impl Directive {
@@ -124,132 +125,109 @@ impl Directive {
     }
 }
 
-/// Parse a directive starting at the beginning of `s`. Returns the parsed
-/// directive and the number of bytes consumed.
-fn parse_inline_directive(s: &str) -> Option<(Directive, usize)> {
-    let rest = s.strip_prefix("::")?;
+/// Surface names recognized as directives in tag form. Everything else (incl. a
+/// real `<img>`) is left untouched as raw HTML.
+const DIRECTIVE_NAMES: [&str; 6] = ["page", "file", "image", "gallery", "fen", "pgn"];
 
-    let name_end = rest
-        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .unwrap_or(rest.len());
-    if name_end == 0 {
+fn is_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-'
+}
+
+/// Parse a directive tag at the start of `s` (which must begin with `<`).
+/// Returns the directive and the number of bytes consumed (through `>` / `/>`).
+/// The surface name `image` is canonicalized to the handler name `img`.
+fn parse_tag_directive(s: &str) -> Option<(Directive, usize)> {
+    let after_lt = s.strip_prefix('<')?;
+    // Closing tags are not directives.
+    if after_lt.starts_with('/') {
         return None;
     }
-    let name = rest[..name_end].to_owned();
-
-    let after_name = &rest[name_end..];
-    let (args, args_bytes) = if let Some(after_brace) = after_name.strip_prefix('{') {
-        let close = find_args_close(after_brace)?;
-        let inner = &after_brace[..close];
-        // +2 for the surrounding braces
-        (parse_args(inner), close + 2)
-    } else {
-        (HashMap::new(), 0)
-    };
-
-    let consumed = 2 + name_end + args_bytes;
-    Some((Directive { name, args }, consumed))
-}
-
-/// Locate the matching `}` that closes a directive args block, respecting
-/// quoted values so a `}` inside `path="a}b"` is ignored.
-fn find_args_close(s: &str) -> Option<usize> {
-    let mut chars = s.char_indices();
-    let mut depth = 1usize;
-    let mut quote: Option<char> = None;
-    while let Some((i, c)) = chars.next() {
-        match (quote, c) {
-            (Some(_), '\\') => {
-                chars.next();
-            }
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '"') | (None, '\'') => quote = Some(c),
-            (None, '{') => depth += 1,
-            (None, '}') => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            (None, _) => {}
-        }
+    let name_end = after_lt
+        .find(|c: char| !is_name_char(c))
+        .unwrap_or(after_lt.len());
+    let name = &after_lt[..name_end];
+    if name.is_empty() || !DIRECTIVE_NAMES.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+        return None;
     }
-    None
-}
 
-/// Parse `key=value, key="value with spaces", key='value'` argument lists.
-fn parse_args(input: &str) -> HashMap<String, String> {
-    let mut out = HashMap::new();
-    let mut chars = input.chars().peekable();
-
+    let mut rest = &after_lt[name_end..];
+    let mut args: HashMap<String, String> = HashMap::new();
     loop {
-        while chars.peek().is_some_and(|c| c.is_whitespace() || *c == ',') {
-            chars.next();
+        rest = rest.trim_start();
+        if rest.is_empty() {
+            return None; // unterminated tag
         }
-        if chars.peek().is_none() {
+        if let Some(after) = rest.strip_prefix("/>") {
+            rest = after;
             break;
         }
-
-        let mut key = String::new();
-        while let Some(&c) = chars.peek() {
-            if c == '=' || c == ',' || c.is_whitespace() {
-                break;
-            }
-            key.push(c);
-            chars.next();
+        if let Some(after) = rest.strip_prefix('>') {
+            rest = after;
+            break;
         }
-
-        while chars.peek().is_some_and(|c| c.is_whitespace()) {
-            chars.next();
+        let key_end = rest
+            .find(|c: char| c.is_whitespace() || c == '=' || c == '>' || c == '/')
+            .unwrap_or(rest.len());
+        if key_end == 0 {
+            return None; // malformed attribute
         }
-
-        if chars.peek() != Some(&'=') {
-            if !key.is_empty() {
-                out.insert(key, String::new());
-            }
-            continue;
-        }
-        chars.next();
-
-        while chars.peek().is_some_and(|c| c.is_whitespace()) {
-            chars.next();
-        }
-
-        let mut value = String::new();
-        match chars.peek().copied() {
-            Some(quote @ ('"' | '\'')) => {
-                chars.next();
-                while let Some(c) = chars.next() {
-                    if c == quote {
-                        break;
-                    } else if c == '\\' {
-                        if let Some(esc) = chars.next() {
-                            value.push(esc);
-                        }
-                    } else {
-                        value.push(c);
-                    }
-                }
-            }
-            Some(_) => {
-                while let Some(&c) = chars.peek() {
-                    if c == ',' || c.is_whitespace() {
-                        break;
-                    }
-                    value.push(c);
-                    chars.next();
-                }
-            }
-            None => {}
-        }
-
-        if !key.is_empty() {
-            out.insert(key, value);
+        let key = rest[..key_end].to_string();
+        rest = &rest[key_end..];
+        let after_key = rest.trim_start();
+        if let Some(after_eq) = after_key.strip_prefix('=') {
+            let (value, remainder) = parse_tag_value(after_eq.trim_start())?;
+            args.insert(key, value);
+            rest = remainder;
+        } else {
+            args.insert(key, String::new()); // bare flag
         }
     }
 
-    out
+    let canonical = match name.to_ascii_lowercase().as_str() {
+        "image" => "img".to_string(),
+        other => other.to_string(),
+    };
+
+    let consumed = s.len() - rest.len();
+    Some((
+        Directive {
+            name: canonical,
+            args,
+            inner: None,
+        },
+        consumed,
+    ))
+}
+
+/// Parse a double-quoted, single-quoted, or unquoted attribute value. Returns
+/// `(value, remainder)`. Unquoted values stop at whitespace or `>` — never at
+/// `/`, so paths keep their slashes.
+fn parse_tag_value(s: &str) -> Option<(String, &str)> {
+    if let Some(rest) = s.strip_prefix('"') {
+        let end = rest.find('"')?;
+        Some((unescape_tag(&rest[..end]), &rest[end + 1..]))
+    } else if let Some(rest) = s.strip_prefix('\'') {
+        let end = rest.find('\'')?;
+        Some((unescape_tag(&rest[..end]), &rest[end + 1..]))
+    } else {
+        let end = s
+            .find(|c: char| c.is_whitespace() || c == '>')
+            .unwrap_or(s.len());
+        if end == 0 {
+            return None;
+        }
+        Some((unescape_tag(&s[..end]), &s[end..]))
+    }
+}
+
+fn unescape_tag(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    s.replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +246,10 @@ async fn expand_directives_impl(md: &str, ctx: &mut RenderCtx<'_>) -> String {
     let mut in_fence = false;
     let mut fence_char = '`';
 
-    for raw_line in md.split_inclusive('\n') {
+    let lines: Vec<&str> = md.split_inclusive('\n').collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let raw_line = lines[i];
         let stripped = raw_line.trim_end_matches(['\n', '\r']);
         let trimmed = stripped.trim_start();
 
@@ -278,18 +259,30 @@ async fn expand_directives_impl(md: &str, ctx: &mut RenderCtx<'_>) -> String {
             if trimmed.starts_with(close) {
                 in_fence = false;
             }
+            i += 1;
             continue;
         }
         if trimmed.starts_with("```") {
             in_fence = true;
             fence_char = '`';
             out.push_str(raw_line);
+            i += 1;
             continue;
         }
         if trimmed.starts_with("~~~") {
             in_fence = true;
             fence_char = '~';
             out.push_str(raw_line);
+            i += 1;
+            continue;
+        }
+
+        // Paired container directive (`<fen>…</fen>` / `<pgn>…</pgn>`), which may
+        // span several lines. Handled here because the inline scanner is per-line.
+        if let Some((dir, consumed_lines)) = collect_container(&lines, i) {
+            let html = dispatch_directive(&dir, ctx).await;
+            out.push_str(&html);
+            i += consumed_lines;
             continue;
         }
 
@@ -297,13 +290,67 @@ async fn expand_directives_impl(md: &str, ctx: &mut RenderCtx<'_>) -> String {
         let expanded = expand_line_directives(stripped, ctx).await;
         out.push_str(&expanded);
         out.push_str(trailing);
+        i += 1;
     }
 
     out
 }
 
-/// Walk a line and expand any `::name{...}` directive outside inline code
-/// spans. Backtick spans are passed through verbatim.
+/// If `lines[start]` opens a paired `<fen>`/`<pgn>` container, return the
+/// directive (with `inner` set to the body) and the number of lines consumed.
+/// A file-backed `<fen path=...>` on its own line is *not* a container; nor is a
+/// line that doesn't start (after trimming) with one of these tags.
+fn collect_container(lines: &[&str], start: usize) -> Option<(Directive, usize)> {
+    let open_line = lines[start].trim_end_matches(['\n', '\r']);
+    let trimmed = open_line.trim_start();
+    if !(trimmed.starts_with("<fen") || trimmed.starts_with("<pgn")) {
+        return None;
+    }
+    let (mut dir, consumed) = parse_tag_directive(trimmed)?;
+    if dir.name != "fen" && dir.name != "pgn" {
+        return None;
+    }
+    let close = format!("</{}>", dir.name);
+    let after = &trimmed[consumed..];
+
+    // Same-line container: `<fen ...>BODY</fen>`.
+    if let Some(idx) = after.find(close.as_str()) {
+        if !after[idx + close.len()..].trim().is_empty() {
+            return None; // trailing content → not a clean block container
+        }
+        dir.inner = Some(after[..idx].to_string());
+        return Some((dir, 1));
+    }
+
+    // Multi-line container: the opening tag must stand alone on its line, and the
+    // tag must carry no file-lookup attr (which would mark the void form).
+    if !after.trim().is_empty() {
+        return None;
+    }
+    if dir.arg("path").is_some() || dir.arg("id").is_some() || dir.arg("hash").is_some() {
+        return None;
+    }
+    let mut body = String::new();
+    let mut j = start + 1;
+    while j < lines.len() {
+        let line = lines[j];
+        let line_trimmed = line.trim_end_matches(['\n', '\r']);
+        if let Some(idx) = line_trimmed.find(close.as_str()) {
+            if !line_trimmed[idx + close.len()..].trim().is_empty() {
+                return None;
+            }
+            body.push_str(&line_trimmed[..idx]);
+            dir.inner = Some(body);
+            return Some((dir, j - start + 1));
+        }
+        body.push_str(line); // keep the newline
+        j += 1;
+    }
+    None // unterminated
+}
+
+/// Walk a line and expand any `<name ...>` directive outside inline code spans.
+/// Backtick spans, and any `<tag>` not on the allow-list, are passed through.
 async fn expand_line_directives(line: &str, ctx: &mut RenderCtx<'_>) -> String {
     let mut out = String::new();
     let mut rest = line;
@@ -320,17 +367,17 @@ async fn expand_line_directives(line: &str, ctx: &mut RenderCtx<'_>) -> String {
                 out.push_str(rest);
                 rest = "";
             }
-        } else if rest.starts_with("::") {
-            if let Some((d, consumed)) = parse_inline_directive(rest) {
+        } else if rest.starts_with('<') {
+            if let Some((d, consumed)) = parse_tag_directive(rest) {
                 let expansion = dispatch_directive(&d, ctx).await;
                 out.push_str(&expansion);
                 rest = &rest[consumed..];
             } else {
-                out.push_str("::");
-                rest = &rest[2..];
+                out.push('<');
+                rest = &rest[1..];
             }
         } else {
-            let next = rest.find(['`', ':']).unwrap_or(rest.len());
+            let next = rest.find(['`', '<']).unwrap_or(rest.len());
             if next == 0 {
                 let ch = rest.chars().next().unwrap();
                 out.push(ch);
@@ -353,16 +400,15 @@ async fn dispatch_directive(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
         "gallery" => directive_gallery(d, ctx).await,
         "fen" => directive_fen(d, ctx).await,
         "pgn" => directive_pgn(d, ctx).await,
-        unknown => format!("\n\n*[unknown directive `::{unknown}`]*\n\n"),
+        unknown => format!("\n\n*[unknown directive `<{unknown}>`]*\n\n"),
     }
 }
 
-/// Park `html` in the placeholder buffer and return the marker token. The
-/// surrounding blank lines make the marker survive markdown's block parser.
-fn park(ctx: &mut RenderCtx<'_>, html: String) -> String {
-    let idx = ctx.placeholders.len();
-    ctx.placeholders.push(html);
-    format!("\n\n<!--SITE_PLACEHOLDER_{idx}-->\n\n")
+/// Wrap rendered directive HTML so it lands as its own raw-HTML block when the
+/// markdown parser runs. The surrounding blank lines keep markdown from
+/// re-parsing the HTML.
+fn block(html: String) -> String {
+    format!("\n\n{html}\n\n")
 }
 
 /// Render a `markdown/<name>.html` template; on failure, log and emit a
@@ -407,28 +453,28 @@ fn parse_file_lookup(d: &Directive, name: &str) -> Result<FileLookup, String> {
     let count = path.is_some() as u8 + id.is_some() as u8 + hash.is_some() as u8;
     match count {
         0 => Err(format!(
-            "\n\n*[`::{name}` requires `path`, `id`, or `hash`]*\n\n"
+            "\n\n*[`<{name}>` requires `path`, `id`, or `hash`]*\n\n"
         )),
         1 => {
             if let Some(p) = path {
                 Ok(FileLookup::Path(p.to_owned()))
             } else if let Some(i) = id {
                 let n: i32 = i.parse().map_err(|_| {
-                    format!("\n\n*[`::{name}` got invalid `id` (expected integer)]*\n\n")
+                    format!("\n\n*[`<{name}>` got invalid `id` (expected integer)]*\n\n")
                 })?;
                 Ok(FileLookup::Id(n))
             } else {
                 let h = hash.unwrap().to_ascii_lowercase();
                 if h.len() != 64 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
                     return Err(format!(
-                        "\n\n*[`::{name}` got invalid `hash` (expected 64 hex chars)]*\n\n"
+                        "\n\n*[`<{name}>` got invalid `hash` (expected 64 hex chars)]*\n\n"
                     ));
                 }
                 Ok(FileLookup::Hash(h))
             }
         }
         _ => Err(format!(
-            "\n\n*[`::{name}` accepts only one of `path`, `id`, `hash`]*\n\n"
+            "\n\n*[`<{name}>` accepts only one of `path`, `id`, `hash`]*\n\n"
         )),
     }
 }
@@ -473,14 +519,14 @@ fn parse_gallery_lookup(d: &Directive) -> Result<GalleryLookup, String> {
         (Some(p), None) => Ok(GalleryLookup::Path(p.to_owned())),
         (None, Some(i)) => {
             let n: i32 = i.parse().map_err(|_| {
-                "\n\n*[`::gallery` got invalid `id` (expected integer)]*\n\n".to_owned()
+                "\n\n*[`<gallery>` got invalid `id` (expected integer)]*\n\n".to_owned()
             })?;
             Ok(GalleryLookup::Id(n))
         }
         (Some(_), Some(_)) => {
-            Err("\n\n*[`::gallery` accepts only one of `path`, `id`]*\n\n".to_owned())
+            Err("\n\n*[`<gallery>` accepts only one of `path`, `id`]*\n\n".to_owned())
         }
-        (None, None) => Err("\n\n*[`::gallery` requires `path` or `id`]*\n\n".to_owned()),
+        (None, None) => Err("\n\n*[`<gallery>` requires `path` or `id`]*\n\n".to_owned()),
     }
 }
 
@@ -498,14 +544,14 @@ fn parse_page_lookup(d: &Directive) -> Result<PageLookup, String> {
         (Some(p), None) => Ok(PageLookup::Path(p.to_owned())),
         (None, Some(i)) => {
             let n: i32 = i.parse().map_err(|_| {
-                "\n\n*[`::page` got invalid `id` (expected integer)]*\n\n".to_owned()
+                "\n\n*[`<page>` got invalid `id` (expected integer)]*\n\n".to_owned()
             })?;
             Ok(PageLookup::Id(n))
         }
         (Some(_), Some(_)) => {
-            Err("\n\n*[`::page` accepts only one of `path`, `id`]*\n\n".to_owned())
+            Err("\n\n*[`<page>` accepts only one of `path`, `id`]*\n\n".to_owned())
         }
-        (None, None) => Err("\n\n*[`::page` requires `path` or `id`]*\n\n".to_owned()),
+        (None, None) => Err("\n\n*[`<page>` requires `path` or `id`]*\n\n".to_owned()),
     }
 }
 
@@ -556,7 +602,7 @@ async fn directive_page(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
             PageLookup::Path(p) => p.clone(),
         };
         let html = format!(r#"<p><em>[page "{label}" not found]</em></p>"#);
-        return park(ctx, html);
+        return block(html);
     };
 
     if page.private && !ctx.logged_in {
@@ -566,7 +612,7 @@ async fn directive_page(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
     let path = page.path.clone();
     if ctx.visited_pages.contains(&path) {
         let html = format!(r#"<p><em>[recursive transclusion of "{path}" skipped]</em></p>"#);
-        return park(ctx, html);
+        return block(html);
     }
 
     ctx.visited_pages.insert(path.clone());
@@ -586,7 +632,7 @@ async fn directive_page(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
         "page",
         context! { path => &path, inner_html => &inner_html },
     );
-    park(ctx, html)
+    block(html)
 }
 
 // ---------------------------------------------------------------------------
@@ -602,7 +648,7 @@ async fn directive_file(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
     let Some(file) = fetch_file(ctx.db, &lookup).await else {
         let label = lookup_label(&lookup);
         let html = format!(r#"<p><em>[file "{label}" not found]</em></p>"#);
-        return park(ctx, html);
+        return block(html);
     };
 
     let title = title_from_path(&file.path);
@@ -612,7 +658,7 @@ async fn directive_file(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
             "img",
             context! { hash => &file.hash, title => &title, alt => &title },
         );
-        return park(ctx, html);
+        return block(html);
     }
 
     let description = file
@@ -625,15 +671,15 @@ async fn directive_file(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
         "file",
         context! { hash => &file.hash, title => &title, description },
     );
-    park(ctx, html)
+    block(html)
 }
 
 // ---------------------------------------------------------------------------
-// ::img{path|id|hash=..., alt=...}  — force image embed
+// <image path|id|hash=... alt=...>  — force image embed
 // ---------------------------------------------------------------------------
 
 async fn directive_img(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
-    let lookup = match parse_file_lookup(d, "img") {
+    let lookup = match parse_file_lookup(d, "image") {
         Ok(l) => l,
         Err(msg) => return msg,
     };
@@ -641,7 +687,7 @@ async fn directive_img(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
     let Some(file) = fetch_file(ctx.db, &lookup).await else {
         let label = lookup_label(&lookup);
         let html = format!(r#"<p><em>[image "{label}" not found]</em></p>"#);
-        return park(ctx, html);
+        return block(html);
     };
 
     let title = title_from_path(&file.path);
@@ -654,7 +700,7 @@ async fn directive_img(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
         "img",
         context! { hash => &file.hash, title => &title, alt },
     );
-    park(ctx, html)
+    block(html)
 }
 
 // ---------------------------------------------------------------------------
@@ -673,7 +719,7 @@ async fn directive_gallery(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
             GalleryLookup::Path(p) => p.clone(),
         };
         let html = format!(r#"<p><em>[gallery "{label}" not found]</em></p>"#);
-        return park(ctx, html);
+        return block(html);
     };
 
     #[derive(serde::Serialize)]
@@ -697,30 +743,35 @@ async fn directive_gallery(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
         "gallery",
         context! { id => gal.id, title => &gal.title, items => &items },
     );
-    park(ctx, html)
+    block(html)
 }
 
 // ---------------------------------------------------------------------------
-// ::fen{path|id|hash=..., size=small|large}
-// FEN string is read from the file blob.
+// <fen path|id|hash=... size=small|large>  — file-backed, or
+// <fen size=...>FEN string</fen>            — inline body
 // ---------------------------------------------------------------------------
 
 async fn directive_fen(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
-    let lookup = match parse_file_lookup(d, "fen") {
-        Ok(l) => l,
-        Err(msg) => return msg,
-    };
     let size_class = parse_size_class(d);
 
-    let Some(file) = fetch_file(ctx.db, &lookup).await else {
-        let label = lookup_label(&lookup);
-        let html = format!(r#"<p><em>[fen file "{label}" not found]</em></p>"#);
-        return park(ctx, html);
-    };
-
-    let Some(fen) = read_text_blob(ctx.db, &file.hash).await else {
-        let html = format!(r#"<p><em>[fen blob for "{}" missing]</em></p>"#, file.path);
-        return park(ctx, html);
+    let fen = match inline_body(d) {
+        Some(body) => body,
+        None => {
+            let lookup = match parse_file_lookup(d, "fen") {
+                Ok(l) => l,
+                Err(msg) => return msg,
+            };
+            let Some(file) = fetch_file(ctx.db, &lookup).await else {
+                let label = lookup_label(&lookup);
+                let html = format!(r#"<p><em>[fen file "{label}" not found]</em></p>"#);
+                return block(html);
+            };
+            let Some(fen) = read_text_blob(ctx.db, &file.hash).await else {
+                let html = format!(r#"<p><em>[fen blob for "{}" missing]</em></p>"#, file.path);
+                return block(html);
+            };
+            fen
+        }
     };
 
     let html = render_md_template(
@@ -728,31 +779,36 @@ async fn directive_fen(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
         "fen",
         context! { fen => fen.trim(), size_class => size_class },
     );
-    park(ctx, html)
+    block(html)
 }
 
 // ---------------------------------------------------------------------------
-// ::pgn{path|id|hash=..., size=small|large, move=N}
-// PGN text is read from the file blob.
+// <pgn path|id|hash=... size=small|large move=N>  — file-backed, or
+// <pgn size=... move=N>PGN moves</pgn>             — inline body
 // ---------------------------------------------------------------------------
 
 async fn directive_pgn(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
-    let lookup = match parse_file_lookup(d, "pgn") {
-        Ok(l) => l,
-        Err(msg) => return msg,
-    };
     let size_class = parse_size_class(d);
     let move_attr = d.arg("move").filter(|s| !s.is_empty());
 
-    let Some(file) = fetch_file(ctx.db, &lookup).await else {
-        let label = lookup_label(&lookup);
-        let html = format!(r#"<p><em>[pgn file "{label}" not found]</em></p>"#);
-        return park(ctx, html);
-    };
-
-    let Some(pgn) = read_text_blob(ctx.db, &file.hash).await else {
-        let html = format!(r#"<p><em>[pgn blob for "{}" missing]</em></p>"#, file.path);
-        return park(ctx, html);
+    let pgn = match inline_body(d) {
+        Some(body) => body,
+        None => {
+            let lookup = match parse_file_lookup(d, "pgn") {
+                Ok(l) => l,
+                Err(msg) => return msg,
+            };
+            let Some(file) = fetch_file(ctx.db, &lookup).await else {
+                let label = lookup_label(&lookup);
+                let html = format!(r#"<p><em>[pgn file "{label}" not found]</em></p>"#);
+                return block(html);
+            };
+            let Some(pgn) = read_text_blob(ctx.db, &file.hash).await else {
+                let html = format!(r#"<p><em>[pgn blob for "{}" missing]</em></p>"#, file.path);
+                return block(html);
+            };
+            pgn
+        }
     };
 
     let html = render_md_template(
@@ -764,7 +820,16 @@ async fn directive_pgn(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
             move => move_attr,
         },
     );
-    park(ctx, html)
+    block(html)
+}
+
+/// Trimmed paired-tag body, if the directive carries a non-empty one.
+fn inline_body(d: &Directive) -> Option<String> {
+    d.inner
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
 }
 
 fn parse_size_class(d: &Directive) -> &'static str {
@@ -820,46 +885,99 @@ mod tests {
 
     fn parse_block(line: &str) -> Option<Directive> {
         let trimmed = line.trim();
-        let (d, n) = parse_inline_directive(trimmed)?;
+        let (d, n) = parse_tag_directive(trimmed)?;
         if n == trimmed.len() { Some(d) } else { None }
     }
 
     #[test]
     fn parse_page_path() {
-        let d = parse_block("::page{path=infra/desktop/syncthing}").unwrap();
+        let d = parse_block(r#"<page path="infra/desktop/syncthing">"#).unwrap();
         assert_eq!(d.name, "page");
         assert_eq!(d.arg("path"), Some("infra/desktop/syncthing"));
     }
 
     #[test]
-    fn parse_quoted_value() {
-        let d = parse_block(r#"::page{path="my page/with spaces"}"#).unwrap();
+    fn parse_unquoted_path_keeps_slashes() {
+        let d = parse_block("<page path=infra/desktop/syncthing>").unwrap();
+        assert_eq!(d.arg("path"), Some("infra/desktop/syncthing"));
+    }
+
+    #[test]
+    fn parse_quoted_value_with_spaces() {
+        let d = parse_block(r#"<page path="my page/with spaces">"#).unwrap();
         assert_eq!(d.arg("path"), Some("my page/with spaces"));
     }
 
     #[test]
     fn parse_multi_args() {
-        let d = parse_block("::pgn{hash=ab12, size=large, move=12}").unwrap();
+        let d = parse_block(r#"<pgn hash="ab12" size="large" move="12">"#).unwrap();
         assert_eq!(d.arg("hash"), Some("ab12"));
         assert_eq!(d.arg("size"), Some("large"));
         assert_eq!(d.arg("move"), Some("12"));
     }
 
     #[test]
-    fn rejects_old_transclude() {
+    fn image_canonicalizes_to_img() {
+        let d = parse_block(r#"<image hash="abc">"#).unwrap();
+        assert_eq!(d.name, "img");
+        assert_eq!(d.arg("hash"), Some("abc"));
+    }
+
+    #[test]
+    fn allowlist_rejects_real_html() {
+        assert!(parse_tag_directive(r#"<div class="x">"#).is_none());
+        assert!(parse_tag_directive(r#"<img src="x.png">"#).is_none());
+        assert!(parse_tag_directive("</page>").is_none());
+    }
+
+    #[test]
+    fn rejects_unterminated_tag() {
+        assert!(parse_tag_directive("<page path=x").is_none());
+    }
+
+    #[test]
+    fn quoted_value_keeps_gt() {
+        let (d, _) = parse_tag_directive(r#"<pgn move="1. e4 > 0">"#).unwrap();
+        assert_eq!(d.arg("move"), Some("1. e4 > 0"));
+    }
+
+    #[test]
+    fn rejects_old_colon_directive() {
+        assert!(parse_tag_directive("::page{path=foo}").is_none());
         assert!(parse_block("![[some/page]]").is_none());
     }
 
     #[test]
-    fn rejects_inline_code_span() {
-        assert!(parse_block("`::page{path=foo}`").is_none());
+    fn tag_with_trailing_text_consumes_only_tag() {
+        let (d, n) = parse_tag_directive(r#"<image hash="abc"> hello"#).unwrap();
+        assert_eq!(d.name, "img");
+        assert_eq!(n, r#"<image hash="abc">"#.len());
     }
 
     #[test]
-    fn handles_quoted_brace() {
-        let (d, n) = parse_inline_directive(r#"::page{path="a}b"} tail"#).unwrap();
-        assert_eq!(d.arg("path"), Some("a}b"));
-        assert_eq!(n, r#"::page{path="a}b"}"#.len());
+    fn container_same_line() {
+        let lines: Vec<&str> = "<fen>rnbq w - 0 1</fen>\n".split_inclusive('\n').collect();
+        let (d, consumed) = collect_container(&lines, 0).unwrap();
+        assert_eq!(d.name, "fen");
+        assert_eq!(d.inner.as_deref(), Some("rnbq w - 0 1"));
+        assert_eq!(consumed, 1);
+    }
+
+    #[test]
+    fn container_multi_line() {
+        let md = "<pgn size=\"large\">\n1. e4 e5\n2. Nf3 Nc6\n</pgn>\n";
+        let lines: Vec<&str> = md.split_inclusive('\n').collect();
+        let (d, consumed) = collect_container(&lines, 0).unwrap();
+        assert_eq!(d.name, "pgn");
+        assert_eq!(d.arg("size"), Some("large"));
+        assert_eq!(d.inner.as_deref(), Some("1. e4 e5\n2. Nf3 Nc6\n"));
+        assert_eq!(consumed, 4);
+    }
+
+    #[test]
+    fn container_void_fen_not_collected() {
+        let lines: Vec<&str> = "<fen path=\"x.fen\">\n".split_inclusive('\n').collect();
+        assert!(collect_container(&lines, 0).is_none());
     }
 
     fn make_dir(name: &str, args: &[(&str, &str)]) -> Directive {
@@ -870,6 +988,7 @@ mod tests {
         Directive {
             name: name.to_owned(),
             args: map,
+            inner: None,
         }
     }
 

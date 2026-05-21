@@ -10,7 +10,7 @@ Hybrid personal site: server-rendered public pages (MiniJinja) + Vue 3 admin SPA
 - **Database:** PostgreSQL via SeaORM 1.x; migrations run automatically on startup
 - **Public rendering:** MiniJinja templates loaded from `assets/<NAMESPACE>/templates/`
 - **Admin UI:** Vue 3 SPA (Pinia, Vue Router, Tailwind 4, Vite, TypeScript) — built into `client/dist/`, embedded via `rust-embed`, served at `/admin/*` with SPA fallback to `index.html`
-- **Markdown:** pulldown-cmark with custom directives (`::page`, `::img`, `::file`, `::gallery`, `::fen`, `::pgn`)
+- **Markdown:** pulldown-cmark with HTML-tag directives (`<page>`, `<image>`, `<file>`, `<gallery>`, `<fen>`, `<pgn>`); `<fen>`/`<pgn>` also accept an inline body, e.g. `<pgn>…</pgn>`
 - **Auth:** Argon2 password hashing, session cookies (`site_session`, 24 h), legacy service tokens, OAuth2 (PKCE)
 - **MCP:** `rmcp` crate; server at `POST /mcp`
 - **AI:** local subsystem in `src/ai/` (LLM providers, tool registry, MCP client, tool permissions, agentic loop)

@@ -134,16 +134,20 @@ function insertLink() {
   })
 }
 
-function needsQuotes(v: string): boolean {
-  return /[,}\s"']/.test(v)
+function escapeAttr(v: string): string {
+  return v
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 }
 
 function insertDirective(name: string, args: Record<string, string>) {
-  const argStr = Object.entries(args)
-    .map(([k, v]) => `${k}=${needsQuotes(v) ? JSON.stringify(v) : v}`)
-    .join(', ')
+  const attrs = Object.entries(args)
+    .map(([k, v]) => ` ${k}="${escapeAttr(v)}"`)
+    .join('')
   applyEdit(() => {
-    const text = `\n::${name}{${argStr}}\n`
+    const text = `\n<${name}${attrs}>\n`
     return { text, selStart: text.length, selEnd: text.length }
   })
 }
@@ -187,7 +191,7 @@ function pickFile(id: number) {
   const kind = pickerKind.value
   closePicker()
   if (!path || !kind) return
-  if (kind === 'img') insertDirective('img', { path })
+  if (kind === 'img') insertDirective('image', { path })
   else if (kind === 'file') insertDirective('file', { path })
   else if (kind === 'pgn') insertDirective('pgn', { path })
   else if (kind === 'fen') insertDirective('fen', { path })
@@ -230,12 +234,12 @@ const tbBtn =
       <button type="button" :class="tbBtn" title="Inline code" @click="insertInlineCode">`code`</button>
       <button type="button" :class="tbBtn" title="Code block" @click="insertCodeBlock">```</button>
       <span class="mx-1 h-4 w-px bg-gray-300"></span>
-      <button type="button" :class="tbBtn" title="Insert image directive" @click="pickerKind = 'img'">::img</button>
-      <button type="button" :class="tbBtn" title="Insert file directive" @click="pickerKind = 'file'">::file</button>
-      <button type="button" :class="tbBtn" title="Insert gallery directive" @click="openGalleryPicker">::gallery</button>
-      <button type="button" :class="tbBtn" title="Insert page transclude" @click="openPagePicker">::page</button>
-      <button type="button" :class="tbBtn" title="Insert PGN chess viewer" @click="pickerKind = 'pgn'">::pgn</button>
-      <button type="button" :class="tbBtn" title="Insert FEN chess position" @click="pickerKind = 'fen'">::fen</button>
+      <button type="button" :class="tbBtn" title="Insert image directive" @click="pickerKind = 'img'">&lt;image&gt;</button>
+      <button type="button" :class="tbBtn" title="Insert file directive" @click="pickerKind = 'file'">&lt;file&gt;</button>
+      <button type="button" :class="tbBtn" title="Insert gallery directive" @click="openGalleryPicker">&lt;gallery&gt;</button>
+      <button type="button" :class="tbBtn" title="Insert page transclude" @click="openPagePicker">&lt;page&gt;</button>
+      <button type="button" :class="tbBtn" title="Insert PGN chess viewer" @click="pickerKind = 'pgn'">&lt;pgn&gt;</button>
+      <button type="button" :class="tbBtn" title="Insert FEN chess position" @click="pickerKind = 'fen'">&lt;fen&gt;</button>
       <span class="ml-auto flex gap-0.5 text-sm">
         <button
           type="button"
