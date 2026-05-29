@@ -74,6 +74,7 @@ pub async fn catch_all(
 
         return match tmpl.render(context! {
             page => page_view,
+            breadcrumbs => pages::breadcrumbs(&pg.path),
             body_html,
             tags,
             menu_list => nav.list,

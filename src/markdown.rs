@@ -587,7 +587,7 @@ async fn fetch_gallery(
 }
 
 // ---------------------------------------------------------------------------
-// ::page{path=...}
+// <page path|id=...>
 // ---------------------------------------------------------------------------
 
 async fn directive_page(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
@@ -636,7 +636,7 @@ async fn directive_page(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// ::file{path|id|hash=...}  — image if mime image/*, else download link
+// <file path|id|hash=...>  — image if mime image/*, else download link
 // ---------------------------------------------------------------------------
 
 async fn directive_file(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
@@ -704,7 +704,7 @@ async fn directive_img(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// ::gallery{id|path=...}
+// <gallery path|id=...>
 // ---------------------------------------------------------------------------
 
 async fn directive_gallery(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {

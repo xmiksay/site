@@ -413,7 +413,7 @@ impl LocalTool for CreateFileTool {
          images) or raw `data` (text, e.g. PGN/FEN/SVG). Optional `mimetype` (defaults to \
          application/octet-stream) and `description`. The display title is derived from the \
          basename of the path. Returns the new file id — reference it in markdown via \
-         `::img{id=ID}` for images or `::gallery{id=ID}` for galleries."
+         `<image id=\"ID\">` for images or `<gallery id=\"ID\">` for galleries."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -526,7 +526,7 @@ impl LocalTool for CreateGalleryTool {
         "create_gallery"
     }
     fn description(&self) -> &str {
-        "Create a gallery from a list of file IDs. `path` is the unique URL slug (e.g. `holiday-2024`). Reference it in markdown via `::gallery{id=ID}` or `::gallery{path=PATH}`."
+        "Create a gallery from a list of file IDs. `path` is the unique URL slug (e.g. `holiday-2024`). Reference it in markdown via `<gallery id=\"ID\">` or `<gallery path=\"PATH\">`."
     }
     fn input_schema(&self) -> Value {
         json!({

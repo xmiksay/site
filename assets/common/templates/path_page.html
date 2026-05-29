@@ -3,7 +3,7 @@
 {% block content %}
 {% if page %}
 <article class="article-detail">
-    <h1>{{ page.path }}{% if logged_in %} <a href="/admin/pages/{{ page.id }}/edit" class="edit-link">Edit</a>{% endif %}</h1>
+    <h1 class="breadcrumbs">{% for c in breadcrumbs %}<a href="{{ c.href }}">{{ c.label }}</a>{% if not loop.last %}<span class="crumb-sep">/</span>{% endif %}{% endfor %}{% if logged_in %} <a href="/admin/pages/{{ page.id }}/edit" class="edit-link">Edit</a>{% endif %}</h1>
     <p class="meta">{{ page.modified_at|timeformat("%d. %m. %Y") }}</p>
     {% if tags is defined and tags | length > 0 %}
     <div class="tag-list">
