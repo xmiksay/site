@@ -1,0 +1,2 @@
+{% if svg %}<div class="mermaid-diagram{{ size_class }}">{{ svg|safe }}</div>
+{% else %}<pre class="mermaid-source"><code>{{ source }}</code></pre>{% endif %}

@@ -18,6 +18,9 @@
 //! <pgn hash="ab12..." move="12" size="small">
 //! <fen>rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1</fen>
 //! <pgn move="10">1. e4 e5 2. Nf3 Nc6 ...</pgn>
+//! <mermaid path="diagrams/flow.mmd" theme="dark">
+//! <mermaid theme="forest">graph TD
+//!   A[Start] --> B[End]</mermaid>
 //! ```
 //!
 //! Attribute values may be double-quoted, single-quoted, or unquoted (no
@@ -26,7 +29,7 @@
 //! `path`/`id`/`hash` optional.
 //!
 //! Lookup keys: exactly one of
-//! - file-based (`<file>`/`<image>`/`<fen>`/`<pgn>`): `path`, `id`, or `hash` (sha256)
+//! - file-based (`<file>`/`<image>`/`<fen>`/`<pgn>`/`<mermaid>`): `path`, `id`, or `hash` (sha256)
 //! - `<gallery>`: `path` or `id`
 //! - `<page>`: `path` or `id`
 //!
@@ -44,7 +47,7 @@
 pub const MARKDOWN_EXTENSIONS_DOC: &str = "\
 Directives use an HTML-tag syntax `<name attr=\"value\">`. Only the names below
 are directives; any other `<tag>` is passed through as raw HTML. Lookup keys:
-- file-based (`<file>`/`<image>`/`<fen>`/`<pgn>`): exactly one of `path`, `id`, or `hash` (sha256)
+- file-based (`<file>`/`<image>`/`<fen>`/`<pgn>`/`<mermaid>`): exactly one of `path`, `id`, or `hash` (sha256)
 - `<gallery>`: exactly one of `path` or `id`
 - `<page>`: exactly one of `path` or `id`
 
@@ -56,6 +59,8 @@ are directives; any other `<tag>` is passed through as raw HTML. Lookup keys:
 - `<fen>FEN string</fen>` — static chess board from an inline FEN position.
 - `<pgn path=\"...\" move=\"N\" size=\"small|large\">` — playable game from a stored .pgn file.
 - `<pgn move=\"N\">PGN moves</pgn>` — playable game from an inline PGN (multiple lines allowed).
+- `<mermaid path=\"...\" theme=\"default|dark|forest|neutral\">` — diagram rendered to SVG from a stored Mermaid file.
+- `<mermaid theme=\"...\">DIAGRAM</mermaid>` — diagram rendered to SVG from an inline Mermaid definition (multiple lines allowed).
 - Internal links `[Text](Path/To/Page.md)` are auto-rewritten to lowercase absolute paths.";
 
 use std::collections::{HashMap, HashSet};
@@ -111,7 +116,7 @@ pub async fn render(
 // ---------------------------------------------------------------------------
 
 struct Directive {
-    /// Internal handler name (`page`/`file`/`img`/`gallery`/`fen`/`pgn`).
+    /// Internal handler name (`page`/`file`/`img`/`gallery`/`fen`/`pgn`/`mermaid`).
     name: String,
     args: HashMap<String, String>,
     /// Body of a paired container tag (`<fen>…</fen>`, `<pgn>…</pgn>`); `None`
@@ -127,7 +132,7 @@ impl Directive {
 
 /// Surface names recognized as directives in tag form. Everything else (incl. a
 /// real `<img>`) is left untouched as raw HTML.
-const DIRECTIVE_NAMES: [&str; 6] = ["page", "file", "image", "gallery", "fen", "pgn"];
+const DIRECTIVE_NAMES: [&str; 7] = ["page", "file", "image", "gallery", "fen", "pgn", "mermaid"];
 
 fn is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-'
@@ -296,18 +301,21 @@ async fn expand_directives_impl(md: &str, ctx: &mut RenderCtx<'_>) -> String {
     out
 }
 
-/// If `lines[start]` opens a paired `<fen>`/`<pgn>` container, return the
-/// directive (with `inner` set to the body) and the number of lines consumed.
+/// If `lines[start]` opens a paired `<fen>`/`<pgn>`/`<mermaid>` container, return
+/// the directive (with `inner` set to the body) and the number of lines consumed.
 /// A file-backed `<fen path=...>` on its own line is *not* a container; nor is a
 /// line that doesn't start (after trimming) with one of these tags.
 fn collect_container(lines: &[&str], start: usize) -> Option<(Directive, usize)> {
     let open_line = lines[start].trim_end_matches(['\n', '\r']);
     let trimmed = open_line.trim_start();
-    if !(trimmed.starts_with("<fen") || trimmed.starts_with("<pgn")) {
+    if !(trimmed.starts_with("<fen")
+        || trimmed.starts_with("<pgn")
+        || trimmed.starts_with("<mermaid"))
+    {
         return None;
     }
     let (mut dir, consumed) = parse_tag_directive(trimmed)?;
-    if dir.name != "fen" && dir.name != "pgn" {
+    if dir.name != "fen" && dir.name != "pgn" && dir.name != "mermaid" {
         return None;
     }
     let close = format!("</{}>", dir.name);
@@ -400,6 +408,7 @@ async fn dispatch_directive(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
         "gallery" => directive_gallery(d, ctx).await,
         "fen" => directive_fen(d, ctx).await,
         "pgn" => directive_pgn(d, ctx).await,
+        "mermaid" => directive_mermaid(d, ctx).await,
         unknown => format!("\n\n*[unknown directive `<{unknown}>`]*\n\n"),
     }
 }
@@ -407,6 +416,12 @@ async fn dispatch_directive(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
 /// Wrap rendered directive HTML so it lands as its own raw-HTML block when the
 /// markdown parser runs. The surrounding blank lines keep markdown from
 /// re-parsing the HTML.
+///
+/// Constraint: the rendered HTML must contain no whitespace-only lines, since
+/// CommonMark closes a raw-HTML block at the first blank line — any content
+/// after would be re-parsed and `<` chars would be escaped. Template authors
+/// must use whitespace-stripping markers (`{%- ... %}`) around control tags
+/// inside loops.
 fn block(html: String) -> String {
     format!("\n\n{html}\n\n")
 }
@@ -823,6 +838,62 @@ async fn directive_pgn(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
     block(html)
 }
 
+// ---------------------------------------------------------------------------
+// <mermaid path|id|hash=... theme=default|dark|forest|neutral>  — file-backed, or
+// <mermaid theme=...>DIAGRAM</mermaid>                          — inline body.
+// Rendered to SVG server-side; on failure the source is shown in a code block.
+// ---------------------------------------------------------------------------
+
+async fn directive_mermaid(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
+    let size_class = parse_size_class(d);
+    let theme = mermaid_svg::Theme::by_name(&d.arg("theme").unwrap_or("").to_ascii_lowercase())
+        .unwrap_or_default();
+
+    let source = match inline_body(d) {
+        Some(body) => body,
+        None => {
+            let lookup = match parse_file_lookup(d, "mermaid") {
+                Ok(l) => l,
+                Err(msg) => return msg,
+            };
+            let Some(file) = fetch_file(ctx.db, &lookup).await else {
+                let label = lookup_label(&lookup);
+                let html = format!(r#"<p><em>[mermaid file "{label}" not found]</em></p>"#);
+                return block(html);
+            };
+            let Some(src) = read_text_blob(ctx.db, &file.hash).await else {
+                let html = format!(r#"<p><em>[mermaid blob for "{}" missing]</em></p>"#, file.path);
+                return block(html);
+            };
+            src
+        }
+    };
+    let source = source.trim().to_string();
+
+    // mermaid-svg rendering is synchronous and CPU-bound (graph layout); keep it
+    // off the async worker. On any failure, leave `svg` empty so the template
+    // falls back to showing the raw source in a code block.
+    let src = source.clone();
+    let svg = match tokio::task::spawn_blocking(move || mermaid_svg::render_with(&src, &theme)).await {
+        Ok(Ok(svg)) => svg,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "mermaid render failed; showing source");
+            String::new()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "mermaid render task panicked");
+            String::new()
+        }
+    };
+
+    let html = render_md_template(
+        ctx,
+        "mermaid",
+        context! { svg => svg, source => source, size_class => size_class },
+    );
+    block(html)
+}
+
 /// Trimmed paired-tag body, if the directive carries a non-empty one.
 fn inline_body(d: &Directive) -> Option<String> {
     d.inner
@@ -978,6 +1049,23 @@ mod tests {
     fn container_void_fen_not_collected() {
         let lines: Vec<&str> = "<fen path=\"x.fen\">\n".split_inclusive('\n').collect();
         assert!(collect_container(&lines, 0).is_none());
+    }
+
+    #[test]
+    fn container_mermaid_multi_line() {
+        let md = "<mermaid theme=\"dark\">\ngraph TD\n  A --> B\n</mermaid>\n";
+        let lines: Vec<&str> = md.split_inclusive('\n').collect();
+        let (d, consumed) = collect_container(&lines, 0).unwrap();
+        assert_eq!(d.name, "mermaid");
+        assert_eq!(d.arg("theme"), Some("dark"));
+        assert_eq!(d.inner.as_deref(), Some("graph TD\n  A --> B\n"));
+        assert_eq!(consumed, 4);
+    }
+
+    #[test]
+    fn mermaid_renders_svg() {
+        let svg = mermaid_svg::render("pie\n\"A\" : 1\n\"B\" : 2\n").unwrap();
+        assert!(svg.starts_with("<svg"));
     }
 
     fn make_dir(name: &str, args: &[(&str, &str)]) -> Directive {

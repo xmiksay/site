@@ -516,3 +516,21 @@ footer {
         box-shadow: none;
     }
 }
+
+/* Mermaid diagrams (server-rendered SVG) */
+.mermaid-diagram {
+    display: flex;
+    justify-content: center;
+    margin: 1.5rem auto;
+    max-width: 100%;
+    overflow-x: auto;
+}
+.mermaid-diagram svg {
+    max-width: 100%;
+    height: auto;
+}
+.mermaid-diagram.size-sm { max-width: min(260px, 60vw); }
+.mermaid-diagram.size-lg { max-width: min(720px, 90vw); }
+.mermaid-source {
+    overflow-x: auto;
+}

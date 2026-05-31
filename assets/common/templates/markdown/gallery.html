@@ -1,18 +1,15 @@
 <div class="gallery">
   <h3>{{ title }}</h3>
-  {% if items | length == 0 %}
-    <p><em>Gallery is empty</em></p>
-  {% else %}
-    <div class="gallery-grid">
-      {% for item in items %}
-        <a href="/files/{{ item.hash }}"
-           class="gallery-item"
-           data-lightbox="gallery-{{ id }}"
-           data-caption="{{ item.title }}">
-          <img src="/files/{{ item.hash }}/nahled" alt="{{ item.title }}" loading="lazy">
-          <span>{{ item.title }}</span>
-        </a>
-      {% endfor %}
-    </div>
-  {% endif %}
+{%- if items | length == 0 %}
+  <p><em>Gallery is empty</em></p>
+{%- else %}
+  <div class="gallery-grid">
+{%- for item in items %}
+    <a href="/files/{{ item.hash }}" class="gallery-item" data-lightbox="gallery-{{ id }}" data-caption="{{ item.title }}">
+      <img src="/files/{{ item.hash }}/nahled" alt="{{ item.title }}" loading="lazy">
+      <span>{{ item.title }}</span>
+    </a>
+{%- endfor %}
+  </div>
+{%- endif %}
 </div>
