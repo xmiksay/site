@@ -48,4 +48,4 @@ thiserror     = "2"
 anyhow        = "1"
 uuid          = { version = "1.23.1", features = ["v4", "serde"] }
 htmd          = "0.5.4"
-mermaid-svg   = "0.3.0"
+mermaid-svg   = "0.3.1"

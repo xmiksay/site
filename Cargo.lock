@@ -2149,9 +2149,9 @@ dependencies = [
 
 [[package]]
 name = "mermaid-svg"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55e4191138fdb7a6da4ceb03974fb753fcbc89839fa9c654f78e0beaa6f6365f"
+checksum = "375a78a499f4cc6fe6198eae355557acae6914de65183e831d588acdb3b84997"
 dependencies = [
  "petgraph",
  "thiserror 1.0.69",
