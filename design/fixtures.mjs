@@ -204,6 +204,7 @@ export default {
     page: {
       label: "Page detail",
       template: "path_page.html",
+      file: "page.html",
       body: pageDetailBody,
       context: {
         page: {
@@ -233,6 +234,7 @@ export default {
     menu: {
       label: "Menu page",
       template: "path_page.html",
+      file: "menu.html",
       body: menuPageBody,
       context: {
         menu_id: 5,
@@ -245,6 +247,7 @@ export default {
     search: {
       label: "Search",
       template: "page_search.html",
+      file: "search.html",
       context: {
         q: "rust",
         tag: null,
@@ -265,6 +268,7 @@ export default {
     notFound: {
       label: "404",
       template: "404.html",
+      file: "404.html",
       context: {
         menu_list: menuList,
         menu_tree: menuTree,
