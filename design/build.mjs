@@ -1,22 +1,23 @@
 // Build / dev-server for the browser-live template preview.
 //
-//   node build.mjs            assemble ./preview/ (templates.json, fixtures.json,
-//                             WASM, index.html, placeholder)
+//   node build.mjs            compile to design/preview/ (index.html,
+//                             templates.json, fixtures.json) and copy the runtime
+//                             libs into design/assets/{js,img}
 //   node build.mjs --serve    static dev server, templates regenerate live
 //
-// This tool lives in the design bundle (design/). Its build output lands in
-// design/assets/preview/, which the *real* server serves at /assets/preview/* —
-// it serves the whole assets/ folder under /assets/*. So the preview runs
-// unchanged whether opened through the dev server below or straight off a
-// running site at /assets/preview/index.html.
+// This tool lives in the design bundle (design/). The compiler writes two kinds
+// of output:
+//   - the preview app (the page + its data) -> design/preview/
+//   - the runtime libs it needs to run -> the served assets/ folders: the
+//     minijinja-js runtime under assets/js, the placeholder image under
+//     assets/img. The real /assets route serves those, so the page loads its
+//     runtime from /assets/js/* just like any other static resource.
 //
-// Because the output is mounted under /assets/preview/ (not the web root), the
-// page references its own assets RELATIVELY (./minijinja_js.js, ./templates.json,
-// …) so it is base-path agnostic. The dev server mounts at the same /assets/
-// preview prefix to match. Template resolution mirrors the Rust DesignStore
-// (src/design.rs): an optional override (DESIGN_DIR / --design-dir) is preferred,
-// falling back to this bundle's templates. `fetch` does not work over file://,
-// so a static server is required either way.
+// The page therefore references its runtime with absolute /assets URLs and its
+// own data relatively (./templates.json). Template resolution mirrors the Rust
+// DesignStore (src/design.rs): an optional override (DESIGN_DIR / --design-dir)
+// is preferred, falling back to this bundle's templates. `fetch` does not work
+// over file://, so a static server is required either way.
 
 import { createServer } from "node:http";
 import { readdir, readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
@@ -25,12 +26,15 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, extname } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // the design/ bundle root
-const OUT_DIR = join(HERE, "assets", "preview"); // build destination (served at /assets/preview)
+// The compiled preview app (the page + its data) lands here.
+const PREVIEW_DIR = join(HERE, "preview");
+// Runtime libraries the page needs to run go into the served assets/ folders, so
+// the real /assets route serves them (the minijinja-js runtime under assets/js,
+// the placeholder image under assets/img).
+const ASSETS_JS = join(HERE, "assets", "js");
+const ASSETS_IMG = join(HERE, "assets", "img");
 const RUNTIME_SRC = join(HERE, "node_modules", "minijinja-js", "dist", "web");
-const RUNTIME_FILES = ["minijinja_js.js", "minijinja_js_bg.wasm"];
-const COPY_FILES = ["index.html", "placeholder.svg"]; // source files copied verbatim
-// Where the real server mounts the output (it serves assets/ under /assets/).
-const MOUNT = "/assets/preview";
+const RUNTIME_FILES = ["minijinja_js.js", "minijinja_js_bg.wasm"]; // -> assets/js
 
 // --- argument / override resolution ----------------------------------------
 
@@ -91,27 +95,33 @@ async function loadFixtures() {
 
 // --- build mode -------------------------------------------------------------
 
+// Copy the runtime libs into the served assets/ folders: minijinja-js js+wasm
+// into assets/js, the placeholder image into assets/img.
 async function copyRuntime() {
   if (!existsSync(RUNTIME_SRC)) {
     throw new Error(
       `minijinja-js not found at ${RUNTIME_SRC}. Run \`npm install\` first.`,
     );
   }
+  await mkdir(ASSETS_JS, { recursive: true });
+  await mkdir(ASSETS_IMG, { recursive: true });
   for (const file of RUNTIME_FILES) {
-    await copyFile(join(RUNTIME_SRC, file), join(OUT_DIR, file));
+    await copyFile(join(RUNTIME_SRC, file), join(ASSETS_JS, file));
   }
+  await copyFile(join(HERE, "placeholder.svg"), join(ASSETS_IMG, "placeholder.svg"));
 }
 
 async function build() {
   const override = overrideDir();
-  await mkdir(OUT_DIR, { recursive: true });
+  await mkdir(PREVIEW_DIR, { recursive: true });
   const manifest = await buildManifest(override);
-  await writeFile(join(OUT_DIR, "templates.json"), JSON.stringify(manifest, null, 2));
-  await writeFile(join(OUT_DIR, "fixtures.json"), JSON.stringify(await loadFixtures(), null, 2));
+  await writeFile(join(PREVIEW_DIR, "templates.json"), JSON.stringify(manifest, null, 2));
+  await writeFile(join(PREVIEW_DIR, "fixtures.json"), JSON.stringify(await loadFixtures(), null, 2));
+  await copyFile(join(HERE, "index.html"), join(PREVIEW_DIR, "index.html"));
   await copyRuntime();
-  for (const file of COPY_FILES) await copyFile(join(HERE, file), join(OUT_DIR, file));
   console.log(
-    `built ${OUT_DIR} — ${Object.keys(manifest).length} template(s)` +
+    `built ${PREVIEW_DIR} + runtime into assets/{js,img} — ` +
+      `${Object.keys(manifest).length} template(s)` +
       (override ? `, override: ${override}` : ", bundle only"),
   );
 }
@@ -154,33 +164,27 @@ async function sendFile(res, path) {
 async function serve() {
   const override = overrideDir();
   const port = Number(process.env.PORT) || 4321;
-  await build(); // populate design/preview/ (index.html, WASM, json, placeholder)
-  const placeholder = join(OUT_DIR, "placeholder.svg");
+  await build(); // populate design/preview/ + runtime libs in assets/{js,img}
+  const placeholder = join(ASSETS_IMG, "placeholder.svg");
 
   const server = createServer(async (req, res) => {
     try {
       const path = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
 
-      // Land on the same mount the real server uses, so the base path matches.
+      // The compiled preview page lives in design/preview/, served at the root.
       if (path === "/" || path === "/index.html") {
-        res.writeHead(302, { location: `${MOUNT}/index.html` });
-        return res.end();
+        return sendFile(res, join(PREVIEW_DIR, "index.html"));
       }
-      // Manifests regenerate per request so template/fixture edits show on reload.
-      if (path === `${MOUNT}/templates.json`) {
+      // Its data regenerates per request so template/fixture edits show on reload.
+      if (path === "/templates.json") {
         return send(res, 200, JSON.stringify(await buildManifest(override)), MIME[".json"]);
       }
-      if (path === `${MOUNT}/fixtures.json`) {
+      if (path === "/fixtures.json") {
         return send(res, 200, JSON.stringify(await loadFixtures()), MIME[".json"]);
       }
-      // The preview's own assets (index.html, WASM, placeholder), as the real
-      // server would serve them from design/preview/.
-      if (path.startsWith(`${MOUNT}/`)) {
-        return sendFile(res, join(OUT_DIR, path.slice(MOUNT.length + 1)));
-      }
-      // /assets/* → override → bundle (mirrors the real /assets route, which
-      // maps to the bundle's assets/ folder). path.slice(1) keeps the "assets/"
-      // prefix, e.g. "assets/css/style.css".
+      // /assets/* → override → bundle (mirrors the real /assets route, which maps
+      // to the bundle's assets/ folder — including the runtime libs just copied
+      // there). path.slice(1) keeps the "assets/" prefix, e.g. "assets/js/foo.js".
       if (path.startsWith("/assets/")) {
         const resolved = resolveAsset(path.slice(1), override);
         return resolved ? sendFile(res, resolved) : send(res, 404, "Not Found");
@@ -196,7 +200,7 @@ async function serve() {
   });
 
   server.listen(port, () => {
-    console.log(`preview server on http://localhost:${port}/  ->  ${MOUNT}/index.html`);
+    console.log(`preview server on http://localhost:${port}/`);
     console.log(override ? `override: ${override}` : "bundle only");
   });
 }

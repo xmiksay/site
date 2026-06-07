@@ -18,40 +18,46 @@ The design bundle is split by how the server handles each part:
   `assets/img`).
 
 The preview tooling lives at the bundle root (`build.mjs`, `fixtures.mjs`,
-`index.html`), and its build output lands in **`assets/preview/`**. Since the
-real server serves everything under `assets/` at `/assets/*`, it serves the
-preview at **`/assets/preview/index.html`** with no extra wiring — the output is
-plain helper artifacts, not design.
+`index.html`). The compiler writes two kinds of output:
+
+- the **preview app** (the page + its data) → **`preview/`**:
+  `index.html`, `templates.json`, `fixtures.json`.
+- the **runtime libraries** it needs to run → the served **`assets/`** folders:
+  the minijinja-js runtime (`minijinja_js.js`, `minijinja_js_bg.wasm`) →
+  `assets/js/`, the placeholder image → `assets/img/`.
+
+So compiled libraries land where every other static resource lives (served at
+`/assets/*`), and the page itself stays a plain helper in `preview/`.
 
 ## Run
 
 ```bash
 cd design
 npm install
-npm run serve        # http://localhost:4321  (redirects to /assets/preview/index.html)
+npm run serve        # http://localhost:4321
 ```
 
-`npm run serve` starts a tiny dependency-free dev server mounted at the same
-`/assets/preview` prefix the real server uses, so the base path matches. The
-manifest (`templates.json`) and `fixtures.json` are regenerated on every request,
-so template and fixture edits show up on reload. A static server is required —
-`fetch` does not work over `file://`.
+`npm run serve` starts a tiny dependency-free dev server: it serves the page from
+`preview/` at the web root, the runtime/static assets at `/assets/*`, and a
+placeholder for `/files/*`. The manifest (`templates.json`) and `fixtures.json`
+are regenerated on every request, so template and fixture edits show up on
+reload. A static server is required — `fetch` does not work over `file://`.
 
-To assemble the output once (e.g. before building/deploying the server so it can
-serve `/assets/preview/`):
+To assemble the output once (e.g. before building/deploying the server so it
+serves the runtime libs under `/assets/`):
 
 ```bash
-npm run build        # writes design/assets/preview/
+npm run build        # writes design/preview/ and design/assets/{js,img}
 ```
 
-## Base path — why everything is relative
+## Asset URLs
 
-The output is mounted under `/assets/preview/`, not the web root. So `index.html`
-references its own assets **relatively** (`./minijinja_js.js`, `./templates.json`,
-…), never with a leading slash — it is base-path agnostic and runs the same off
-the dev server or a live site. The rendered template markup inside the iframe
-keeps its absolute `/assets/...` and `/files/...` URLs; both servers resolve those
-from the web root.
+The page loads its **runtime** with absolute `/assets/js/...` URLs — that's where
+the compiler places the libs and where the real `/assets` route serves them. It
+fetches its own **data** relatively (`./templates.json`, `./fixtures.json`), which
+sit beside `index.html` in `preview/`. The rendered template markup inside the
+iframe keeps its absolute `/assets/...` and `/files/...` URLs, resolved from the
+web root.
 
 ## Previewing an override (DESIGN_DIR)
 
@@ -93,8 +99,9 @@ same way.
 
 | Path | Role |
 |---|---|
-| `index.html` | Browser: init WASM, set loader (with `timeformat` strip), compose `body_html`, render each target into an iframe. Source; copied into `assets/preview/`. |
+| `index.html` | Browser: init WASM, set loader (with `timeformat` strip), compose `body_html`, render each target into an iframe. Source; copied into `preview/`. |
 | `fixtures.mjs` | Default dummy data: one fixture per render target plus directive contexts and body block trees. |
-| `build.mjs` | Assembles `assets/preview/` (manifest + fixtures + WASM + index/placeholder) and runs the `--serve` dev server. |
-| `placeholder.svg` | Stand-in image for `/files/*` in the dev server. |
-| `assets/preview/` | Build output, served at `/assets/preview/`: `templates.json`, `fixtures.json`, `index.html`, `placeholder.svg`, copied minijinja-js WASM/JS. |
+| `build.mjs` | Compiles the app into `preview/` and the runtime libs into `assets/{js,img}`; runs the `--serve` dev server. |
+| `placeholder.svg` | Source stand-in image; copied to `assets/img/` and served for `/files/*` in the dev server. |
+| `preview/` | Compiled app (output): `index.html`, `templates.json`, `fixtures.json`. |
+| `assets/js/minijinja_js*`, `assets/img/placeholder.svg` | Compiled runtime libs (output), served under `/assets/*`. |
