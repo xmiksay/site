@@ -5,19 +5,19 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use rust_embed::Embed;
 
-/// The `common` bundle baked into the binary at compile time. This is the
-/// always-present fallback layer; anything else is supplied at runtime via the
-/// `ASSETS_DIR` override folder.
+/// The default design bundle baked into the binary at compile time. This is
+/// the always-present fallback layer; a deployment can override it at runtime
+/// via the `DESIGN_DIR` folder.
 #[derive(Embed)]
-#[folder = "assets/common"]
-struct Assets;
+#[folder = "design"]
+struct Baked;
 
-/// Runtime override of the baked-in assets, supplied via a folder on disk.
+/// Runtime override of the baked-in design, supplied via a folder on disk.
 ///
-/// Lets a deployment ship its own assets (templates, css, js, img) as a plain
-/// folder instead of having them compiled into the binary.
+/// Lets a deployment ship its own design (templates, css, js, img) as a plain
+/// folder instead of having it compiled into the binary.
 enum Overlay {
-    /// No override folder configured — only the baked-in assets are used.
+    /// No override folder configured — only the baked-in design is used.
     None,
     /// Debug builds: read straight from disk on every request, so edits show
     /// up without a rebuild (transparent, like rust-embed in debug mode).
@@ -28,12 +28,12 @@ enum Overlay {
 }
 
 /// Resolves resource requests against an optional override folder, falling
-/// back to the baked-in `common` bundle.
-pub struct AssetStore {
+/// back to the baked-in default design bundle.
+pub struct DesignStore {
     overlay: Overlay,
 }
 
-impl AssetStore {
+impl DesignStore {
     /// Build a store optionally overlaid by `override_dir`.
     ///
     /// In debug builds the override folder is read live on each request; in
@@ -42,13 +42,13 @@ impl AssetStore {
         let overlay = match override_dir {
             None => Overlay::None,
             Some(dir) if cfg!(debug_assertions) => {
-                tracing::info!("assets: live override folder {}", dir.display());
+                tracing::info!("design: live override folder {}", dir.display());
                 Overlay::Live(dir)
             }
             Some(dir) => {
                 let frozen = freeze_dir(&dir);
                 tracing::info!(
-                    "assets: froze {} file(s) from {} into RAM",
+                    "design: froze {} file(s) from {} into RAM",
                     frozen.len(),
                     dir.display()
                 );
@@ -59,11 +59,11 @@ impl AssetStore {
     }
 
     /// Names of every template under `templates/`, deduplicated across the
-    /// override folder and baked `common`. Used to compile all templates up
+    /// override folder and the baked default. Used to compile all templates up
     /// front in release builds.
     pub fn template_names(&self) -> Vec<String> {
         let mut names = BTreeSet::new();
-        for file in Assets::iter() {
+        for file in Baked::iter() {
             if let Some(rest) = file.strip_prefix("templates/") {
                 names.insert(rest.to_string());
             }
@@ -72,12 +72,12 @@ impl AssetStore {
         names.into_iter().collect()
     }
 
-    /// Resolve a resource: override folder → baked common.
+    /// Resolve a resource: override folder → baked default.
     pub fn load(&self, path: &str) -> Option<Vec<u8>> {
         if let Some(data) = self.overlay.get(path) {
             return Some(data);
         }
-        Assets::get(path).map(|file| file.data.into_owned())
+        Baked::get(path).map(|file| file.data.into_owned())
     }
 }
 
@@ -138,7 +138,7 @@ fn safe_join(base: &Path, rel: &str) -> Option<PathBuf> {
 }
 
 /// Recursively read every file under `dir` into a map keyed by forward-slash
-/// relative path (matching the keys used by `AssetStore::load`).
+/// relative path (matching the keys used by `DesignStore::load`).
 fn freeze_dir(dir: &Path) -> HashMap<String, Vec<u8>> {
     let mut map = HashMap::new();
     freeze_into(dir, dir, &mut map);
@@ -149,7 +149,7 @@ fn freeze_into(base: &Path, current: &Path, map: &mut HashMap<String, Vec<u8>>) 
     let entries = match std::fs::read_dir(current) {
         Ok(entries) => entries,
         Err(e) => {
-            tracing::warn!("assets: cannot read {}: {e}", current.display());
+            tracing::warn!("design: cannot read {}: {e}", current.display());
             return;
         }
     };
@@ -169,37 +169,37 @@ mod tests {
 
     #[test]
     fn safe_join_allows_normal_paths() {
-        let base = Path::new("/srv/assets");
+        let base = Path::new("/srv/design");
         assert_eq!(
             safe_join(base, "css/style.css"),
-            Some(PathBuf::from("/srv/assets/css/style.css"))
+            Some(PathBuf::from("/srv/design/css/style.css"))
         );
     }
 
     #[test]
     fn safe_join_rejects_traversal_and_absolute() {
-        let base = Path::new("/srv/assets");
+        let base = Path::new("/srv/design");
         assert_eq!(safe_join(base, "../secret"), None);
         assert_eq!(safe_join(base, "css/../../etc/passwd"), None);
         assert_eq!(safe_join(base, "/etc/passwd"), None);
     }
 
     #[test]
-    fn load_falls_back_to_baked_common() {
-        // No override folder: a known baked `common` template still resolves.
-        let store = AssetStore::new(None);
+    fn load_falls_back_to_baked_default() {
+        // No override folder: a known baked template still resolves.
+        let store = DesignStore::new(None);
         assert!(store.load("templates/base.html").is_some());
         assert!(store.load("templates/no-such-file.html").is_none());
     }
 
     #[test]
     fn overlay_takes_precedence_over_baked() {
-        let dir = std::env::temp_dir().join("asset_store_overlay_test");
+        let dir = std::env::temp_dir().join("design_store_overlay_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("templates")).unwrap();
         std::fs::write(dir.join("templates/base.html"), b"OVERRIDDEN").unwrap();
 
-        let store = AssetStore {
+        let store = DesignStore {
             overlay: Overlay::Frozen(freeze_dir(&dir)),
         };
         assert_eq!(store.load("templates/base.html").as_deref(), Some(&b"OVERRIDDEN"[..]));
@@ -208,7 +208,7 @@ mod tests {
     }
 }
 
-pub fn build_asset_response(path: &str, data: Vec<u8>) -> Response {
+pub fn build_static_response(path: &str, data: Vec<u8>) -> Response {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
     (
         StatusCode::OK,

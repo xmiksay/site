@@ -8,7 +8,7 @@ Hybrid personal site: server-rendered public pages (MiniJinja) + Vue 3 admin SPA
 
 - **Backend:** Rust (edition 2024), Axum 0.8, Tokio
 - **Database:** PostgreSQL via SeaORM 1.x; migrations run automatically on startup
-- **Public rendering:** MiniJinja templates resolved via `AssetStore` (`src/templates.rs`). Release builds compile every template at startup; debug builds live-reload (rebuilt per render, so edits show up on the next request)
+- **Public rendering:** MiniJinja templates resolved via `DesignStore` (`src/design.rs`, `src/templates.rs`). Release builds compile every template at startup; debug builds live-reload (rebuilt per render, so edits show up on the next request)
 - **Admin UI:** Vue 3 SPA (Pinia, Vue Router, Tailwind 4, Vite, TypeScript) — built into `client/dist/`, embedded via `rust-embed`, served at `/admin/*` with SPA fallback to `index.html`
 - **Markdown:** pulldown-cmark with HTML-tag directives (`<page>`, `<image>`, `<file>`, `<gallery>`, `<fen>`, `<pgn>`); `<fen>`/`<pgn>` also accept an inline body, e.g. `<pgn>…</pgn>`
 - **Auth:** Argon2 password hashing, session cookies (`site_session`, 24 h), legacy service tokens, OAuth2 (PKCE)
@@ -43,25 +43,23 @@ src/
   ai/                     # config, handlers, llm, local_tools,
                           # loop_driver, mcp_client, tool_permissions,
                           # tool_registry
-  auth.rs assets.rs config.rs files.rs
+  auth.rs config.rs design.rs files.rs
   markdown.rs path_util.rs repo state.rs templates.rs
 
 client/                   # Vue 3 SPA
   src/  dist/             # dist/ is embedded into the binary
 
-assets/common/            # Baked static bundle (via rust-embed); fallback layer
+design/                   # Baked default design bundle (via rust-embed)
   css/  js/  img/  templates/
-assets/<other>/           # Not baked — example override bundles you can point
-                          # ASSETS_DIR at (e.g. assets/miksanik.net)
 ```
 
-Asset/template resolution (see `src/assets.rs`, `AssetStore`):
-`ASSETS_DIR` override folder → baked `assets/common/` → not found.
+Design/template resolution (see `src/design.rs`, `DesignStore`):
+`DESIGN_DIR` override folder → baked `design/` → not found.
 The override folder mirrors the bundle layout (`templates/`, `css/`, `js/`, `img/`)
-and lets a deployment ship its own assets as a plain folder instead of
-recompiling. With no `ASSETS_DIR` set, only the baked `common` bundle is used.
+and lets a deployment ship its own design as a plain folder instead of
+recompiling. With no `DESIGN_DIR` set, only the baked `design/` bundle is used.
 
-Templates (`src/templates.rs`, `Templates`) sit on top of the same `AssetStore`:
+Templates (`src/templates.rs`, `Templates`) sit on top of the same `DesignStore`:
 release builds compile every template once at startup (frozen, shared); debug
 builds rebuild the environment from the assets on each render (live reload).
 
@@ -95,7 +93,7 @@ cargo run --bin site_cli -- change-password <username> <password>
 | `DATABASE_URL` | (required) | PostgreSQL connection string |
 | `RUST_LOG` | `site=debug,tower_http=debug,info` | Tracing filter |
 | `PORT` | `3000` | HTTP listen port |
-| `ASSETS_DIR` | (unset) | Override folder for `{templates,css,js,img}`, checked before the baked `common` bundle. Debug builds read it live on each request; release builds freeze it into RAM at startup |
+| `DESIGN_DIR` | (unset) | Override folder for `{templates,css,js,img}`, checked before the baked `design/` bundle. Debug builds read it live on each request; release builds freeze it into RAM at startup |
 | `SERPER_API_KEY` | (unset) | Enables AI assistant `web_search` tool |
 
 ## Data Model
@@ -147,7 +145,7 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 | `/tag/{name}` | GET | Tag listing |
 | `/search?q=...` | GET | Fulltext search |
 | `/sitemap.xml` | GET | Sitemap |
-| `/static/{*path}` | GET | Static assets (`ASSETS_DIR` override → baked `assets/common/{css,js,img}`) |
+| `/static/{*path}` | GET | Static files (`DESIGN_DIR` override → baked `design/{css,js,img}`) |
 | `/{*path}` | GET | Catch-all: menu → page → 404 |
 
 ### Admin SPA
