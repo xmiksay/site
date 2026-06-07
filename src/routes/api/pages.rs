@@ -14,6 +14,7 @@ pub fn router() -> Router<AppState> {
         .route("/", get(list).post(create))
         .route("/paths", get(list_paths))
         .route("/{id}", get(read).put(update).delete(delete_one))
+        .route("/{id}/revisions/{rev_id}", get(read_revision))
         .route("/{id}/revisions/{rev_id}/restore", post(restore))
 }
 
@@ -54,6 +55,16 @@ pub struct PageDetail {
 pub struct RevisionSummary {
     pub id: i32,
     pub created_at: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct RevisionDetail {
+    pub id: i32,
+    pub created_at: String,
+    /// Reconstructed markdown at this revision.
+    pub markdown: String,
+    /// Unified diff from this revision (old) to the current page (new).
+    pub diff: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -182,6 +193,38 @@ pub async fn delete_one(
     } else {
         Err(ApiError::NotFound)
     }
+}
+
+pub async fn read_revision(
+    State(state): State<AppState>,
+    Path((id, rev_id)): Path<(i32, i32)>,
+) -> ApiResult<Json<RevisionDetail>> {
+    use sea_orm::EntityTrait;
+    let pg = page::Entity::find_by_id(id)
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let rev = pages_repo::get_revision(&state.db, id, rev_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let revision_markdown =
+        crate::routes::revision::reconstruct_at_revision(&state.db, id, rev_id, &pg.markdown)
+            .await
+            .map_err(|e| match e {
+                crate::routes::revision::ReconstructError::NotFound => ApiError::NotFound,
+                other => ApiError::Internal(other.to_string()),
+            })?;
+
+    let diff = diffy::create_patch(&revision_markdown, &pg.markdown).to_string();
+
+    Ok(Json(RevisionDetail {
+        id: rev.id,
+        created_at: rev.created_at.to_string(),
+        markdown: revision_markdown,
+        diff,
+    }))
 }
 
 pub async fn restore(

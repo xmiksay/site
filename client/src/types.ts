@@ -13,6 +13,13 @@ export interface PageDetail extends PageSummary {
   revisions: Array<{ id: number; created_at: string }>
 }
 
+export interface RevisionDetail {
+  id: number
+  created_at: string
+  markdown: string
+  diff: string
+}
+
 export interface PageInput {
   path: string
   summary: string | null

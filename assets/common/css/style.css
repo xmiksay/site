@@ -492,6 +492,59 @@ footer {
 .controls button:hover { background: var(--black); border-color: var(--black); color: var(--white); }
 .move-info { min-width: 9rem; text-align: center; font-family: monospace; color: var(--text); font-size: 0.9rem; }
 
+/* ===== CODE BOX ===== */
+.code-box {
+    position: relative;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 1rem 0;
+}
+.code-box-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    background: #f0f0f0;
+    border-bottom: 1px solid var(--border);
+    padding: 0.3rem 0.6rem;
+    font-size: 0.75rem;
+}
+.code-box-lang {
+    font-family: monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+}
+.code-box-copy {
+    margin-left: auto;
+    padding: 0.15rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--white);
+    color: var(--text);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    cursor: pointer;
+}
+.code-box-copy:hover {
+    background: var(--black);
+    border-color: var(--black);
+    color: var(--white);
+}
+.code-box pre.code-block {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    overflow-x: auto;
+}
+
+/* ===== JSON TABLE (<json type="table">) ===== */
+.json-table { overflow-x: auto; margin: 1rem 0; }
+.json-table table { border-collapse: collapse; width: 100%; }
+.json-table th, .json-table td { border: 1px solid var(--border); padding: 0.4rem 0.8rem; text-align: left; }
+.json-table th { background: #f0f0f0; }
+
 /* ===== EDIT LINK ===== */
 .edit-link { font-size: 0.75rem; font-weight: 500; color: var(--muted); vertical-align: middle; margin-left: 0.5rem; }
 .edit-link:hover { color: var(--accent); }

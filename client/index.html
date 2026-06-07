@@ -8,5 +8,23 @@
   <body>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
+    <!-- Public content enhancers (served by the prod binary at /static, common namespace fallback).
+         They listen for `content:updated` and enhance chess boards, lightbox and code blocks
+         inside the admin preview. Not resolvable under `vite dev` — that is expected. -->
+    <link rel="stylesheet" href="/static/css/chessboard-1.0.0.css" />
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="/static/js/chessboard-1.0.0.js"></script>
+    <script src="/static/js/lightbox.js"></script>
+    <script src="/static/js/code-box.js"></script>
+    <!-- chess-viewer is an ES module; load it imperatively so Vite's HTML build
+         does not try to resolve the server-only /static path at bundle time. -->
+    <script>
+      (function () {
+        var s = document.createElement('script')
+        s.type = 'module'
+        s.src = '/static/js/chess-viewer.js'
+        document.body.appendChild(s)
+      })()
+    </script>
   </body>
 </html>

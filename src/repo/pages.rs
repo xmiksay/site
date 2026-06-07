@@ -404,6 +404,18 @@ pub async fn delete_by_path(db: &DatabaseConnection, path: &str) -> Result<bool,
     Ok(res.rows_affected > 0)
 }
 
+/// Load a single revision belonging to `page_id` (None if it isn't that page's).
+pub async fn get_revision(
+    db: &DatabaseConnection,
+    page_id: i32,
+    rev_id: i32,
+) -> Result<Option<page_revision::Model>, DbErr> {
+    page_revision::Entity::find_by_id(rev_id)
+        .filter(page_revision::Column::PageId.eq(page_id))
+        .one(db)
+        .await
+}
+
 pub async fn list_revisions(
     db: &DatabaseConnection,
     page_id: i32,

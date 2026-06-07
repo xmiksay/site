@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import FilePicker from './FilePicker.vue'
 import PathPicker from './PathPicker.vue'
+import WysiwygEditor from './WysiwygEditor.vue'
 import { useFilesStore } from '../stores/files'
 import { useGalleriesStore } from '../stores/galleries'
 import { useDebouncedRender } from '../composables/useDebouncedRender'
@@ -18,12 +19,23 @@ const props = withDefaults(
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
-const tab = ref<'edit' | 'preview'>('edit')
+const tab = ref<'edit' | 'wysiwyg' | 'preview'>('edit')
+const previewRef = ref<HTMLElement | null>(null)
 
 const source = computed(() => props.modelValue)
 const active = computed(() => tab.value === 'preview')
 const { html: previewHtml, loading: previewLoading, error: previewError } =
   useDebouncedRender(source, active)
+
+// Notify public asset enhancers (chess/lightbox/code-box) to wire up the freshly
+// rendered preview HTML. They listen for `content:updated` and run enhance(detail.root).
+watch(previewHtml, async () => {
+  await nextTick()
+  const el = previewRef.value
+  if (el) {
+    document.dispatchEvent(new CustomEvent('content:updated', { detail: { root: el } }))
+  }
+})
 
 type PickerKind = null | 'img' | 'file' | 'gallery' | 'page' | 'pgn' | 'fen'
 const pickerKind = ref<PickerKind>(null)
@@ -252,6 +264,14 @@ const tbBtn =
         <button
           type="button"
           class="px-3 py-1 rounded"
+          :class="tab === 'wysiwyg' ? 'bg-white font-medium border border-gray-300' : 'text-gray-500 hover:text-gray-800'"
+          @click="tab = 'wysiwyg'"
+        >
+          WYSIWYG
+        </button>
+        <button
+          type="button"
+          class="px-3 py-1 rounded"
           :class="tab === 'preview' ? 'bg-white font-medium border border-gray-300' : 'text-gray-500 hover:text-gray-800'"
           @click="tab = 'preview'"
         >
@@ -272,10 +292,16 @@ const tbBtn =
       @keydown="onKeydown"
     ></textarea>
 
+    <WysiwygEditor
+      v-show="tab === 'wysiwyg'"
+      :model-value="modelValue"
+      @update:model-value="emit('update:modelValue', $event)"
+    />
+
     <div v-if="tab === 'preview'" class="relative">
       <div v-if="previewLoading" class="px-3 py-1 text-xs text-gray-500">Rendering…</div>
       <p v-if="previewError" class="px-3 py-1 text-xs text-red-600">{{ previewError }}</p>
-      <div class="prose max-w-none p-4" v-html="previewHtml"></div>
+      <div ref="previewRef" class="prose max-w-none p-4" v-html="previewHtml"></div>
     </div>
 
     <FilePicker

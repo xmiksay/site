@@ -1,0 +1,5 @@
+{%- if kind == "table" -%}
+<div class="json-table"><table><thead><tr>{%- for c in columns %}<th>{{ c }}</th>{% endfor -%}</tr></thead><tbody>{%- for row in rows %}<tr>{%- for cell in row %}<td>{{ cell }}</td>{% endfor -%}</tr>{% endfor -%}</tbody></table></div>
+{%- else -%}
+<p><em>[json: unsupported render type]</em></p>
+{%- endif -%}
