@@ -5,6 +5,8 @@ import { usePagesStore } from '../stores/pages'
 import { useTagsStore } from '../stores/tags'
 import PathPicker from '../components/PathPicker.vue'
 import MarkdownEditor from '../components/MarkdownEditor.vue'
+import { html as diff2htmlHtml } from 'diff2html'
+import 'diff2html/bundles/css/diff2html.min.css'
 import type { PageInput } from '../types'
 
 const props = defineProps<{ id?: string; create?: boolean }>()
@@ -20,6 +22,13 @@ const tagIds = ref<number[]>([])
 const isPrivate = ref(false)
 const error = ref('')
 const revisions = ref<Array<{ id: number; created_at: string }>>([])
+
+// Diff modal state
+const diffOpen = ref(false)
+const diffLoading = ref(false)
+const diffError = ref('')
+const diffHtml = ref('')
+const diffRevDate = ref('')
 
 const numericId = () => (props.id ? Number(props.id) : null)
 
@@ -64,6 +73,32 @@ function toggleTag(id: number) {
   const idx = tagIds.value.indexOf(id)
   if (idx === -1) tagIds.value.push(id)
   else tagIds.value.splice(idx, 1)
+}
+
+async function openDiff(rev: { id: number; created_at: string }) {
+  const id = numericId()
+  if (!id) return
+  diffOpen.value = true
+  diffLoading.value = true
+  diffError.value = ''
+  diffHtml.value = ''
+  diffRevDate.value = rev.created_at
+  try {
+    const detail = await pages.readRevision(id, rev.id)
+    diffHtml.value = diff2htmlHtml(detail.diff, {
+      drawFileList: false,
+      matching: 'lines',
+      outputFormat: 'line-by-line',
+    })
+  } catch (e) {
+    diffError.value = e instanceof Error ? e.message : 'Failed to load revision'
+  } finally {
+    diffLoading.value = false
+  }
+}
+
+function closeDiff() {
+  diffOpen.value = false
 }
 
 async function restore(revId: number) {
@@ -139,11 +174,39 @@ async function restore(revId: number) {
     <div v-if="!props.create && revisions.length" class="bg-white rounded-lg shadow p-4">
       <h2 class="font-medium mb-2">Revisions</h2>
       <ul class="text-sm space-y-1">
-        <li v-for="r in revisions" :key="r.id" class="flex justify-between border-b border-gray-100 py-1">
-          <span class="text-gray-600">{{ r.created_at }}</span>
-          <button class="text-blue-600 hover:underline" @click="restore(r.id)">Restore</button>
+        <li
+          v-for="r in revisions"
+          :key="r.id"
+          class="flex justify-between border-b border-gray-100 py-1"
+        >
+          <button
+            type="button"
+            class="flex-1 text-left text-gray-600 hover:text-gray-900 hover:underline"
+            @click="openDiff(r)"
+          >
+            {{ r.created_at }}
+          </button>
+          <button class="text-blue-600 hover:underline" @click.stop="restore(r.id)">Restore</button>
         </li>
       </ul>
+    </div>
+
+    <div
+      v-if="diffOpen"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      @click.self="closeDiff"
+    >
+      <div class="flex max-h-[85vh] w-[min(900px,94vw)] flex-col overflow-hidden rounded-lg bg-white shadow-lg">
+        <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+          <h2 class="font-medium">Revision {{ diffRevDate }}</h2>
+          <button class="text-gray-500 hover:text-gray-900" @click="closeDiff">×</button>
+        </div>
+        <div class="overflow-auto p-4">
+          <p v-if="diffLoading" class="text-sm text-gray-500">Loading…</p>
+          <p v-else-if="diffError" class="text-sm text-red-600">{{ diffError }}</p>
+          <div v-else class="text-sm" v-html="diffHtml"></div>
+        </div>
+      </div>
     </div>
   </div>
 </template>

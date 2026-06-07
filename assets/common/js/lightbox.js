@@ -4,6 +4,7 @@
     let overlay, imgEl, caption, counter, btnPrev, btnNext, btnClose;
     let items = [];
     let current = 0;
+    let initialized = false;
 
     function create() {
         overlay = document.createElement('div');
@@ -80,6 +81,10 @@
     }
 
     function init() {
+        // Idempotent: overlay + global listeners are created exactly once.
+        if (initialized) return;
+        initialized = true;
+
         create();
         document.addEventListener('keydown', handleKey);
 
@@ -110,4 +115,9 @@
     } else {
         init();
     }
+
+    // Contract hook: click delegation on `document` already covers
+    // dynamically-added content, so this simply ensures init() has run.
+    // It does not bind any per-call global listeners (init() is idempotent).
+    document.addEventListener('content:updated', function () { init(); });
 })();

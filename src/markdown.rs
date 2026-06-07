@@ -21,6 +21,8 @@
 //! <mermaid path="diagrams/flow.mmd" theme="dark">
 //! <mermaid theme="forest">graph TD
 //!   A[Start] --> B[End]</mermaid>
+//! <json path="data/stats.json" query=".rows[]" type="table">
+//! <json query=".rows[]" type="table">{ "rows": [{"a": 1}] }</json>
 //! ```
 //!
 //! Attribute values may be double-quoted, single-quoted, or unquoted (no
@@ -47,7 +49,7 @@
 pub const MARKDOWN_EXTENSIONS_DOC: &str = "\
 Directives use an HTML-tag syntax `<name attr=\"value\">`. Only the names below
 are directives; any other `<tag>` is passed through as raw HTML. Lookup keys:
-- file-based (`<file>`/`<image>`/`<fen>`/`<pgn>`/`<mermaid>`): exactly one of `path`, `id`, or `hash` (sha256)
+- file-based (`<file>`/`<image>`/`<fen>`/`<pgn>`/`<mermaid>`/`<json>`): exactly one of `path`, `id`, or `hash` (sha256)
 - `<gallery>`: exactly one of `path` or `id`
 - `<page>`: exactly one of `path` or `id`
 
@@ -61,14 +63,19 @@ are directives; any other `<tag>` is passed through as raw HTML. Lookup keys:
 - `<pgn move=\"N\">PGN moves</pgn>` — playable game from an inline PGN (multiple lines allowed).
 - `<mermaid path=\"...\" theme=\"default|dark|forest|neutral\">` — diagram rendered to SVG from a stored Mermaid file.
 - `<mermaid theme=\"...\">DIAGRAM</mermaid>` — diagram rendered to SVG from an inline Mermaid definition (multiple lines allowed).
+- `<json path=\"...\" query=\".rows[]\" type=\"table\">` — run a jq query over a JSON file blob (or inline `<json query=\"...\">{...}</json>`) and render the result; `type=\"table\"` builds an HTML table.
 - Internal links `[Text](Path/To/Page.md)` are auto-rewritten to lowercase absolute paths.";
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::LazyLock;
 
 use minijinja::{Environment, context};
-use pulldown_cmark::{Options, Parser, html};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
+use syntect::highlighting::{Theme, ThemeSet};
+use syntect::html::highlighted_html_for_string;
+use syntect::parsing::SyntaxSet;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::entity::file as file_entity;
@@ -105,10 +112,118 @@ pub async fn render(
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TASKLISTS);
     let parser = Parser::new_ext(&expanded, opts);
+    let events = highlight_code_block_events(parser.collect());
     let mut out = String::new();
-    html::push_html(&mut out, parser);
+    html::push_html(&mut out, events.into_iter());
 
     rewrite_internal_links(&out)
+}
+
+// ---------------------------------------------------------------------------
+// Server-side syntax highlighting of fenced code blocks
+// ---------------------------------------------------------------------------
+
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+static HIGHLIGHT_THEME: LazyLock<Theme> = LazyLock::new(|| {
+    let mut themes = ThemeSet::load_defaults();
+    themes
+        .themes
+        .remove("InspiredGitHub")
+        .expect("InspiredGitHub theme is bundled with syntect defaults")
+});
+
+/// Rewrite the event stream so each fenced code block becomes a single
+/// `Event::Html` carrying server-highlighted markup. All other events pass
+/// through untouched.
+fn highlight_code_block_events(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
+    let mut out: Vec<Event<'_>> = Vec::with_capacity(events.len());
+    let mut iter = events.into_iter();
+    while let Some(ev) = iter.next() {
+        if let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) = &ev {
+            let lang = lang.clone().into_string();
+            let mut code = String::new();
+            for inner in iter.by_ref() {
+                match inner {
+                    Event::End(TagEnd::CodeBlock) => break,
+                    Event::Text(t) | Event::Code(t) | Event::Html(t) => code.push_str(&t),
+                    _ => {}
+                }
+            }
+            out.push(Event::Html(highlight_code_block(&lang, &code).into()));
+        } else {
+            out.push(ev);
+        }
+    }
+    out
+}
+
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Produce the HTML for one fenced code block. Chess directives (`fen`/`pgn`)
+/// keep their `language-<lang>` class so the client chess viewer still picks
+/// them up; everything else is highlighted with syntect (plain-text fallback
+/// when the language is empty or unknown).
+///
+/// Contract: every non-chess block is a single `<pre class="code-block" ...>`
+/// element with an optional `data-lang` attribute and no blank lines inside, so
+/// a frontend enhancer can find and decorate it reliably.
+fn highlight_code_block(lang: &str, code: &str) -> String {
+    let lang = lang.trim().to_ascii_lowercase();
+
+    if lang == "fen" || lang == "pgn" {
+        return format!(
+            "<pre><code class=\"language-{lang}\">{}</code></pre>",
+            escape_html(code)
+        );
+    }
+
+    let data_lang = if lang.is_empty() {
+        String::new()
+    } else {
+        format!(" data-lang=\"{}\"", escape_html(&lang))
+    };
+
+    let syntax = if lang.is_empty() {
+        None
+    } else {
+        SYNTAX_SET.find_syntax_by_token(&lang)
+    };
+
+    let Some(syntax) = syntax else {
+        // Plain fallback: no syntect, just escape and wrap.
+        return format!(
+            "<pre class=\"code-block\"{data_lang}><code>{}</code></pre>",
+            escape_html(code)
+        );
+    };
+
+    match highlighted_html_for_string(code, &SYNTAX_SET, syntax, &HIGHLIGHT_THEME) {
+        Ok(html) => {
+            let inner = strip_outer_pre(&html);
+            format!("<pre class=\"code-block\"{data_lang}>{inner}</pre>")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, lang = %lang, "syntect highlight failed; falling back to plain");
+            format!(
+                "<pre class=\"code-block\"{data_lang}><code>{}</code></pre>",
+                escape_html(code)
+            )
+        }
+    }
+}
+
+/// Strip syntect's outer `<pre ...>` opening tag and trailing `</pre>`,
+/// returning the inner highlighted spans.
+fn strip_outer_pre(html: &str) -> &str {
+    let inner = match html.find('>') {
+        Some(idx) if html.starts_with("<pre") => &html[idx + 1..],
+        _ => html,
+    };
+    inner.strip_suffix("</pre>").unwrap_or(inner)
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +247,8 @@ impl Directive {
 
 /// Surface names recognized as directives in tag form. Everything else (incl. a
 /// real `<img>`) is left untouched as raw HTML.
-const DIRECTIVE_NAMES: [&str; 7] = ["page", "file", "image", "gallery", "fen", "pgn", "mermaid"];
+const DIRECTIVE_NAMES: [&str; 8] =
+    ["page", "file", "image", "gallery", "fen", "pgn", "mermaid", "json"];
 
 fn is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-'
@@ -310,12 +426,13 @@ fn collect_container(lines: &[&str], start: usize) -> Option<(Directive, usize)>
     let trimmed = open_line.trim_start();
     if !(trimmed.starts_with("<fen")
         || trimmed.starts_with("<pgn")
-        || trimmed.starts_with("<mermaid"))
+        || trimmed.starts_with("<mermaid")
+        || trimmed.starts_with("<json"))
     {
         return None;
     }
     let (mut dir, consumed) = parse_tag_directive(trimmed)?;
-    if dir.name != "fen" && dir.name != "pgn" && dir.name != "mermaid" {
+    if dir.name != "fen" && dir.name != "pgn" && dir.name != "mermaid" && dir.name != "json" {
         return None;
     }
     let close = format!("</{}>", dir.name);
@@ -409,6 +526,7 @@ async fn dispatch_directive(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
         "fen" => directive_fen(d, ctx).await,
         "pgn" => directive_pgn(d, ctx).await,
         "mermaid" => directive_mermaid(d, ctx).await,
+        "json" => directive_json(d, ctx).await,
         unknown => format!("\n\n*[unknown directive `<{unknown}>`]*\n\n"),
     }
 }
@@ -894,6 +1012,162 @@ async fn directive_mermaid(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
     block(html)
 }
 
+// ---------------------------------------------------------------------------
+// <json path|id|hash=... query=".rows[]" type="table">  — file-backed, or
+// <json query="..." type="...">{ ...json... }</json>     — inline body.
+// Runs a jq query (jaq) over the JSON and renders the result (default: table).
+// ---------------------------------------------------------------------------
+
+async fn directive_json(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
+    let query = match d.arg("query").filter(|s| !s.is_empty()) {
+        Some(q) => q,
+        None => return "\n\n*[json: missing `query`]*\n\n".to_string(),
+    };
+    let kind = d.arg("type").filter(|s| !s.is_empty()).unwrap_or("table");
+    if kind != "table" {
+        return format!("\n\n*[json: unknown type \"{kind}\"]*\n\n");
+    }
+
+    let source = match inline_body(d) {
+        Some(body) => body,
+        None => {
+            let lookup = match parse_file_lookup(d, "json") {
+                Ok(l) => l,
+                Err(msg) => return msg,
+            };
+            let Some(file) = fetch_file(ctx.db, &lookup).await else {
+                return format!("\n\n*[json: file \"{}\" not found]*\n\n", lookup_label(&lookup));
+            };
+            let Some(src) = read_text_blob(ctx.db, &file.hash).await else {
+                return format!("\n\n*[json: blob for \"{}\" missing]*\n\n", file.path);
+            };
+            src
+        }
+    };
+
+    let value: serde_json::Value = match serde_json::from_str(&source) {
+        Ok(v) => v,
+        Err(e) => return format!("\n\n*[json: invalid JSON: {e}]*\n\n"),
+    };
+
+    let outputs = match run_jq(query, value) {
+        Ok(o) => o,
+        Err(e) => return format!("\n\n*[json: jq error: {e}]*\n\n"),
+    };
+
+    let (columns, rows) = match json_table(outputs) {
+        Ok(t) => t,
+        Err(e) => return format!("\n\n*[json: {e}]*\n\n"),
+    };
+
+    let html = render_md_template(
+        ctx,
+        "json",
+        context! { kind => kind, columns => columns, rows => rows },
+    );
+    block(html)
+}
+
+/// Run a jq query over `input` using jaq, collecting all outputs.
+fn run_jq(query: &str, input: serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+    use jaq_core::load::{Arena, File, Loader};
+    use jaq_core::{Compiler, Ctx, RcIter};
+    use jaq_json::Val;
+
+    let arena = Arena::default();
+    let loader = Loader::new(jaq_std::defs().chain(jaq_json::defs()));
+    let modules = loader
+        .load(&arena, File { code: query, path: () })
+        .map_err(|errs| format!("{errs:?}"))?;
+    let filter = Compiler::default()
+        .with_funs(jaq_std::funs().chain(jaq_json::funs()))
+        .compile(modules)
+        .map_err(|errs| format!("{errs:?}"))?;
+
+    let inputs = RcIter::new(core::iter::empty());
+    let ctx = Ctx::new([], &inputs);
+    let mut out = Vec::new();
+    for r in filter.run((ctx, Val::from(input))) {
+        out.push(serde_json::Value::from(r.map_err(|e| e.to_string())?));
+    }
+    Ok(out)
+}
+
+/// Flatten jq outputs into table columns + rows.
+///
+/// Each top-level output that is itself an array is expanded into its items, so
+/// `.rows[]` and `.rows` both work. Object items contribute a header row (the
+/// first-seen union of keys); array items become header-less cell rows. Mixing
+/// objects and arrays is rejected.
+fn json_table(
+    outputs: Vec<serde_json::Value>,
+) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+    use serde_json::Value;
+
+    // A single jq output that is an array of objects (e.g. `.rows`) is the table
+    // itself, so expand it into rows. An array of non-objects (e.g. `[1,2,3]`)
+    // stays one item: it's a single cell-row.
+    let mut items: Vec<Value> = Vec::new();
+    for out in outputs {
+        match out {
+            Value::Array(arr) if arr.iter().all(Value::is_object) && !arr.is_empty() => {
+                items.extend(arr)
+            }
+            other => items.push(other),
+        }
+    }
+
+    if items.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let all_objects = items.iter().all(|v| v.is_object());
+    let all_arrays = items.iter().all(|v| v.is_array());
+
+    if all_objects {
+        let mut columns: Vec<String> = Vec::new();
+        for item in &items {
+            for key in item.as_object().unwrap().keys() {
+                if !columns.iter().any(|c| c == key) {
+                    columns.push(key.clone());
+                }
+            }
+        }
+        let rows = items
+            .iter()
+            .map(|item| {
+                let obj = item.as_object().unwrap();
+                columns
+                    .iter()
+                    .map(|c| obj.get(c).map(stringify_cell).unwrap_or_default())
+                    .collect()
+            })
+            .collect();
+        Ok((columns, rows))
+    } else if all_arrays {
+        let rows = items
+            .iter()
+            .map(|item| item.as_array().unwrap().iter().map(stringify_cell).collect())
+            .collect();
+        Ok((Vec::new(), rows))
+    } else {
+        Err("non-tabular result (expected objects or arrays)".to_string())
+    }
+}
+
+/// Stringify a scalar cell: strings bare, numbers/bools as-is, null → empty,
+/// nested objects/arrays → compact JSON.
+fn stringify_cell(v: &serde_json::Value) -> String {
+    use serde_json::Value;
+    match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// Trimmed paired-tag body, if the directive carries a non-empty one.
 fn inline_body(d: &Directive) -> Option<String> {
     d.inner
@@ -1118,6 +1392,105 @@ mod tests {
         let d = make_dir("file", &[]);
         let err = parse_file_lookup(&d, "file").unwrap_err();
         assert!(err.contains("requires"));
+    }
+
+    #[test]
+    fn highlight_rust_block() {
+        let html = highlight_code_block("rust", "fn main() {}\n");
+        assert!(html.starts_with("<pre class=\"code-block\""), "got: {html}");
+        assert!(html.contains("data-lang=\"rust\""), "got: {html}");
+        assert!(html.ends_with("</pre>"));
+        // syntect emits styled spans for highlighted code.
+        assert!(html.contains("<span"), "expected highlighted spans: {html}");
+    }
+
+    #[test]
+    fn highlight_fen_keeps_language_class() {
+        let html = highlight_code_block("fen", "rnbq w - 0 1");
+        assert_eq!(
+            html,
+            "<pre><code class=\"language-fen\">rnbq w - 0 1</code></pre>"
+        );
+    }
+
+    #[test]
+    fn highlight_pgn_keeps_language_class() {
+        let html = highlight_code_block("pgn", "1. e4 e5");
+        assert!(html.contains("class=\"language-pgn\""));
+    }
+
+    #[test]
+    fn highlight_unknown_lang_plain_fallback() {
+        let html = highlight_code_block("nosuchlang", "<a> & </a>");
+        assert!(html.starts_with("<pre class=\"code-block\" data-lang=\"nosuchlang\">"));
+        assert!(html.contains("&lt;a&gt; &amp; &lt;/a&gt;"));
+        assert!(!html.contains("<span"));
+    }
+
+    #[test]
+    fn highlight_empty_lang_no_data_attr() {
+        let html = highlight_code_block("", "plain text");
+        assert!(html.starts_with("<pre class=\"code-block\">"), "got: {html}");
+        assert!(!html.contains("data-lang"));
+    }
+
+    #[test]
+    fn highlight_has_no_blank_lines() {
+        let html = highlight_code_block("rust", "fn a() {}\n\nfn b() {}\n");
+        assert!(!html.contains("\n\n"), "blank line in emitted HTML: {html:?}");
+    }
+
+    fn jv(s: &str) -> serde_json::Value {
+        serde_json::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn json_table_objects_union_keys() {
+        let outputs = vec![jv(r#"{"a":1,"b":"x"}"#), jv(r#"{"b":"y","c":true}"#)];
+        let (cols, rows) = json_table(outputs).unwrap();
+        assert_eq!(cols, vec!["a", "b", "c"]);
+        assert_eq!(rows[0], vec!["1", "x", ""]);
+        assert_eq!(rows[1], vec!["", "y", "true"]);
+    }
+
+    #[test]
+    fn json_table_expands_arrays_of_objects() {
+        let outputs = vec![jv(r#"[{"a":1},{"a":2}]"#)];
+        let (cols, rows) = json_table(outputs).unwrap();
+        assert_eq!(cols, vec!["a"]);
+        assert_eq!(rows, vec![vec!["1"], vec!["2"]]);
+    }
+
+    #[test]
+    fn json_table_arrays_no_header() {
+        let outputs = vec![jv("[1,2,3]"), jv(r#"["a","b"]"#)];
+        let (cols, rows) = json_table(outputs).unwrap();
+        assert!(cols.is_empty());
+        assert_eq!(rows, vec![vec!["1", "2", "3"], vec!["a", "b"]]);
+    }
+
+    #[test]
+    fn json_table_nested_cells_compact_json() {
+        let outputs = vec![jv(r#"{"x":{"k":1},"y":null}"#)];
+        let (_cols, rows) = json_table(outputs).unwrap();
+        assert_eq!(rows[0], vec![r#"{"k":1}"#, ""]);
+    }
+
+    #[test]
+    fn json_table_mixed_rejected() {
+        let outputs = vec![jv(r#"{"a":1}"#), jv("[1,2]")];
+        assert!(json_table(outputs).is_err());
+    }
+
+    #[test]
+    fn run_jq_basic() {
+        let out = run_jq(".rows[]", jv(r#"{"rows":[{"a":1},{"a":2}]}"#)).unwrap();
+        assert_eq!(out, vec![jv(r#"{"a":1}"#), jv(r#"{"a":2}"#)]);
+    }
+
+    #[test]
+    fn run_jq_invalid_query_errors() {
+        assert!(run_jq("this is not valid jq @@", jv("{}")).is_err());
     }
 
     #[test]

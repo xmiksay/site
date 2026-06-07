@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api, apiVoid } from '../api'
-import type { PageDetail, PageInput, PageSummary } from '../types'
+import type { PageDetail, PageInput, PageSummary, RevisionDetail } from '../types'
 
 export const usePagesStore = defineStore('pages', () => {
   const items = ref<PageSummary[]>([])
@@ -41,11 +41,15 @@ export const usePagesStore = defineStore('pages', () => {
     items.value = items.value.filter((p) => p.id !== id)
   }
 
+  async function readRevision(pageId: number, revId: number) {
+    return await api<RevisionDetail>(`/api/pages/${pageId}/revisions/${revId}`)
+  }
+
   async function restoreRevision(pageId: number, revId: number) {
     return await api<PageSummary>(`/api/pages/${pageId}/revisions/${revId}/restore`, {
       method: 'POST',
     })
   }
 
-  return { items, load, loadPaths, read, create, update, remove, restoreRevision }
+  return { items, load, loadPaths, read, readRevision, create, update, remove, restoreRevision }
 })
