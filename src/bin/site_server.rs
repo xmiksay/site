@@ -3,7 +3,7 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use site::assets::{self, build_asset_response};
+use site::assets::build_asset_response;
 use site::config::Config;
 use site::migration::{Migrator, MigratorTrait};
 use site::state::AppState;
@@ -85,8 +85,8 @@ fn build_admin_asset_response(path: &str, file: rust_embed::EmbeddedFile) -> Res
 }
 
 async fn serve_static(State(state): State<AppState>, Path(path): Path<String>) -> Response {
-    match assets::load(&state.namespace, &path) {
-        Some(file) => build_asset_response(&path, file),
+    match state.assets.load(&path) {
+        Some(data) => build_asset_response(&path, data),
         None => (StatusCode::NOT_FOUND, "Not Found").into_response(),
     }
 }

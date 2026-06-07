@@ -7,14 +7,14 @@ use crate::ai::{
     AiConfig, llm::registry::ProviderRegistry, local_tools, mcp_client::UserMcpManager,
     tool_registry::ToolRegistry,
 };
-use crate::assets;
+use crate::assets::AssetStore;
 use crate::config::Config;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
     pub tmpl: Arc<Environment<'static>>,
-    pub namespace: Arc<String>,
+    pub assets: Arc<AssetStore>,
     pub ai_config: Arc<AiConfig>,
     pub provider_registry: Arc<ProviderRegistry>,
     pub tool_registry: Arc<ToolRegistry>,
@@ -41,11 +41,16 @@ pub async fn create_state(config: &Config) -> AppState {
         .await
         .expect("Failed to connect to database");
 
+    let assets = Arc::new(AssetStore::new(
+        config.namespace.clone(),
+        config.assets_dir.clone(),
+    ));
+
     let mut env = Environment::new();
-    let ns = config.namespace.clone();
+    let loader_assets = assets.clone();
     env.set_loader(move |name| {
-        match assets::load(&ns, &format!("templates/{name}")) {
-            Some(file) => match String::from_utf8(file.data.to_vec()) {
+        match loader_assets.load(&format!("templates/{name}")) {
+            Some(data) => match String::from_utf8(data) {
                 Ok(src) => Ok(Some(src)),
                 Err(e) => Err(minijinja::Error::new(
                     minijinja::ErrorKind::InvalidOperation,
@@ -67,7 +72,7 @@ pub async fn create_state(config: &Config) -> AppState {
     AppState {
         db,
         tmpl: Arc::new(env),
-        namespace: Arc::new(config.namespace.clone()),
+        assets,
         ai_config,
         provider_registry,
         tool_registry,

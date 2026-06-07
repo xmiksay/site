@@ -49,9 +49,14 @@ src/
 client/                   # Vue 3 SPA
   src/  dist/             # dist/ is embedded into the binary
 
-assets/<NAMESPACE>/       # Multi-tenant static bundles
+assets/<NAMESPACE>/       # Multi-tenant static bundles (baked via rust-embed)
   css/  js/  img/  templates/
 ```
+
+Asset/template resolution (see `src/assets.rs`, `AssetStore`):
+`ASSETS_DIR` override folder → baked `assets/<NAMESPACE>/` → baked `assets/common/` → not found.
+The override folder mirrors the `<NAMESPACE>` layout (`templates/`, `css/`, `js/`, `img/`)
+and lets a deployment ship its namespace as a plain folder instead of recompiling.
 
 ## Build & Run
 
@@ -83,7 +88,8 @@ cargo run --bin site_cli -- change-password <username> <password>
 | `DATABASE_URL` | (required) | PostgreSQL connection string |
 | `RUST_LOG` | `site=debug,tower_http=debug,info` | Tracing filter |
 | `PORT` | `3000` | HTTP listen port |
-| `NAMESPACE` | `common` | Picks `assets/<ns>/{templates,css,js,img}` |
+| `NAMESPACE` | `common` | Picks baked `assets/<ns>/{templates,css,js,img}` |
+| `ASSETS_DIR` | (unset) | Override folder checked before the baked assets. Debug builds read it live on each request; release builds freeze it into RAM at startup |
 | `SERPER_API_KEY` | (unset) | Enables AI assistant `web_search` tool |
 
 ## Data Model
