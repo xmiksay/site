@@ -1,7 +1,7 @@
 pub mod ai;
-pub mod assets;
 pub mod auth;
 pub mod config;
+pub mod design;
 pub mod entity;
 pub mod files;
 pub mod markdown;

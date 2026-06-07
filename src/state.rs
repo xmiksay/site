@@ -5,15 +5,15 @@ use crate::ai::{
     AiConfig, llm::registry::ProviderRegistry, local_tools, mcp_client::UserMcpManager,
     tool_registry::ToolRegistry,
 };
-use crate::assets::AssetStore;
 use crate::config::Config;
+use crate::design::DesignStore;
 use crate::templates::Templates;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
     pub tmpl: Templates,
-    pub assets: Arc<AssetStore>,
+    pub design: Arc<DesignStore>,
     pub ai_config: Arc<AiConfig>,
     pub provider_registry: Arc<ProviderRegistry>,
     pub tool_registry: Arc<ToolRegistry>,
@@ -25,8 +25,8 @@ pub async fn create_state(config: &Config) -> AppState {
         .await
         .expect("Failed to connect to database");
 
-    let assets = Arc::new(AssetStore::new(config.assets_dir.clone()));
-    let tmpl = Templates::new(assets.clone());
+    let design = Arc::new(DesignStore::new(config.design_dir.clone()));
+    let tmpl = Templates::new(design.clone());
 
     let ai_config = Arc::new(AiConfig::new());
     let provider_registry = Arc::new(ProviderRegistry::new(db.clone()));
@@ -38,7 +38,7 @@ pub async fn create_state(config: &Config) -> AppState {
     AppState {
         db,
         tmpl,
-        assets,
+        design,
         ai_config,
         provider_registry,
         tool_registry,

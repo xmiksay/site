@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 pub struct Config {
     pub database_url: String,
-    pub assets_dir: Option<PathBuf>,
+    pub design_dir: Option<PathBuf>,
     pub serper_api_key: Option<String>,
 }
 
@@ -11,7 +11,7 @@ impl Config {
         dotenvy::dotenv().ok();
         Self {
             database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL must be set"),
-            assets_dir: std::env::var("ASSETS_DIR")
+            design_dir: std::env::var("DESIGN_DIR")
                 .ok()
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from),

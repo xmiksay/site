@@ -3,13 +3,13 @@ use std::sync::Arc;
 use minijinja::Environment;
 use minijinja::value::Value;
 
-use crate::assets::AssetStore;
+use crate::design::DesignStore;
 
-/// MiniJinja templates resolved through an [`AssetStore`].
+/// MiniJinja templates resolved through a [`DesignStore`].
 ///
 /// Release builds compile every template once at startup and share the
 /// resulting environment read-only. Debug builds rebuild the environment from
-/// the assets on every render, so editing a template file takes effect on the
+/// the design on every render, so editing a template file takes effect on the
 /// next request (live reload).
 #[derive(Clone)]
 pub struct Templates(Source);
@@ -19,17 +19,17 @@ enum Source {
     /// Release: all templates compiled up front, shared via `Arc`.
     Frozen(Arc<Environment<'static>>),
     /// Debug: rebuilt from the assets on every render.
-    Live(Arc<AssetStore>),
+    Live(Arc<DesignStore>),
 }
 
 impl Templates {
-    /// Build the template engine for the given assets, picking the strategy
+    /// Build the template engine for the given design, picking the strategy
     /// from the build profile.
-    pub fn new(assets: Arc<AssetStore>) -> Self {
+    pub fn new(design: Arc<DesignStore>) -> Self {
         if cfg!(debug_assertions) {
-            Templates(Source::Live(assets))
+            Templates(Source::Live(design))
         } else {
-            Templates(Source::Frozen(Arc::new(compile_all(&assets))))
+            Templates(Source::Frozen(Arc::new(compile_all(&design))))
         }
     }
 
@@ -38,18 +38,18 @@ impl Templates {
     pub fn env(&self) -> Arc<Environment<'static>> {
         match &self.0 {
             Source::Frozen(env) => env.clone(),
-            Source::Live(assets) => Arc::new(build_environment(assets.clone())),
+            Source::Live(design) => Arc::new(build_environment(design.clone())),
         }
     }
 }
 
 /// Compile every available template into the environment up front so release
 /// builds never load or compile a template during a request.
-fn compile_all(assets: &Arc<AssetStore>) -> Environment<'static> {
-    let mut env = build_environment(assets.clone());
+fn compile_all(design: &Arc<DesignStore>) -> Environment<'static> {
+    let mut env = build_environment(design.clone());
     let mut count = 0;
-    for name in assets.template_names() {
-        let Some(data) = assets.load(&format!("templates/{name}")) else {
+    for name in design.template_names() {
+        let Some(data) = design.load(&format!("templates/{name}")) else {
             continue;
         };
         match String::from_utf8(data) {
@@ -64,12 +64,12 @@ fn compile_all(assets: &Arc<AssetStore>) -> Environment<'static> {
     env
 }
 
-/// Create an environment with the shared filters and an asset-backed loader.
+/// Create an environment with the shared filters and a design-backed loader.
 /// The loader is kept even on frozen environments as a safety fallback; in
 /// release builds it still resolves entirely from RAM.
-fn build_environment(assets: Arc<AssetStore>) -> Environment<'static> {
+fn build_environment(design: Arc<DesignStore>) -> Environment<'static> {
     let mut env = Environment::new();
-    env.set_loader(move |name| match assets.load(&format!("templates/{name}")) {
+    env.set_loader(move |name| match design.load(&format!("templates/{name}")) {
         Some(data) => match String::from_utf8(data) {
             Ok(src) => Ok(Some(src)),
             Err(e) => Err(minijinja::Error::new(
@@ -87,8 +87,8 @@ fn build_environment(assets: Arc<AssetStore>) -> Environment<'static> {
 mod tests {
     use super::*;
 
-    fn store() -> Arc<AssetStore> {
-        Arc::new(AssetStore::new(None))
+    fn store() -> Arc<DesignStore> {
+        Arc::new(DesignStore::new(None))
     }
 
     #[test]

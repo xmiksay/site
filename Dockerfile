@@ -11,7 +11,7 @@ FROM rust:1.88-bookworm AS backend
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
-COPY assets/ assets/
+COPY design/ design/
 COPY --from=frontend /app/client/dist client/dist
 RUN cargo build --release --bin site_server --bin site_cli --bin site_migration
 
