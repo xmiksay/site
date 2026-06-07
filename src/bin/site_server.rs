@@ -43,7 +43,7 @@ async fn main() {
         .nest("/api", api::router(state.clone()))
         .route("/admin", get(admin_index))
         .route("/admin/{*path}", get(admin_static))
-        .route("/static/{*path}", get(serve_static))
+        .route("/assets/{*path}", get(serve_static))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
         .fallback(get(public::catch_all))
@@ -84,9 +84,13 @@ fn build_admin_asset_response(path: &str, file: rust_embed::EmbeddedFile) -> Res
         .into_response()
 }
 
+/// Serve a runtime static resource from the design bundle's `assets/` folder
+/// (override → baked). The `/assets/<path>` route maps to `assets/<path>` within
+/// the bundle, alongside the template-engine-owned `templates/` folder.
 async fn serve_static(State(state): State<AppState>, Path(path): Path<String>) -> Response {
-    match state.design.load(&path) {
-        Some(data) => build_static_response(&path, data),
+    let key = format!("assets/{path}");
+    match state.design.load(&key) {
+        Some(data) => build_static_response(&key, data),
         None => (StatusCode::NOT_FOUND, "Not Found").into_response(),
     }
 }

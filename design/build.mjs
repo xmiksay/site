@@ -1,25 +1,36 @@
 // Build / dev-server for the browser-live template preview.
 //
-//   node build.mjs            assemble dist/ (templates.json, fixtures.json, WASM)
-//   node build.mjs --serve    start a static dev server (templates regenerate live)
+//   node build.mjs            assemble ./preview/ (templates.json, fixtures.json,
+//                             WASM, index.html, placeholder)
+//   node build.mjs --serve    static dev server, templates regenerate live
 //
-// Template resolution mirrors the Rust DesignStore (src/design.rs): an optional
-// override folder (DESIGN_DIR / --design-dir) is preferred, falling back to the
-// project's design bundle (../design). This tool lives outside the design
-// bundle so it is never compiled into the server binary. `fetch` does not work
-// over file://, so a static server is required either way.
+// This tool lives in the design bundle (design/). Its build output lands in
+// design/assets/preview/, which the *real* server serves at /assets/preview/* —
+// it serves the whole assets/ folder under /assets/*. So the preview runs
+// unchanged whether opened through the dev server below or straight off a
+// running site at /assets/preview/index.html.
+//
+// Because the output is mounted under /assets/preview/ (not the web root), the
+// page references its own assets RELATIVELY (./minijinja_js.js, ./templates.json,
+// …) so it is base-path agnostic. The dev server mounts at the same /assets/
+// preview prefix to match. Template resolution mirrors the Rust DesignStore
+// (src/design.rs): an optional override (DESIGN_DIR / --design-dir) is preferred,
+// falling back to this bundle's templates. `fetch` does not work over file://,
+// so a static server is required either way.
 
 import { createServer } from "node:http";
-import { readdir, readFile, mkdir, copyFile, stat } from "node:fs/promises";
+import { readdir, readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, extname } from "node:path";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const BAKED_DIR = resolve(HERE, "..", "design"); // the project's design/ bundle
-const DIST_DIR = join(HERE, "dist");
+const HERE = dirname(fileURLToPath(import.meta.url)); // the design/ bundle root
+const OUT_DIR = join(HERE, "assets", "preview"); // build destination (served at /assets/preview)
 const RUNTIME_SRC = join(HERE, "node_modules", "minijinja-js", "dist", "web");
 const RUNTIME_FILES = ["minijinja_js.js", "minijinja_js_bg.wasm"];
+const COPY_FILES = ["index.html", "placeholder.svg"]; // source files copied verbatim
+// Where the real server mounts the output (it serves assets/ under /assets/).
+const MOUNT = "/assets/preview";
 
 // --- argument / override resolution ----------------------------------------
 
@@ -30,14 +41,14 @@ function overrideDir() {
 }
 
 // Resolve a bundle-relative path (e.g. "css/style.css", "templates/base.html")
-// against the override folder, falling back to the baked bundle. Returns an
-// absolute path or null.
+// against the override folder, falling back to this bundle. Returns an absolute
+// path or null.
 function resolveAsset(relPath, override) {
   if (override) {
     const candidate = join(override, relPath);
     if (existsSync(candidate)) return candidate;
   }
-  const baked = join(BAKED_DIR, relPath);
+  const baked = join(HERE, relPath);
   return existsSync(baked) ? baked : null;
 }
 
@@ -59,10 +70,10 @@ async function listTemplates(baseDir) {
 }
 
 // Build { "<name>": "<raw source>" } preferring the override, falling back to
-// baked — the union of template names across both layers.
+// this bundle — the union of template names across both layers.
 async function buildManifest(override) {
   const names = new Set([
-    ...(await listTemplates(BAKED_DIR)),
+    ...(await listTemplates(HERE)),
     ...(override ? await listTemplates(override) : []),
   ]);
   const manifest = {};
@@ -78,7 +89,7 @@ async function loadFixtures() {
   return mod.default;
 }
 
-// --- runtime (WASM) copy ----------------------------------------------------
+// --- build mode -------------------------------------------------------------
 
 async function copyRuntime() {
   if (!existsSync(RUNTIME_SRC)) {
@@ -86,31 +97,23 @@ async function copyRuntime() {
       `minijinja-js not found at ${RUNTIME_SRC}. Run \`npm install\` first.`,
     );
   }
-  await mkdir(DIST_DIR, { recursive: true });
   for (const file of RUNTIME_FILES) {
-    await copyFile(join(RUNTIME_SRC, file), join(DIST_DIR, file));
+    await copyFile(join(RUNTIME_SRC, file), join(OUT_DIR, file));
   }
 }
 
-// --- build mode -------------------------------------------------------------
-
 async function build() {
   const override = overrideDir();
-  await mkdir(DIST_DIR, { recursive: true });
+  await mkdir(OUT_DIR, { recursive: true });
   const manifest = await buildManifest(override);
-  const fixtures = await loadFixtures();
-  await writeJson(join(DIST_DIR, "templates.json"), manifest);
-  await writeJson(join(DIST_DIR, "fixtures.json"), fixtures);
+  await writeFile(join(OUT_DIR, "templates.json"), JSON.stringify(manifest, null, 2));
+  await writeFile(join(OUT_DIR, "fixtures.json"), JSON.stringify(await loadFixtures(), null, 2));
   await copyRuntime();
+  for (const file of COPY_FILES) await copyFile(join(HERE, file), join(OUT_DIR, file));
   console.log(
-    `built dist/ — ${Object.keys(manifest).length} template(s)` +
-      (override ? `, override: ${override}` : ", baked bundle only"),
+    `built ${OUT_DIR} — ${Object.keys(manifest).length} template(s)` +
+      (override ? `, override: ${override}` : ", bundle only"),
   );
-}
-
-async function writeJson(path, value) {
-  const { writeFile } = await import("node:fs/promises");
-  await writeFile(path, JSON.stringify(value, null, 2));
 }
 
 // --- serve mode -------------------------------------------------------------
@@ -142,8 +145,7 @@ function send(res, status, body, type) {
 
 async function sendFile(res, path) {
   try {
-    const data = await readFile(path);
-    send(res, 200, data, mimeFor(path));
+    send(res, 200, await readFile(path), mimeFor(path));
   } catch {
     send(res, 404, "Not Found");
   }
@@ -152,36 +154,40 @@ async function sendFile(res, path) {
 async function serve() {
   const override = overrideDir();
   const port = Number(process.env.PORT) || 4321;
-  await copyRuntime(); // ensure /dist/minijinja_js.* are present
-  const placeholder = join(HERE, "placeholder.svg");
+  await build(); // populate design/preview/ (index.html, WASM, json, placeholder)
+  const placeholder = join(OUT_DIR, "placeholder.svg");
 
   const server = createServer(async (req, res) => {
     try {
-      const url = new URL(req.url, "http://localhost");
-      const path = decodeURIComponent(url.pathname);
+      const path = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
 
-      // Templates & fixtures regenerate per request so edits show on refresh.
-      if (path === "/dist/templates.json") {
+      // Land on the same mount the real server uses, so the base path matches.
+      if (path === "/" || path === "/index.html") {
+        res.writeHead(302, { location: `${MOUNT}/index.html` });
+        return res.end();
+      }
+      // Manifests regenerate per request so template/fixture edits show on reload.
+      if (path === `${MOUNT}/templates.json`) {
         return send(res, 200, JSON.stringify(await buildManifest(override)), MIME[".json"]);
       }
-      if (path === "/dist/fixtures.json") {
+      if (path === `${MOUNT}/fixtures.json`) {
         return send(res, 200, JSON.stringify(await loadFixtures()), MIME[".json"]);
       }
-      // WASM runtime, copied into dist/.
-      if (path.startsWith("/dist/")) {
-        return sendFile(res, join(DIST_DIR, path.slice("/dist/".length)));
+      // The preview's own assets (index.html, WASM, placeholder), as the real
+      // server would serve them from design/preview/.
+      if (path.startsWith(`${MOUNT}/`)) {
+        return sendFile(res, join(OUT_DIR, path.slice(MOUNT.length + 1)));
       }
-      // /static/{css,js,img}/* → override → baked bundle (mirrors the /static route).
-      if (path.startsWith("/static/")) {
-        const resolved = resolveAsset(path.slice("/static/".length), override);
+      // /assets/* → override → bundle (mirrors the real /assets route, which
+      // maps to the bundle's assets/ folder). path.slice(1) keeps the "assets/"
+      // prefix, e.g. "assets/css/style.css".
+      if (path.startsWith("/assets/")) {
+        const resolved = resolveAsset(path.slice(1), override);
         return resolved ? sendFile(res, resolved) : send(res, 404, "Not Found");
       }
-      // /files/{hash} and /files/{hash}/nahled → bundled placeholder image.
+      // /files/{hash}[/nahled] → bundled placeholder image.
       if (path.startsWith("/files/")) {
         return sendFile(res, placeholder);
-      }
-      if (path === "/" || path === "/index.html") {
-        return sendFile(res, join(HERE, "index.html"));
       }
       send(res, 404, "Not Found");
     } catch (err) {
@@ -190,16 +196,15 @@ async function serve() {
   });
 
   server.listen(port, () => {
-    console.log(`preview server on http://localhost:${port}`);
-    console.log(override ? `override: ${override}` : "baked bundle only");
+    console.log(`preview server on http://localhost:${port}/  ->  ${MOUNT}/index.html`);
+    console.log(override ? `override: ${override}` : "bundle only");
   });
 }
 
 // --- entry ------------------------------------------------------------------
 
-const isServe = process.argv.includes("--serve");
 try {
-  await (isServe ? serve() : build());
+  await (process.argv.includes("--serve") ? serve() : build());
 } catch (err) {
   console.error(err.message || err);
   process.exit(1);
