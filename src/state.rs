@@ -25,10 +25,7 @@ pub async fn create_state(config: &Config) -> AppState {
         .await
         .expect("Failed to connect to database");
 
-    let assets = Arc::new(AssetStore::new(
-        config.namespace.clone(),
-        config.assets_dir.clone(),
-    ));
+    let assets = Arc::new(AssetStore::new(config.assets_dir.clone()));
     let tmpl = Templates::new(assets.clone());
 
     let ai_config = Arc::new(AiConfig::new());

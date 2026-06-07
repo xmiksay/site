@@ -88,7 +88,7 @@ mod tests {
     use super::*;
 
     fn store() -> Arc<AssetStore> {
-        Arc::new(AssetStore::new("common".into(), None))
+        Arc::new(AssetStore::new(None))
     }
 
     #[test]

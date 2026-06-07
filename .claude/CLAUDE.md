@@ -49,14 +49,17 @@ src/
 client/                   # Vue 3 SPA
   src/  dist/             # dist/ is embedded into the binary
 
-assets/<NAMESPACE>/       # Multi-tenant static bundles (baked via rust-embed)
+assets/common/            # Baked static bundle (via rust-embed); fallback layer
   css/  js/  img/  templates/
+assets/<other>/           # Not baked — example override bundles you can point
+                          # ASSETS_DIR at (e.g. assets/miksanik.net)
 ```
 
 Asset/template resolution (see `src/assets.rs`, `AssetStore`):
-`ASSETS_DIR` override folder → baked `assets/<NAMESPACE>/` → baked `assets/common/` → not found.
-The override folder mirrors the `<NAMESPACE>` layout (`templates/`, `css/`, `js/`, `img/`)
-and lets a deployment ship its namespace as a plain folder instead of recompiling.
+`ASSETS_DIR` override folder → baked `assets/common/` → not found.
+The override folder mirrors the bundle layout (`templates/`, `css/`, `js/`, `img/`)
+and lets a deployment ship its own assets as a plain folder instead of
+recompiling. With no `ASSETS_DIR` set, only the baked `common` bundle is used.
 
 Templates (`src/templates.rs`, `Templates`) sit on top of the same `AssetStore`:
 release builds compile every template once at startup (frozen, shared); debug
@@ -92,8 +95,7 @@ cargo run --bin site_cli -- change-password <username> <password>
 | `DATABASE_URL` | (required) | PostgreSQL connection string |
 | `RUST_LOG` | `site=debug,tower_http=debug,info` | Tracing filter |
 | `PORT` | `3000` | HTTP listen port |
-| `NAMESPACE` | `common` | Picks baked `assets/<ns>/{templates,css,js,img}` |
-| `ASSETS_DIR` | (unset) | Override folder checked before the baked assets. Debug builds read it live on each request; release builds freeze it into RAM at startup |
+| `ASSETS_DIR` | (unset) | Override folder for `{templates,css,js,img}`, checked before the baked `common` bundle. Debug builds read it live on each request; release builds freeze it into RAM at startup |
 | `SERPER_API_KEY` | (unset) | Enables AI assistant `web_search` tool |
 
 ## Data Model
@@ -145,7 +147,7 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 | `/tag/{name}` | GET | Tag listing |
 | `/search?q=...` | GET | Fulltext search |
 | `/sitemap.xml` | GET | Sitemap |
-| `/static/{*path}` | GET | Namespaced assets (`assets/<NAMESPACE>/{css,js,img}`) |
+| `/static/{*path}` | GET | Static assets (`ASSETS_DIR` override → baked `assets/common/{css,js,img}`) |
 | `/{*path}` | GET | Catch-all: menu → page → 404 |
 
 ### Admin SPA

@@ -5,15 +5,17 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use rust_embed::Embed;
 
-/// Files baked into the binary at compile time from the `assets/` folder.
+/// The `common` bundle baked into the binary at compile time. This is the
+/// always-present fallback layer; anything else is supplied at runtime via the
+/// `ASSETS_DIR` override folder.
 #[derive(Embed)]
-#[folder = "assets"]
+#[folder = "assets/common"]
 struct Assets;
 
 /// Runtime override of the baked-in assets, supplied via a folder on disk.
 ///
-/// Lets a deployment ship its namespace (templates, css, js, img) as a plain
-/// folder instead of having it compiled into the binary.
+/// Lets a deployment ship its own assets (templates, css, js, img) as a plain
+/// folder instead of having them compiled into the binary.
 enum Overlay {
     /// No override folder configured — only the baked-in assets are used.
     None,
@@ -25,19 +27,18 @@ enum Overlay {
     Frozen(HashMap<String, Vec<u8>>),
 }
 
-/// Resolves resource requests against an optional override folder, then the
-/// baked-in namespace, then the baked-in `common` folder.
+/// Resolves resource requests against an optional override folder, falling
+/// back to the baked-in `common` bundle.
 pub struct AssetStore {
-    namespace: String,
     overlay: Overlay,
 }
 
 impl AssetStore {
-    /// Build a store for `namespace`, optionally overlaid by `override_dir`.
+    /// Build a store optionally overlaid by `override_dir`.
     ///
     /// In debug builds the override folder is read live on each request; in
     /// release builds it is frozen into RAM up front.
-    pub fn new(namespace: String, override_dir: Option<PathBuf>) -> Self {
+    pub fn new(override_dir: Option<PathBuf>) -> Self {
         let overlay = match override_dir {
             None => Overlay::None,
             Some(dir) if cfg!(debug_assertions) => {
@@ -54,39 +55,29 @@ impl AssetStore {
                 Overlay::Frozen(frozen)
             }
         };
-        Self { namespace, overlay }
+        Self { overlay }
     }
 
     /// Names of every template under `templates/`, deduplicated across the
-    /// override folder, the baked namespace, and baked `common`. Used to
-    /// compile all templates up front in release builds.
+    /// override folder and baked `common`. Used to compile all templates up
+    /// front in release builds.
     pub fn template_names(&self) -> Vec<String> {
         let mut names = BTreeSet::new();
-        let prefixes = [
-            format!("{}/templates/", self.namespace),
-            "common/templates/".to_string(),
-        ];
         for file in Assets::iter() {
-            for prefix in &prefixes {
-                if let Some(rest) = file.strip_prefix(prefix.as_str()) {
-                    names.insert(rest.to_string());
-                    break;
-                }
+            if let Some(rest) = file.strip_prefix("templates/") {
+                names.insert(rest.to_string());
             }
         }
         self.overlay.template_names(&mut names);
         names.into_iter().collect()
     }
 
-    /// Resolve a resource: override folder → baked namespace → baked common.
+    /// Resolve a resource: override folder → baked common.
     pub fn load(&self, path: &str) -> Option<Vec<u8>> {
         if let Some(data) = self.overlay.get(path) {
             return Some(data);
         }
-        if let Some(file) = Assets::get(&format!("{}/{path}", self.namespace)) {
-            return Some(file.data.into_owned());
-        }
-        Assets::get(&format!("common/{path}")).map(|file| file.data.into_owned())
+        Assets::get(path).map(|file| file.data.into_owned())
     }
 }
 
@@ -196,7 +187,7 @@ mod tests {
     #[test]
     fn load_falls_back_to_baked_common() {
         // No override folder: a known baked `common` template still resolves.
-        let store = AssetStore::new("does-not-exist".into(), None);
+        let store = AssetStore::new(None);
         assert!(store.load("templates/base.html").is_some());
         assert!(store.load("templates/no-such-file.html").is_none());
     }
@@ -208,10 +199,8 @@ mod tests {
         std::fs::create_dir_all(dir.join("templates")).unwrap();
         std::fs::write(dir.join("templates/base.html"), b"OVERRIDDEN").unwrap();
 
-        let map = freeze_dir(&dir);
         let store = AssetStore {
-            namespace: "common".into(),
-            overlay: Overlay::Frozen(map),
+            overlay: Overlay::Frozen(freeze_dir(&dir)),
         };
         assert_eq!(store.load("templates/base.html").as_deref(), Some(&b"OVERRIDDEN"[..]));
 
