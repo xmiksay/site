@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Template preview</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.5 system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; }
+    .toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #ccc; background: #f6f7f9; flex-wrap: wrap; }
+    .toolbar strong { margin-right: 8px; }
+    .toolbar button { padding: 5px 12px; border: 1px solid #b7bcc4; background: #fff; border-radius: 5px; cursor: pointer; }
+    .toolbar button.active { background: #1565c0; color: #fff; border-color: #1565c0; }
+    .toolbar .spacer { flex: 1; }
+    .toolbar a { color: #1565c0; text-decoration: none; }
+    #frame { flex: 1; width: 100%; border: 0; }
+    #error { white-space: pre-wrap; padding: 16px; color: #b00020; font-family: monospace; overflow: auto; display: none; }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <strong>Template preview</strong>
+    <span id="tabs"></span>
+    <span class="spacer"></span>
+    <button id="reload" type="button" title="Reload templates & fixtures from disk">↻ Reload</button>
+    <a href="README.md">README</a>
+  </div>
+  <iframe id="frame" title="Rendered template"></iframe>
+  <pre id="error"></pre>
+
+  <script type="module">
+    import init, { Environment } from "./dist/minijinja_js.js";
+
+    const tabsEl = document.getElementById("tabs");
+    const frame = document.getElementById("frame");
+    const errorEl = document.getElementById("error");
+
+    // minijinja-js cannot register custom JS filters. The only custom filter the
+    // templates use is `timeformat` (src/state.rs); strip it out as templates
+    // load and let the fixtures carry pre-formatted date strings.
+    const stripTimeformat = (src) =>
+      src.replace(/\|\s*timeformat\s*(\([^)]*\))?/g, "");
+
+    // Recursively compose a body block tree into an HTML string by rendering the
+    // markdown/*.html directive templates — the directive loopback as data.
+    function renderBlocks(env, blocks) {
+      return (blocks || [])
+        .map((b) => {
+          if (b.type === "prose") return b.html;
+          if (b.type === "page") {
+            const inner_html = renderBlocks(env, b.body);
+            return env.renderTemplate("markdown/page.html", { path: b.path, inner_html });
+          }
+          return env.renderTemplate(`markdown/${b.name}.html`, b.ctx);
+        })
+        .join("\n");
+    }
+
+    function buildEnv(manifest) {
+      const env = new Environment();
+      // Mirror the Rust server, which uses MiniJinja's default (lenient)
+      // undefined handling — e.g. the menu-page fixture omits `page`.
+      env.undefinedBehavior = "lenient";
+      env.setLoader((name) => {
+        const src = manifest[name];
+        return src == null ? null : stripTimeformat(src);
+      });
+      return env;
+    }
+
+    function renderTarget(manifest, fixtures, id) {
+      const env = buildEnv(manifest);
+      const target = fixtures.targets[id];
+      const ctx = { ...target.context };
+      if (target.body) ctx.body_html = renderBlocks(env, target.body);
+      return env.renderTemplate(target.template, ctx);
+    }
+
+    let state = { manifest: null, fixtures: null, current: null };
+
+    function show(id) {
+      state.current = id;
+      for (const btn of tabsEl.querySelectorAll("button")) {
+        btn.classList.toggle("active", btn.dataset.id === id);
+      }
+      try {
+        frame.srcdoc = renderTarget(state.manifest, state.fixtures, id);
+        errorEl.style.display = "none";
+        frame.style.display = "";
+      } catch (err) {
+        errorEl.textContent = `Render error in "${id}":\n\n${err.message || err}`;
+        errorEl.style.display = "";
+        frame.style.display = "none";
+      }
+    }
+
+    async function load() {
+      const [manifest, fixtures] = await Promise.all([
+        fetch("./dist/templates.json", { cache: "no-store" }).then((r) => r.json()),
+        fetch("./dist/fixtures.json", { cache: "no-store" }).then((r) => r.json()),
+      ]);
+      state.manifest = manifest;
+      state.fixtures = fixtures;
+
+      tabsEl.innerHTML = "";
+      for (const [id, target] of Object.entries(fixtures.targets)) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = target.label;
+        btn.dataset.id = id;
+        btn.addEventListener("click", () => show(id));
+        tabsEl.appendChild(btn);
+      }
+      show(state.current && fixtures.targets[state.current]
+        ? state.current
+        : Object.keys(fixtures.targets)[0]);
+    }
+
+    document.getElementById("reload").addEventListener("click", () => {
+      load().catch((e) => {
+        errorEl.textContent = String(e.message || e);
+        errorEl.style.display = "";
+      });
+    });
+
+    await init("./dist/minijinja_js_bg.wasm");
+    await load();
+  </script>
+</body>
+</html>

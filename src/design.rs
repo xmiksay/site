@@ -8,8 +8,13 @@ use rust_embed::Embed;
 /// The default design bundle baked into the binary at compile time. This is
 /// the always-present fallback layer; a deployment can override it at runtime
 /// via the `DESIGN_DIR` folder.
+///
+/// `preview/` is excluded: it holds the designer's browser-live template
+/// preview tooling (a Node project with its own `node_modules`/`dist`) and must
+/// never be compiled into the server binary.
 #[derive(Embed)]
 #[folder = "design"]
+#[exclude = "preview/**"]
 struct Baked;
 
 /// Runtime override of the baked-in design, supplied via a folder on disk.
@@ -190,6 +195,15 @@ mod tests {
         let store = DesignStore::new(None);
         assert!(store.load("templates/base.html").is_some());
         assert!(store.load("templates/no-such-file.html").is_none());
+    }
+
+    #[test]
+    fn preview_tooling_is_not_baked() {
+        // The designer preview project under `design/preview/` is excluded from
+        // the embed, so none of it ends up in the binary or the static routes.
+        let store = DesignStore::new(None);
+        assert!(store.load("preview/index.html").is_none());
+        assert!(store.load("preview/package.json").is_none());
     }
 
     #[test]

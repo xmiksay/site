@@ -1,0 +1,13 @@
+{
+  "name": "design-preview",
+  "private": true,
+  "type": "module",
+  "description": "Browser-live preview of the production MiniJinja templates, rendered with minijinja-js against dummy data.",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "node build.mjs --serve"
+  },
+  "dependencies": {
+    "minijinja-js": "^2.20.0"
+  }
+}
