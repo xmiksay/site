@@ -1,20 +1,22 @@
 // Build / dev-server for the static template preview.
 //
 //   node build.mjs            render every target template to its own HTML file
-//                             in design/preview/ (+ a static index linking them)
+//                             in design/preview/
 //   node build.mjs --serve    dev server that re-renders on each request
 //
 // This tool lives in the design bundle (design/). Rendering happens here, in
 // Node, with minijinja-js — there is no router and no in-browser WASM. Each
 // render target becomes a standalone, ready-to-open page in design/preview/:
-//   page.html  menu.html  search.html  404.html  (+ index.html, a link list)
+//   index.html (home / menu page)  page.html  search.html  404.html
 //
-// The pages are mount-agnostic: the absolute /assets and /files URLs the
-// production templates emit are rewritten to paths relative to design/preview/
-// (../assets/…), so a page resolves its assets whether the bundle is served at
-// the web root or under a prefix (e.g. design/ => /raw/). Template resolution
-// mirrors the Rust DesignStore (src/design.rs): an optional override (DESIGN_DIR
-// / --design-dir) is preferred, falling back to this bundle's templates.
+// The whole design bundle is mounted at /raw (design/ => /raw/), like the live
+// designer tool, so the pages are at /raw/preview/{index,page,search,404}.html.
+// The fixtures author their nav/breadcrumb links straight at those files, so the
+// sidebar is working navigation; only the static-asset/file URLs the templates
+// hard-code (/assets, /files) are rewritten (to /raw/assets/…) by the build.
+// Template resolution mirrors the Rust DesignStore (src/design.rs): an optional
+// override (DESIGN_DIR / --design-dir) is preferred, falling back to this
+// bundle's templates.
 
 import { createServer } from "node:http";
 import { readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
@@ -58,14 +60,17 @@ async function loadFixtures() {
 // and let the fixtures carry pre-formatted date strings.
 const stripTimeformat = (src) => src.replace(/\|\s*timeformat\s*(\([^)]*\))?/g, "");
 
-// Rewrite the absolute asset URLs the production templates emit so each rendered
-// page (in design/preview/) resolves them relative to itself: /assets/* becomes
-// ../assets/* (mount-agnostic); /files/* (real uploads we don't have) collapses
-// to the bundled placeholder image.
-const rewriteAssets = (html) =>
+// The pages are served under the /raw mount. Page/menu/breadcrumb/search links are
+// authored in fixtures.mjs already pointing at the rendered files (/raw/preview/…),
+// so they need no rewriting. Only the URLs the *templates* hard-code to the web
+// root are fixed up here: the static-asset folder and file uploads, which live at
+// /raw/assets/* under the mount.
+//   /assets/*   -> /raw/assets/*
+//   /files/<id> -> /raw/assets/img/placeholder.svg   (no real uploads to show)
+const rewriteLinks = (html) =>
   html
-    .replace(/(["'(])\/assets\//g, "$1../assets/")
-    .replace(/\/files\/[^"'\s)>]+/g, "../assets/img/placeholder.svg");
+    .replace(/(["'(])\/assets\//g, "$1/raw/assets/")
+    .replace(/\/files\/[^"'\s)>]+/g, "/raw/assets/img/placeholder.svg");
 
 // A fresh environment whose loader reads templates from disk (override → bundle)
 // on each render, so edits show up without restarting.
@@ -99,38 +104,7 @@ function renderBlocks(env, blocks) {
 function renderTarget(env, target) {
   const ctx = { ...target.context };
   if (target.body) ctx.body_html = renderBlocks(env, target.body);
-  return rewriteAssets(env.renderTemplate(target.template, ctx));
-}
-
-// A plain static index linking the rendered pages (no JS, no router).
-function landingHtml(fixtures) {
-  const rows = Object.values(fixtures.targets)
-    .map(
-      (t) =>
-        `      <li><a href="./${t.file}">${t.label}</a> ` +
-        `<code>${t.template}</code></li>`,
-    )
-    .join("\n");
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Template preview</title>
-  <style>
-    body { font: 15px/1.6 system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; }
-    h1 { font-size: 1.4rem; } li { margin: .35rem 0; } code { color: #6b7178; }
-  </style>
-</head>
-<body>
-  <h1>Template preview</h1>
-  <p>Production MiniJinja templates rendered with dummy data. Each is a standalone page:</p>
-  <ul>
-${rows}
-  </ul>
-</body>
-</html>
-`;
+  return rewriteLinks(env.renderTemplate(target.template, ctx));
 }
 
 // --- build mode -------------------------------------------------------------
@@ -145,7 +119,6 @@ async function build() {
     await writeFile(join(PREVIEW_DIR, target.file), renderTarget(env, target));
     count += 1;
   }
-  await writeFile(join(PREVIEW_DIR, "index.html"), landingHtml(fixtures));
   await mkdir(ASSETS_IMG, { recursive: true });
   await copyFile(join(HERE, "placeholder.svg"), join(ASSETS_IMG, "placeholder.svg"));
   console.log(
@@ -198,38 +171,36 @@ async function serve() {
     try {
       const path = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
 
-      // Document root is the design bundle (/ => design/), like the live server.
+      // The whole design bundle is mounted at /raw (design/ => /raw/), matching
+      // the live designer tool, so the entry point is /raw/preview/index.html.
       if (path === "/" || path === "/index.html") {
-        res.writeHead(302, { location: "/preview/index.html" });
+        res.writeHead(302, { location: "/raw/preview/index.html" });
         return res.end();
       }
-      // The preview pages re-render per request so template/fixture edits show on
-      // reload (instead of serving the static files written at startup).
-      if (path.startsWith("/preview/")) {
-        const name = path.slice("/preview/".length);
-        const fixtures = await loadFixtures();
-        if (name === "" || name === "index.html") {
-          return send(res, 200, landingHtml(fixtures), MIME[".html"]);
+      if (path.startsWith("/raw/")) {
+        const rel = path.slice("/raw/".length); // e.g. "preview/page.html", "assets/css/style.css"
+        if (rel.split("/").includes("..")) return send(res, 403, "Forbidden");
+        // A rendered preview page? Re-render it per request so edits show on reload.
+        if (rel === "preview" || rel.startsWith("preview/")) {
+          const name = rel.replace(/^preview\/?/, "") || "index.html";
+          const fixtures = await loadFixtures();
+          const target = Object.values(fixtures.targets).find((t) => t.file === name);
+          if (target) {
+            return send(res, 200, renderTarget(makeEnv(override), target), MIME[".html"]);
+          }
         }
-        const target = Object.values(fixtures.targets).find((t) => t.file === name);
-        if (target) {
-          return send(res, 200, renderTarget(makeEnv(override), target), MIME[".html"]);
-        }
-        // fall through to static for anything else under /preview/
+        // Otherwise a static file from the bundle (override → bundle): /raw/assets/*.
+        const resolved = resolveAsset(rel, override);
+        return resolved ? sendFile(res, resolved) : send(res, 404, "Not Found");
       }
-      // Everything else is served straight from the design bundle root
-      // (override → bundle): /assets/* (css/js/img), etc.
-      const rel = path.slice(1);
-      if (rel.split("/").includes("..")) return send(res, 403, "Forbidden");
-      const resolved = resolveAsset(rel, override);
-      return resolved ? sendFile(res, resolved) : send(res, 404, "Not Found");
+      send(res, 404, "Not Found");
     } catch (err) {
       send(res, 500, String(err && err.stack ? err.stack : err));
     }
   });
 
   server.listen(port, () => {
-    console.log(`preview server on http://localhost:${port}/  ->  /preview/index.html`);
+    console.log(`preview server on http://localhost:${port}/  ->  /raw/preview/index.html`);
     console.log(override ? `override: ${override}` : "bundle only");
   });
 }
