@@ -24,13 +24,19 @@
     <span id="tabs"></span>
     <span class="spacer"></span>
     <button id="reload" type="button" title="Reload templates & fixtures from disk">↻ Reload</button>
-    <a href="README.md">README</a>
   </div>
   <iframe id="frame" title="Rendered template"></iframe>
   <pre id="error"></pre>
 
+  <!--
+    All of this page's own assets are referenced RELATIVELY (./foo), never with a
+    leading slash, so the page works at whatever base path it is mounted at: the
+    real server serves it at /assets/preview/, the dev server at the same prefix.
+    The rendered template markup inside the iframe keeps its absolute /static and
+    /files URLs — both servers resolve those from the web root.
+  -->
   <script type="module">
-    import init, { Environment } from "./dist/minijinja_js.js";
+    import init, { Environment } from "./minijinja_js.js";
 
     const tabsEl = document.getElementById("tabs");
     const frame = document.getElementById("frame");
@@ -97,8 +103,8 @@
 
     async function load() {
       const [manifest, fixtures] = await Promise.all([
-        fetch("./dist/templates.json", { cache: "no-store" }).then((r) => r.json()),
-        fetch("./dist/fixtures.json", { cache: "no-store" }).then((r) => r.json()),
+        fetch("./templates.json", { cache: "no-store" }).then((r) => r.json()),
+        fetch("./fixtures.json", { cache: "no-store" }).then((r) => r.json()),
       ]);
       state.manifest = manifest;
       state.fixtures = fixtures;
@@ -124,7 +130,7 @@
       });
     });
 
-    await init("./dist/minijinja_js_bg.wasm");
+    await init("./minijinja_js_bg.wasm");
     await load();
   </script>
 </body>

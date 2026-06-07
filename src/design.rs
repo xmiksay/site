@@ -193,6 +193,14 @@ mod tests {
     }
 
     #[test]
+    fn load_resolves_assets_subfolder() {
+        // Runtime static resources live under `assets/`; `/assets/<path>` maps to
+        // `assets/<path>` in the bundle (see `serve_static`).
+        let store = DesignStore::new(None);
+        assert!(store.load("assets/css/style.css").is_some());
+    }
+
+    #[test]
     fn overlay_takes_precedence_over_baked() {
         let dir = std::env::temp_dir().join("design_store_overlay_test");
         let _ = std::fs::remove_dir_all(&dir);

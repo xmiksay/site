@@ -50,12 +50,13 @@ client/                   # Vue 3 SPA
   src/  dist/             # dist/ is embedded into the binary
 
 design/                   # Baked default design bundle (via rust-embed)
-  css/  js/  img/  templates/
+  templates/              # rendered by the template engine
+  assets/                 # served statically under /assets/* (css/ js/ img/)
 ```
 
 Design/template resolution (see `src/design.rs`, `DesignStore`):
 `DESIGN_DIR` override folder → baked `design/` → not found.
-The override folder mirrors the bundle layout (`templates/`, `css/`, `js/`, `img/`)
+The override folder mirrors the bundle layout (`templates/`, `assets/{css,js,img}`)
 and lets a deployment ship its own design as a plain folder instead of
 recompiling. With no `DESIGN_DIR` set, only the baked `design/` bundle is used.
 
@@ -93,7 +94,7 @@ cargo run --bin site_cli -- change-password <username> <password>
 | `DATABASE_URL` | (required) | PostgreSQL connection string |
 | `RUST_LOG` | `site=debug,tower_http=debug,info` | Tracing filter |
 | `PORT` | `3000` | HTTP listen port |
-| `DESIGN_DIR` | (unset) | Override folder for `{templates,css,js,img}`, checked before the baked `design/` bundle. Debug builds read it live on each request; release builds freeze it into RAM at startup |
+| `DESIGN_DIR` | (unset) | Override folder for `{templates, assets/{css,js,img}}`, checked before the baked `design/` bundle. Debug builds read it live on each request; release builds freeze it into RAM at startup |
 | `SERPER_API_KEY` | (unset) | Enables AI assistant `web_search` tool |
 
 ## Data Model
@@ -145,7 +146,7 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 | `/tag/{name}` | GET | Tag listing |
 | `/search?q=...` | GET | Fulltext search |
 | `/sitemap.xml` | GET | Sitemap |
-| `/static/{*path}` | GET | Static files (`DESIGN_DIR` override → baked `design/{css,js,img}`) |
+| `/assets/{*path}` | GET | Static files (`DESIGN_DIR` override → baked `design/assets/{css,js,img}`) |
 | `/{*path}` | GET | Catch-all: menu → page → 404 |
 
 ### Admin SPA
