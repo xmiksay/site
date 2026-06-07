@@ -10,6 +10,9 @@
  * TOKENS
  * ================================================================= */
 :root {
+  /* chess viewer piece image format (shared chess-viewer.js reads this) */
+  --chess-piece-ext: svg;
+
   /* surfaces (light) */
   --bg-0: #FFFFFF;
   --bg-1: #FFFFFF;
