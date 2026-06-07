@@ -171,36 +171,38 @@ async function serve() {
     try {
       const path = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
 
-      // The compiled preview page lives in design/preview/, served at the root.
+      // Document root is the design bundle (/ => design/), like the live server.
+      // The entry point is the compiled app at /preview/index.html.
       if (path === "/" || path === "/index.html") {
-        return sendFile(res, join(PREVIEW_DIR, "index.html"));
+        res.writeHead(302, { location: "/preview/index.html" });
+        return res.end();
       }
-      // Its data regenerates per request so template/fixture edits show on reload.
-      if (path === "/templates.json") {
+      // The app's data regenerates per request so template/fixture edits show on
+      // reload (otherwise these would be served as the static files just built).
+      if (path === "/preview/templates.json") {
         return send(res, 200, JSON.stringify(await buildManifest(override)), MIME[".json"]);
       }
-      if (path === "/fixtures.json") {
+      if (path === "/preview/fixtures.json") {
         return send(res, 200, JSON.stringify(await loadFixtures()), MIME[".json"]);
-      }
-      // /assets/* → override → bundle (mirrors the real /assets route, which maps
-      // to the bundle's assets/ folder — including the runtime libs just copied
-      // there). path.slice(1) keeps the "assets/" prefix, e.g. "assets/js/foo.js".
-      if (path.startsWith("/assets/")) {
-        const resolved = resolveAsset(path.slice(1), override);
-        return resolved ? sendFile(res, resolved) : send(res, 404, "Not Found");
       }
       // /files/{hash}[/nahled] → bundled placeholder image.
       if (path.startsWith("/files/")) {
         return sendFile(res, placeholder);
       }
-      send(res, 404, "Not Found");
+      // Everything else is served straight from the design bundle root
+      // (override → bundle), exactly like a static server with docroot design/:
+      // /preview/* (the app), /assets/* (runtime libs + css/js/img), …
+      const rel = path.slice(1);
+      if (rel.split("/").includes("..")) return send(res, 403, "Forbidden");
+      const resolved = resolveAsset(rel, override);
+      return resolved ? sendFile(res, resolved) : send(res, 404, "Not Found");
     } catch (err) {
       send(res, 500, String(err && err.stack ? err.stack : err));
     }
   });
 
   server.listen(port, () => {
-    console.log(`preview server on http://localhost:${port}/`);
+    console.log(`preview server on http://localhost:${port}/  ->  /preview/index.html`);
     console.log(override ? `override: ${override}` : "bundle only");
   });
 }
