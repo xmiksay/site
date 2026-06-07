@@ -22,9 +22,8 @@ The preview tooling lives at the bundle root (`build.mjs`, `fixtures.mjs`,
 **`preview/`**:
 
 ```
-preview/index.html    a static link list (no JS)
+preview/index.html    path_page.html as the home / menu page (no page object)
 preview/page.html     path_page.html with a page fixture
-preview/menu.html     path_page.html as a menu landing (no page)
 preview/search.html   page_search.html
 preview/404.html      404.html
 ```
@@ -34,34 +33,39 @@ preview/404.html      404.html
 ```bash
 cd design
 npm install
-npm run serve        # http://localhost:4321/  ->  /preview/index.html
+npm run serve        # http://localhost:4321/  ->  /raw/preview/index.html
 ```
 
-`npm run serve` starts a tiny dependency-free dev server with the **design bundle
-as document root** (`/` ⇒ `design/`), like the live server. The preview pages
-**re-render on every request**, so template and fixture edits show up on reload.
-A static server is required — `fetch`/module loading does not work over `file://`.
+`npm run serve` starts a tiny dependency-free dev server that mounts the **whole
+design bundle at `/raw`** (`design/` ⇒ `/raw/`), exactly like the live designer
+tool. So the pages are at `/raw/preview/{index,page,search,404}.html` and assets
+at `/raw/assets/*`. The preview pages **re-render on every request**, so template
+and fixture edits show up on reload. A static server is required — `fetch`/module
+loading does not work over `file://`.
 
-To just write the files once (e.g. before building/deploying the server):
+To just write the files once (e.g. before building/deploying):
 
 ```bash
 npm run build        # writes design/preview/
 ```
 
-## Mount-agnostic asset URLs
+## Clickable links under the /raw mount
 
-Each rendered page lives in `preview/` and must work wherever the bundle is
-mounted: at the web root, or under a prefix when an external tool mounts the
-whole bundle somewhere (e.g. `design/` ⇒ `/raw/`, so a page is
-`/raw/preview/page.html`). So the build rewrites the absolute URLs the production
-templates emit into paths **relative to `preview/`**:
+The bundle is served under `/raw` (`design/assets/` ⇒ `/raw/assets/`,
+`design/preview/` ⇒ `/raw/preview/`). Links resolve there two ways:
 
-- `/assets/*` → `../assets/*` — resolves to `<mount>/assets/*` for any mount.
-- `/files/*` (real uploads we don't have) → `../assets/img/placeholder.svg`.
+- **Page / menu / breadcrumb / search links** are authored in `fixtures.mjs`
+  pointing straight at the rendered files — `/raw/preview/index.html`,
+  `/raw/preview/page.html`, etc. — so the sidebar is working navigation between
+  the generated pages. No rewriting needed.
+- **Assets the templates hard-code** are rewritten by the build:
+  `/assets/*` → `/raw/assets/*`, and `/files/*` (real uploads we don't have) →
+  the bundled `/raw/assets/img/placeholder.svg`.
 
 The page-runtime JS (`jquery`, `chessboard`, `chess-viewer`, `lightbox`,
-`code-box`) loads from `../assets/js` exactly as in production, so chess boards and
-lightboxes work in the preview.
+`code-box`) loads from `/raw/assets/js` exactly as in production, so chess boards
+and lightboxes work in the preview. (A few non-page chrome links the templates
+hard-code — the logo `/`, `/search`, `/tag/N`, `/admin` — are left as-is.)
 
 ## Previewing an override (DESIGN_DIR)
 
@@ -91,13 +95,14 @@ Each template name resolves to `<override>/templates/<name>` when present, else
   `body_html`. A `<page>` transclude whose inner content itself contains a
   rendered directive is encoded as a nested block tree — the loopback as data.
 - **Files & images** — `/files/*` is rewritten to the bundled
-  `assets/img/placeholder.svg`, since we have no real uploads (layout/CSS preview).
+  `/raw/assets/img/placeholder.svg`, since we have no real uploads (layout/CSS
+  preview).
 
 ## Files
 
 | Path | Role |
 |---|---|
-| `build.mjs` | Renders each fixture target to `preview/<file>.html` (+ a static `index.html`) and runs the `--serve` dev server. |
+| `build.mjs` | Renders each fixture target to `preview/<file>.html` and runs the `--serve` dev server (mounts the bundle at `/raw`). |
 | `fixtures.mjs` | Default dummy data: one fixture per render target (with its output `file`) plus directive contexts and body block trees. |
 | `placeholder.svg` | Source stand-in image; copied to `assets/img/`, where rewritten `/files/*` URLs point. |
-| `preview/` | Build output: `index.html`, `page.html`, `menu.html`, `search.html`, `404.html`. |
+| `preview/` | Build output: `index.html` (home/menu), `page.html`, `search.html`, `404.html`. |

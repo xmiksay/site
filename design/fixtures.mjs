@@ -24,30 +24,27 @@ const HASH = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 // Shared navigation. base.html renders `menu_tree`; `menu_list` is passed by the
 // handlers too, so it is included for contract completeness.
+// Links point at the rendered preview files under the /raw mount, so the sidebar
+// is working navigation between the generated pages. One nested group exercises
+// the collapsible-menu styling.
 const menuTree = [
+  { path: "/raw/preview/index.html", label: "Home", children: [] },
   {
-    path: "/notes",
-    label: "Notes",
+    path: "/raw/preview/page.html",
+    label: "Examples",
     children: [
-      { path: "/notes/rust", label: "Rust", children: [] },
-      { path: "/notes/chess", label: "Chess", children: [] },
+      { path: "/raw/preview/page.html", label: "Page detail", children: [] },
+      { path: "/raw/preview/search.html", label: "Search", children: [] },
     ],
   },
-  {
-    path: "/projects",
-    label: "Projects",
-    children: [{ path: "/projects/site", label: "Site", children: [] }],
-  },
-  { path: "/about", label: "About", children: [] },
+  { path: "/raw/preview/404.html", label: "Not found", children: [] },
 ];
 
 const menuList = [
-  { path: "/notes", label: "Notes" },
-  { path: "/notes/rust", label: "Rust" },
-  { path: "/notes/chess", label: "Chess" },
-  { path: "/projects", label: "Projects" },
-  { path: "/projects/site", label: "Site" },
-  { path: "/about", label: "About" },
+  { path: "/raw/preview/index.html", label: "Home" },
+  { path: "/raw/preview/page.html", label: "Page detail" },
+  { path: "/raw/preview/search.html", label: "Search" },
+  { path: "/raw/preview/404.html", label: "Not found" },
 ];
 
 // A hand-written stand-in SVG for the mermaid directive (the Rust mermaid->SVG
@@ -135,7 +132,7 @@ const pageDetailBody = [
   { type: "prose", html: "<h3>Transcluded page</h3>" },
   {
     type: "page",
-    path: "notes/shared/snippet",
+    path: "raw/previewnotes/shared/snippet",
     body: [
       { type: "prose", html: "<p>This block is transcluded from another page.</p>" },
       {
@@ -170,7 +167,7 @@ const menuPageBody = [
 const searchPages = [
   {
     id: 1,
-    path: "notes/rust/ownership",
+    path: "preview/notes/rust/ownership",
     summary: "Notes on ownership and borrowing",
     tag_ids: [1],
     private: false,
@@ -179,7 +176,7 @@ const searchPages = [
   },
   {
     id: 2,
-    path: "notes/rust/lifetimes",
+    path: "preview/notes/rust/lifetimes",
     summary: "How lifetimes work",
     tag_ids: [1],
     private: false,
@@ -188,7 +185,7 @@ const searchPages = [
   },
   {
     id: 3,
-    path: "notes/rust/traits",
+    path: "preview/notes/rust/traits",
     summary: null,
     tag_ids: [1],
     private: false,
@@ -209,7 +206,7 @@ export default {
       context: {
         page: {
           id: 12,
-          path: "notes/rust/ownership",
+          path: "raw/preview/notes/rust/ownership",
           summary: "Notes on ownership and borrowing",
           tag_ids: [1, 2],
           private: false,
@@ -217,9 +214,8 @@ export default {
           modified_at: DATE,
         },
         breadcrumbs: [
-          { label: "notes", href: "/notes" },
-          { label: "rust", href: "/notes/rust" },
-          { label: "ownership", href: "/notes/rust/ownership" },
+          { label: "Home", href: "/raw/preview/index.html" },
+          { label: "Page detail", href: "/raw/preview/page.html" },
         ],
         tags: [
           { id: 1, name: "Rust", description: "The Rust programming language" },
@@ -232,9 +228,9 @@ export default {
     },
 
     menu: {
-      label: "Menu page",
+      label: "Home / menu page",
       template: "path_page.html",
-      file: "menu.html",
+      file: "index.html",
       body: menuPageBody,
       context: {
         menu_id: 5,
