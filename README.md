@@ -73,7 +73,7 @@ docker compose exec app ./site_migration
 | `DATABASE_URL` | PostgreSQL connection string | required (compose uses `postgres://blog:blog@db:5432/blog`) |
 | `RUST_LOG` | Log level filter | `site=debug,tower_http=debug,info` |
 | `PORT` | HTTP listen port | `3000` |
-| `NAMESPACE` | Selects the `assets/<NAMESPACE>/{templates,css,js,img}` bundle for public pages | `common` |
+| `ASSETS_DIR` | Override folder for `{templates,css,js,img}`, checked before the baked `common` bundle (debug: live reload; release: frozen into RAM at startup) | unset |
 | `SERPER_API_KEY` | Optional — enables the `web_search` tool inside the AI assistant | unset |
 
 ## Docker image (standalone)
