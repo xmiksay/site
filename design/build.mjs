@@ -1,44 +1,33 @@
-// Build / dev-server for the browser-live template preview.
+// Build / dev-server for the static template preview.
 //
-//   node build.mjs            compile to design/preview/ (index.html,
-//                             templates.json, fixtures.json) and copy the runtime
-//                             libs into design/assets/{js,img}
-//   node build.mjs --serve    static dev server, templates regenerate live
+//   node build.mjs            render every target template to its own HTML file
+//                             in design/preview/ (+ a static index linking them)
+//   node build.mjs --serve    dev server that re-renders on each request
 //
-// This tool lives in the design bundle (design/). The compiler writes two kinds
-// of output:
-//   - the preview app (the page + its data) -> design/preview/
-//   - the runtime libs it needs to run -> the served assets/ folders: the
-//     minijinja-js runtime under assets/js, the placeholder image under
-//     assets/img. The /assets route serves those like any other static resource.
+// This tool lives in the design bundle (design/). Rendering happens here, in
+// Node, with minijinja-js — there is no router and no in-browser WASM. Each
+// render target becomes a standalone, ready-to-open page in design/preview/:
+//   page.html  menu.html  search.html  404.html  (+ index.html, a link list)
 //
-// The page is mount-agnostic: it loads its runtime and data with RELATIVE URLs
-// (../assets/js/…, ./templates.json) and rewrites the absolute /assets and /files
-// URLs in the rendered markup to its detected mount base — so the same build runs
-// at the web root here or under an external tool's prefix (design/ => /raw/).
-// Template resolution mirrors the Rust DesignStore (src/design.rs): an optional
-// override (DESIGN_DIR / --design-dir) is preferred, falling back to this
-// bundle's templates. `fetch` does not work over file://, so a static server is
-// required either way.
+// The pages are mount-agnostic: the absolute /assets and /files URLs the
+// production templates emit are rewritten to paths relative to design/preview/
+// (../assets/…), so a page resolves its assets whether the bundle is served at
+// the web root or under a prefix (e.g. design/ => /raw/). Template resolution
+// mirrors the Rust DesignStore (src/design.rs): an optional override (DESIGN_DIR
+// / --design-dir) is preferred, falling back to this bundle's templates.
 
 import { createServer } from "node:http";
-import { readdir, readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, extname } from "node:path";
+import { Environment } from "minijinja-js/dist/node/minijinja_js.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // the design/ bundle root
-// The compiled preview app (the page + its data) lands here.
-const PREVIEW_DIR = join(HERE, "preview");
-// Runtime libraries the page needs to run go into the served assets/ folders, so
-// the real /assets route serves them (the minijinja-js runtime under assets/js,
-// the placeholder image under assets/img).
-const ASSETS_JS = join(HERE, "assets", "js");
-const ASSETS_IMG = join(HERE, "assets", "img");
-const RUNTIME_SRC = join(HERE, "node_modules", "minijinja-js", "dist", "web");
-const RUNTIME_FILES = ["minijinja_js.js", "minijinja_js_bg.wasm"]; // -> assets/js
+const PREVIEW_DIR = join(HERE, "preview"); // rendered pages land here
+const ASSETS_IMG = join(HERE, "assets", "img"); // placeholder image lives here
 
-// --- argument / override resolution ----------------------------------------
+// --- override resolution ----------------------------------------------------
 
 function overrideDir() {
   const flag = process.argv.find((a) => a.startsWith("--design-dir="));
@@ -46,9 +35,8 @@ function overrideDir() {
   return value && value.length ? resolve(value) : null;
 }
 
-// Resolve a bundle-relative path (e.g. "css/style.css", "templates/base.html")
-// against the override folder, falling back to this bundle. Returns an absolute
-// path or null.
+// Resolve a bundle-relative path (e.g. "templates/base.html") against the
+// override folder, falling back to this bundle. Returns an absolute path or null.
 function resolveAsset(relPath, override) {
   if (override) {
     const candidate = join(override, relPath);
@@ -58,72 +46,110 @@ function resolveAsset(relPath, override) {
   return existsSync(baked) ? baked : null;
 }
 
-// --- template manifest ------------------------------------------------------
-
-async function listTemplates(baseDir) {
-  const root = join(baseDir, "templates");
-  if (!existsSync(root)) return [];
-  const out = [];
-  async function walk(dir, prefix) {
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) await walk(join(dir, entry.name), rel);
-      else if (entry.name.endsWith(".html")) out.push(rel);
-    }
-  }
-  await walk(root, "");
-  return out;
-}
-
-// Build { "<name>": "<raw source>" } preferring the override, falling back to
-// this bundle — the union of template names across both layers.
-async function buildManifest(override) {
-  const names = new Set([
-    ...(await listTemplates(HERE)),
-    ...(override ? await listTemplates(override) : []),
-  ]);
-  const manifest = {};
-  for (const name of [...names].sort()) {
-    const path = resolveAsset(`templates/${name}`, override);
-    if (path) manifest[name] = await readFile(path, "utf8");
-  }
-  return manifest;
-}
-
 async function loadFixtures() {
   const mod = await import(`./fixtures.mjs?t=${Date.now()}`);
   return mod.default;
 }
 
-// --- build mode -------------------------------------------------------------
+// --- rendering --------------------------------------------------------------
 
-// Copy the runtime libs into the served assets/ folders: minijinja-js js+wasm
-// into assets/js, the placeholder image into assets/img.
-async function copyRuntime() {
-  if (!existsSync(RUNTIME_SRC)) {
-    throw new Error(
-      `minijinja-js not found at ${RUNTIME_SRC}. Run \`npm install\` first.`,
-    );
-  }
-  await mkdir(ASSETS_JS, { recursive: true });
-  await mkdir(ASSETS_IMG, { recursive: true });
-  for (const file of RUNTIME_FILES) {
-    await copyFile(join(RUNTIME_SRC, file), join(ASSETS_JS, file));
-  }
-  await copyFile(join(HERE, "placeholder.svg"), join(ASSETS_IMG, "placeholder.svg"));
+// minijinja-js cannot register custom JS filters. The only custom filter the
+// templates use is `timeformat` (src/state.rs); strip it out as templates load
+// and let the fixtures carry pre-formatted date strings.
+const stripTimeformat = (src) => src.replace(/\|\s*timeformat\s*(\([^)]*\))?/g, "");
+
+// Rewrite the absolute asset URLs the production templates emit so each rendered
+// page (in design/preview/) resolves them relative to itself: /assets/* becomes
+// ../assets/* (mount-agnostic); /files/* (real uploads we don't have) collapses
+// to the bundled placeholder image.
+const rewriteAssets = (html) =>
+  html
+    .replace(/(["'(])\/assets\//g, "$1../assets/")
+    .replace(/\/files\/[^"'\s)>]+/g, "../assets/img/placeholder.svg");
+
+// A fresh environment whose loader reads templates from disk (override → bundle)
+// on each render, so edits show up without restarting.
+function makeEnv(override) {
+  const env = new Environment();
+  // Mirror the Rust server, which uses MiniJinja's default (lenient) undefined
+  // handling — e.g. the menu-page fixture omits `page`.
+  env.undefinedBehavior = "lenient";
+  env.setLoader((name) => {
+    const path = resolveAsset(`templates/${name}`, override);
+    return path ? stripTimeformat(readFileSync(path, "utf8")) : null;
+  });
+  return env;
 }
+
+// Recursively compose a body block tree into HTML by rendering the
+// markdown/*.html directive templates — the directive loopback as data.
+function renderBlocks(env, blocks) {
+  return (blocks || [])
+    .map((b) => {
+      if (b.type === "prose") return b.html;
+      if (b.type === "page") {
+        const inner_html = renderBlocks(env, b.body);
+        return env.renderTemplate("markdown/page.html", { path: b.path, inner_html });
+      }
+      return env.renderTemplate(`markdown/${b.name}.html`, b.ctx);
+    })
+    .join("\n");
+}
+
+function renderTarget(env, target) {
+  const ctx = { ...target.context };
+  if (target.body) ctx.body_html = renderBlocks(env, target.body);
+  return rewriteAssets(env.renderTemplate(target.template, ctx));
+}
+
+// A plain static index linking the rendered pages (no JS, no router).
+function landingHtml(fixtures) {
+  const rows = Object.values(fixtures.targets)
+    .map(
+      (t) =>
+        `      <li><a href="./${t.file}">${t.label}</a> ` +
+        `<code>${t.template}</code></li>`,
+    )
+    .join("\n");
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Template preview</title>
+  <style>
+    body { font: 15px/1.6 system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.4rem; } li { margin: .35rem 0; } code { color: #6b7178; }
+  </style>
+</head>
+<body>
+  <h1>Template preview</h1>
+  <p>Production MiniJinja templates rendered with dummy data. Each is a standalone page:</p>
+  <ul>
+${rows}
+  </ul>
+</body>
+</html>
+`;
+}
+
+// --- build mode -------------------------------------------------------------
 
 async function build() {
   const override = overrideDir();
   await mkdir(PREVIEW_DIR, { recursive: true });
-  const manifest = await buildManifest(override);
-  await writeFile(join(PREVIEW_DIR, "templates.json"), JSON.stringify(manifest, null, 2));
-  await writeFile(join(PREVIEW_DIR, "fixtures.json"), JSON.stringify(await loadFixtures(), null, 2));
-  await copyFile(join(HERE, "index.html"), join(PREVIEW_DIR, "index.html"));
-  await copyRuntime();
+  const fixtures = await loadFixtures();
+  const env = makeEnv(override);
+  let count = 0;
+  for (const target of Object.values(fixtures.targets)) {
+    await writeFile(join(PREVIEW_DIR, target.file), renderTarget(env, target));
+    count += 1;
+  }
+  await writeFile(join(PREVIEW_DIR, "index.html"), landingHtml(fixtures));
+  await mkdir(ASSETS_IMG, { recursive: true });
+  await copyFile(join(HERE, "placeholder.svg"), join(ASSETS_IMG, "placeholder.svg"));
   console.log(
-    `built ${PREVIEW_DIR} + runtime into assets/{js,img} — ` +
-      `${Object.keys(manifest).length} template(s)` +
+    `built ${PREVIEW_DIR} — ${count} page(s)` +
       (override ? `, override: ${override}` : ", bundle only"),
   );
 }
@@ -166,30 +192,33 @@ async function sendFile(res, path) {
 async function serve() {
   const override = overrideDir();
   const port = Number(process.env.PORT) || 4321;
-  await build(); // populate design/preview/ + runtime libs in assets/{js,img}
+  await build(); // write design/preview/ once + copy the placeholder
 
   const server = createServer(async (req, res) => {
     try {
       const path = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
 
       // Document root is the design bundle (/ => design/), like the live server.
-      // The entry point is the compiled app at /preview/index.html. (The page
-      // itself rewrites /files/* to the placeholder, so no /files route here.)
       if (path === "/" || path === "/index.html") {
         res.writeHead(302, { location: "/preview/index.html" });
         return res.end();
       }
-      // The app's data regenerates per request so template/fixture edits show on
-      // reload (otherwise these would be served as the static files just built).
-      if (path === "/preview/templates.json") {
-        return send(res, 200, JSON.stringify(await buildManifest(override)), MIME[".json"]);
-      }
-      if (path === "/preview/fixtures.json") {
-        return send(res, 200, JSON.stringify(await loadFixtures()), MIME[".json"]);
+      // The preview pages re-render per request so template/fixture edits show on
+      // reload (instead of serving the static files written at startup).
+      if (path.startsWith("/preview/")) {
+        const name = path.slice("/preview/".length);
+        const fixtures = await loadFixtures();
+        if (name === "" || name === "index.html") {
+          return send(res, 200, landingHtml(fixtures), MIME[".html"]);
+        }
+        const target = Object.values(fixtures.targets).find((t) => t.file === name);
+        if (target) {
+          return send(res, 200, renderTarget(makeEnv(override), target), MIME[".html"]);
+        }
+        // fall through to static for anything else under /preview/
       }
       // Everything else is served straight from the design bundle root
-      // (override → bundle), exactly like a static server with docroot design/:
-      // /preview/* (the app), /assets/* (runtime libs + css/js/img), …
+      // (override → bundle): /assets/* (css/js/img), etc.
       const rel = path.slice(1);
       if (rel.split("/").includes("..")) return send(res, 403, "Forbidden");
       const resolved = resolveAsset(rel, override);
