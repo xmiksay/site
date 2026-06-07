@@ -39,10 +39,10 @@ npm run serve        # http://localhost:4321/  ->  /preview/index.html
 
 `npm run serve` starts a tiny dependency-free dev server with the **design bundle
 as document root** (`/` ⇒ `design/`), like the live server. So the app runs at
-**`/preview/index.html`** (`/` redirects there), `/assets/*` serves the runtime
-libs and css/js/img, and `/files/*` returns a placeholder. The app's data
-(`/preview/templates.json`, `/preview/fixtures.json`) is regenerated on every
-request, so template and fixture edits show up on reload. A static server is
+**`/preview/index.html`** (`/` redirects there) and `/assets/*` serves the runtime
+libs and css/js/img. The app's data (`/preview/templates.json`,
+`/preview/fixtures.json`) is regenerated on every request, so template and fixture
+edits show up on reload. A static server is
 required — `fetch` does not work over `file://`.
 
 To assemble the output once (e.g. before building/deploying the server so it
@@ -52,14 +52,24 @@ serves the runtime libs under `/assets/`):
 npm run build        # writes design/preview/ and design/assets/{js,img}
 ```
 
-## Asset URLs
+## Asset URLs — works at any mount point
 
-The page loads its **runtime** with absolute `/assets/js/...` URLs — that's where
-the compiler places the libs and where the real `/assets` route serves them. It
-fetches its own **data** relatively (`./templates.json`, `./fixtures.json`), which
-sit beside `index.html` in `preview/`. The rendered template markup inside the
-iframe keeps its absolute `/assets/...` and `/files/...` URLs, resolved from the
-web root.
+The page never hard-codes the web root, so it runs wherever the design bundle is
+mounted: at the web root (this dev server), or under a prefix when an external
+designer tool mounts the whole bundle somewhere (e.g. `design/` ⇒ `/raw/`, so the
+page is `/raw/preview/index.html` and assets are `/raw/assets/...`).
+
+- Its **runtime** (minijinja-js js+wasm) and **data** are loaded **relatively**:
+  `../assets/js/minijinja_js.js`, `./templates.json`. From `<mount>/preview/` these
+  resolve to `<mount>/assets/...` and `<mount>/preview/...` for any `<mount>`.
+- The rendered template markup carries absolute `/assets/...` and `/files/...`
+  URLs (what the production templates emit). Before handing it to the iframe, the
+  page detects its mount base from `location` and rewrites those: `/assets/*` gets
+  the prefix, and `/files/*` (real uploads we don't have) collapses to the bundled
+  `assets/img/placeholder.svg`.
+
+So the same build works under this dev server and under an external tool's mount
+with no configuration.
 
 ## Previewing an override (DESIGN_DIR)
 
@@ -90,9 +100,10 @@ same way.
   concatenated into `body_html`. A `<page>` transclude whose inner content itself
   contains a rendered directive is encoded as a nested block tree — the loopback
   expressed as data.
-- **Files & images** — under the dev server, `/files/{hash}` and
-  `/files/{hash}/nahled` are served as a bundled placeholder image. On a live
-  site the dummy hashes won't resolve (this is a layout/CSS preview).
+- **Files & images** — the page rewrites every `/files/{hash}` (and
+  `/files/{hash}/nahled`) in the rendered markup to the bundled
+  `assets/img/placeholder.svg`, since we have no real uploads (this is a
+  layout/CSS preview).
 - **Page-runtime JS** — `jquery`, `chessboard`, `chess-viewer`, `lightbox`,
   `code-box` load from `/assets` (served from the design bundle) exactly as in
   production, so chess boards and lightboxes work in the preview.
@@ -104,6 +115,6 @@ same way.
 | `index.html` | Browser: init WASM, set loader (with `timeformat` strip), compose `body_html`, render each target into an iframe. Source; copied into `preview/`. |
 | `fixtures.mjs` | Default dummy data: one fixture per render target plus directive contexts and body block trees. |
 | `build.mjs` | Compiles the app into `preview/` and the runtime libs into `assets/{js,img}`; runs the `--serve` dev server. |
-| `placeholder.svg` | Source stand-in image; copied to `assets/img/` and served for `/files/*` in the dev server. |
+| `placeholder.svg` | Source stand-in image; copied to `assets/img/`, where the page points rewritten `/files/*` URLs. |
 | `preview/` | Compiled app (output): `index.html`, `templates.json`, `fixtures.json`. |
 | `assets/js/minijinja_js*`, `assets/img/placeholder.svg` | Compiled runtime libs (output), served under `/assets/*`. |

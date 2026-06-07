@@ -29,19 +29,37 @@
   <pre id="error"></pre>
 
   <!--
-    The page lives in design/preview/; its data (templates.json, fixtures.json)
-    sits beside it and is fetched RELATIVELY (./foo). The minijinja-js runtime is
-    a static asset under /assets/js/, loaded with an absolute URL — exactly where
-    the compiler placed it and where the real /assets route serves it. The
-    rendered template markup inside the iframe keeps its absolute /assets and
-    /files URLs — resolved from the web root.
+    The page lives in design/preview/ and must work wherever the design bundle is
+    mounted: the real server serves assets/ at /assets/, but an external designer
+    tool may mount the whole bundle under a prefix (e.g. design/ => /raw/, so the
+    page is at /raw/preview/index.html and assets at /raw/assets/).
+
+    So this page never hard-codes the web root. Its own runtime + data are loaded
+    RELATIVELY (../assets/js/…, ./templates.json). For the rendered template markup
+    — which carries absolute /assets/… and /files/… URLs — we detect the mount
+    base from our own location and rewrite those URLs before handing them to the
+    iframe (see MOUNT_BASE / rewriteAssets).
   -->
   <script type="module">
-    import init, { Environment } from "/assets/js/minijinja_js.js";
+    import init, { Environment } from "../assets/js/minijinja_js.js";
 
     const tabsEl = document.getElementById("tabs");
     const frame = document.getElementById("frame");
     const errorEl = document.getElementById("error");
+
+    // Where the design bundle is mounted, derived from our own path: the page is
+    // always at <base>/preview/index.html, so <base> is the part before /preview/.
+    // "" at the web root, "/raw" when the bundle is mounted under /raw, etc.
+    const MOUNT_BASE = location.pathname.replace(/\/preview\/[^/]*$/, "");
+
+    // Rewrite the absolute asset URLs the production templates emit so they
+    // resolve under the current mount. /assets/* gets the mount prefix; /files/*
+    // (real uploads we don't have) collapses to the bundled placeholder image.
+    function rewriteAssets(html) {
+      return html
+        .replace(/(["'(])\/assets\//g, `$1${MOUNT_BASE}/assets/`)
+        .replace(/\/files\/[^"'\s)>]+/g, `${MOUNT_BASE}/assets/img/placeholder.svg`);
+    }
 
     // minijinja-js cannot register custom JS filters. The only custom filter the
     // templates use is `timeformat` (src/state.rs); strip it out as templates
@@ -92,7 +110,7 @@
         btn.classList.toggle("active", btn.dataset.id === id);
       }
       try {
-        frame.srcdoc = renderTarget(state.manifest, state.fixtures, id);
+        frame.srcdoc = rewriteAssets(renderTarget(state.manifest, state.fixtures, id));
         errorEl.style.display = "none";
         frame.style.display = "";
       } catch (err) {
@@ -131,7 +149,7 @@
       });
     });
 
-    await init("/assets/js/minijinja_js_bg.wasm");
+    await init("../assets/js/minijinja_js_bg.wasm");
     await load();
   </script>
 </body>

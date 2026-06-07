@@ -10,14 +10,16 @@
 //   - the preview app (the page + its data) -> design/preview/
 //   - the runtime libs it needs to run -> the served assets/ folders: the
 //     minijinja-js runtime under assets/js, the placeholder image under
-//     assets/img. The real /assets route serves those, so the page loads its
-//     runtime from /assets/js/* just like any other static resource.
+//     assets/img. The /assets route serves those like any other static resource.
 //
-// The page therefore references its runtime with absolute /assets URLs and its
-// own data relatively (./templates.json). Template resolution mirrors the Rust
-// DesignStore (src/design.rs): an optional override (DESIGN_DIR / --design-dir)
-// is preferred, falling back to this bundle's templates. `fetch` does not work
-// over file://, so a static server is required either way.
+// The page is mount-agnostic: it loads its runtime and data with RELATIVE URLs
+// (../assets/js/…, ./templates.json) and rewrites the absolute /assets and /files
+// URLs in the rendered markup to its detected mount base — so the same build runs
+// at the web root here or under an external tool's prefix (design/ => /raw/).
+// Template resolution mirrors the Rust DesignStore (src/design.rs): an optional
+// override (DESIGN_DIR / --design-dir) is preferred, falling back to this
+// bundle's templates. `fetch` does not work over file://, so a static server is
+// required either way.
 
 import { createServer } from "node:http";
 import { readdir, readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
@@ -165,14 +167,14 @@ async function serve() {
   const override = overrideDir();
   const port = Number(process.env.PORT) || 4321;
   await build(); // populate design/preview/ + runtime libs in assets/{js,img}
-  const placeholder = join(ASSETS_IMG, "placeholder.svg");
 
   const server = createServer(async (req, res) => {
     try {
       const path = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
 
       // Document root is the design bundle (/ => design/), like the live server.
-      // The entry point is the compiled app at /preview/index.html.
+      // The entry point is the compiled app at /preview/index.html. (The page
+      // itself rewrites /files/* to the placeholder, so no /files route here.)
       if (path === "/" || path === "/index.html") {
         res.writeHead(302, { location: "/preview/index.html" });
         return res.end();
@@ -184,10 +186,6 @@ async function serve() {
       }
       if (path === "/preview/fixtures.json") {
         return send(res, 200, JSON.stringify(await loadFixtures()), MIME[".json"]);
-      }
-      // /files/{hash}[/nahled] → bundled placeholder image.
-      if (path.startsWith("/files/")) {
-        return sendFile(res, placeholder);
       }
       // Everything else is served straight from the design bundle root
       // (override → bundle), exactly like a static server with docroot design/:
