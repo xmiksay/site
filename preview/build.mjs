@@ -5,8 +5,9 @@
 //
 // Template resolution mirrors the Rust DesignStore (src/design.rs): an optional
 // override folder (DESIGN_DIR / --design-dir) is preferred, falling back to the
-// baked design bundle (this folder's parent). `fetch` does not work over
-// file://, so a static server is required either way.
+// project's design bundle (../design). This tool lives outside the design
+// bundle so it is never compiled into the server binary. `fetch` does not work
+// over file://, so a static server is required either way.
 
 import { createServer } from "node:http";
 import { readdir, readFile, mkdir, copyFile, stat } from "node:fs/promises";
@@ -15,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, extname } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BAKED_DIR = resolve(HERE, ".."); // the design/ bundle root
+const BAKED_DIR = resolve(HERE, "..", "design"); // the project's design/ bundle
 const DIST_DIR = join(HERE, "dist");
 const RUNTIME_SRC = join(HERE, "node_modules", "minijinja-js", "dist", "web");
 const RUNTIME_FILES = ["minijinja_js.js", "minijinja_js_bg.wasm"];
