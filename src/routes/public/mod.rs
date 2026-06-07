@@ -26,7 +26,8 @@ pub async fn catch_all(
     let logged_in = auth::is_logged_in(&state, &jar).await.is_some();
     let nav = build_menu(&state.db, logged_in).await;
 
-    let tmpl = match state.tmpl.get_template("path_page.html") {
+    let env = state.tmpl.env();
+    let tmpl = match env.get_template("path_page.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("<h1>Template error</h1><pre>{e}</pre>")),
     };
@@ -40,7 +41,7 @@ pub async fn catch_all(
         if menu_item.private && !logged_in {
             return render_404(&state, &nav, logged_in);
         }
-        let body_html = markdown::render(&menu_item.markdown, &state.db, &state.tmpl, logged_in).await;
+        let body_html = markdown::render(&menu_item.markdown, &state.db, &env, logged_in).await;
         return match tmpl.render(context! {
             body_html,
             menu_list => nav.list,
@@ -63,7 +64,7 @@ pub async fn catch_all(
             return render_404(&state, &nav, logged_in);
         }
 
-        let body_html = markdown::render(&pg.markdown, &state.db, &state.tmpl, logged_in).await;
+        let body_html = markdown::render(&pg.markdown, &state.db, &env, logged_in).await;
         let page_view = pages::PageView::from(&pg);
 
         let tags = tag::Entity::find()
@@ -91,7 +92,8 @@ pub async fn catch_all(
 }
 
 fn render_404(state: &AppState, nav: &Menu, logged_in: bool) -> Html<String> {
-    let tmpl = state.tmpl.get_template("404.html").unwrap();
+    let env = state.tmpl.env();
+    let tmpl = env.get_template("404.html").unwrap();
     match tmpl.render(context! {
         menu_list => &nav.list,
         menu_tree => &nav.tree,

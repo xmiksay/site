@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
 
 use axum::http::{StatusCode, header};
@@ -57,6 +57,27 @@ impl AssetStore {
         Self { namespace, overlay }
     }
 
+    /// Names of every template under `templates/`, deduplicated across the
+    /// override folder, the baked namespace, and baked `common`. Used to
+    /// compile all templates up front in release builds.
+    pub fn template_names(&self) -> Vec<String> {
+        let mut names = BTreeSet::new();
+        let prefixes = [
+            format!("{}/templates/", self.namespace),
+            "common/templates/".to_string(),
+        ];
+        for file in Assets::iter() {
+            for prefix in &prefixes {
+                if let Some(rest) = file.strip_prefix(prefix.as_str()) {
+                    names.insert(rest.to_string());
+                    break;
+                }
+            }
+        }
+        self.overlay.template_names(&mut names);
+        names.into_iter().collect()
+    }
+
     /// Resolve a resource: override folder → baked namespace → baked common.
     pub fn load(&self, path: &str) -> Option<Vec<u8>> {
         if let Some(data) = self.overlay.get(path) {
@@ -75,6 +96,39 @@ impl Overlay {
             Overlay::None => None,
             Overlay::Live(dir) => std::fs::read(safe_join(dir, path)?).ok(),
             Overlay::Frozen(map) => map.get(path).cloned(),
+        }
+    }
+
+    fn template_names(&self, names: &mut BTreeSet<String>) {
+        match self {
+            Overlay::None => {}
+            Overlay::Frozen(map) => {
+                for key in map.keys() {
+                    if let Some(rest) = key.strip_prefix("templates/") {
+                        names.insert(rest.to_string());
+                    }
+                }
+            }
+            Overlay::Live(dir) => {
+                let base = dir.join("templates");
+                collect_relative_files(&base, &base, names);
+            }
+        }
+    }
+}
+
+/// Collect every file under `current` into `names` as a forward-slash path
+/// relative to `base`.
+fn collect_relative_files(base: &Path, current: &Path, names: &mut BTreeSet<String>) {
+    let Ok(entries) = std::fs::read_dir(current) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_relative_files(base, &path, names);
+        } else if let Ok(rel) = path.strip_prefix(base) {
+            names.insert(rel.to_string_lossy().replace('\\', "/"));
         }
     }
 }

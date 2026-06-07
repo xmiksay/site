@@ -88,7 +88,8 @@ pub async fn search(
         None
     };
 
-    let tmpl = match state.tmpl.get_template("page_search.html") {
+    let env = state.tmpl.env();
+    let tmpl = match env.get_template("page_search.html") {
         Ok(t) => t,
         Err(e) => return Html(format!("<h1>Template error</h1><pre>{e}</pre>")),
     };

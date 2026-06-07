@@ -8,7 +8,7 @@ Hybrid personal site: server-rendered public pages (MiniJinja) + Vue 3 admin SPA
 
 - **Backend:** Rust (edition 2024), Axum 0.8, Tokio
 - **Database:** PostgreSQL via SeaORM 1.x; migrations run automatically on startup
-- **Public rendering:** MiniJinja templates loaded from `assets/<NAMESPACE>/templates/`
+- **Public rendering:** MiniJinja templates resolved via `AssetStore` (`src/templates.rs`). Release builds compile every template at startup; debug builds live-reload (rebuilt per render, so edits show up on the next request)
 - **Admin UI:** Vue 3 SPA (Pinia, Vue Router, Tailwind 4, Vite, TypeScript) — built into `client/dist/`, embedded via `rust-embed`, served at `/admin/*` with SPA fallback to `index.html`
 - **Markdown:** pulldown-cmark with HTML-tag directives (`<page>`, `<image>`, `<file>`, `<gallery>`, `<fen>`, `<pgn>`); `<fen>`/`<pgn>` also accept an inline body, e.g. `<pgn>…</pgn>`
 - **Auth:** Argon2 password hashing, session cookies (`site_session`, 24 h), legacy service tokens, OAuth2 (PKCE)
@@ -44,7 +44,7 @@ src/
                           # loop_driver, mcp_client, tool_permissions,
                           # tool_registry
   auth.rs assets.rs config.rs files.rs
-  markdown.rs path_util.rs repo state.rs
+  markdown.rs path_util.rs repo state.rs templates.rs
 
 client/                   # Vue 3 SPA
   src/  dist/             # dist/ is embedded into the binary
@@ -57,6 +57,10 @@ Asset/template resolution (see `src/assets.rs`, `AssetStore`):
 `ASSETS_DIR` override folder → baked `assets/<NAMESPACE>/` → baked `assets/common/` → not found.
 The override folder mirrors the `<NAMESPACE>` layout (`templates/`, `css/`, `js/`, `img/`)
 and lets a deployment ship its namespace as a plain folder instead of recompiling.
+
+Templates (`src/templates.rs`, `Templates`) sit on top of the same `AssetStore`:
+release builds compile every template once at startup (frozen, shared); debug
+builds rebuild the environment from the assets on each render (live reload).
 
 ## Build & Run
 

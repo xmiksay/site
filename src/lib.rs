@@ -10,3 +10,4 @@ pub mod path_util;
 pub mod repo;
 pub mod routes;
 pub mod state;
+pub mod templates;
