@@ -5,14 +5,18 @@ Render the **real production MiniJinja templates** (`base.html`, `path_page.html
 data — **live in the browser**, with no Rust server, Postgres, or seed data.
 
 Templates are rendered with [minijinja-js](https://github.com/mitsuhiko/minijinja)
-(the official WASM bindings). Edit a template under `design/templates/`, hit
+(the official WASM bindings). Edit a template under `../design/templates/`, hit
 **↻ Reload** (or refresh), and see the change. This complements the static
 component mockups; here you preview the templates the server actually uses.
+
+This tool lives **outside** the `design/` bundle on purpose, so it is never
+compiled into the server binary. It reads the bundle's templates and assets from
+the sibling `../design/` folder.
 
 ## Run
 
 ```bash
-cd design/preview
+cd preview
 npm install
 npm run serve        # http://localhost:4321
 ```
