@@ -29,14 +29,15 @@
   <pre id="error"></pre>
 
   <!--
-    All of this page's own assets are referenced RELATIVELY (./foo), never with a
-    leading slash, so the page works at whatever base path it is mounted at: the
-    real server serves it at /assets/preview/, the dev server at the same prefix.
-    The rendered template markup inside the iframe keeps its absolute /static and
-    /files URLs — both servers resolve those from the web root.
+    The page lives in design/preview/; its data (templates.json, fixtures.json)
+    sits beside it and is fetched RELATIVELY (./foo). The minijinja-js runtime is
+    a static asset under /assets/js/, loaded with an absolute URL — exactly where
+    the compiler placed it and where the real /assets route serves it. The
+    rendered template markup inside the iframe keeps its absolute /assets and
+    /files URLs — resolved from the web root.
   -->
   <script type="module">
-    import init, { Environment } from "./minijinja_js.js";
+    import init, { Environment } from "/assets/js/minijinja_js.js";
 
     const tabsEl = document.getElementById("tabs");
     const frame = document.getElementById("frame");
@@ -130,7 +131,7 @@
       });
     });
 
-    await init("./minijinja_js_bg.wasm");
+    await init("/assets/js/minijinja_js_bg.wasm");
     await load();
   </script>
 </body>
