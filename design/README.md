@@ -34,14 +34,16 @@ So compiled libraries land where every other static resource lives (served at
 ```bash
 cd design
 npm install
-npm run serve        # http://localhost:4321
+npm run serve        # http://localhost:4321/  ->  /preview/index.html
 ```
 
-`npm run serve` starts a tiny dependency-free dev server: it serves the page from
-`preview/` at the web root, the runtime/static assets at `/assets/*`, and a
-placeholder for `/files/*`. The manifest (`templates.json`) and `fixtures.json`
-are regenerated on every request, so template and fixture edits show up on
-reload. A static server is required — `fetch` does not work over `file://`.
+`npm run serve` starts a tiny dependency-free dev server with the **design bundle
+as document root** (`/` ⇒ `design/`), like the live server. So the app runs at
+**`/preview/index.html`** (`/` redirects there), `/assets/*` serves the runtime
+libs and css/js/img, and `/files/*` returns a placeholder. The app's data
+(`/preview/templates.json`, `/preview/fixtures.json`) is regenerated on every
+request, so template and fixture edits show up on reload. A static server is
+required — `fetch` does not work over `file://`.
 
 To assemble the output once (e.g. before building/deploying the server so it
 serves the runtime libs under `/assets/`):
