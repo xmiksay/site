@@ -4,6 +4,15 @@ import { Chess } from './chess.js';
 // content never collides with boards already mounted in the document.
 let uid = 0;
 
+// Piece image format is a per-namespace style choice: set `--chess-piece-ext`
+// in the namespace stylesheet to override (defaults to png). This keeps the
+// viewer logic shared across namespaces — only the styles change.
+function pieceTheme() {
+    const ext = getComputedStyle(document.documentElement)
+        .getPropertyValue('--chess-piece-ext').trim().replace(/['"]/g, '') || 'png';
+    return `/static/img/chesspieces/wikipedia/{piece}.${ext}`;
+}
+
 function enhanceChess(root = document) {
     // --- Transform fenced code blocks (```fen / ```pgn) into viewer elements ---
     root.querySelectorAll('code.language-fen').forEach(code => {
@@ -44,7 +53,7 @@ function enhanceChess(root = document) {
         Chessboard(boardId, {
             position: el.dataset.fen,
             draggable: false,
-            pieceTheme: '/static/img/chesspieces/wikipedia/{piece}.png',
+            pieceTheme: pieceTheme(),
         });
     });
 
@@ -79,7 +88,7 @@ function enhanceChess(root = document) {
         const board = Chessboard(boardId, {
             position: chess.fen(),
             draggable: false,
-            pieceTheme: '/static/img/chesspieces/wikipedia/{piece}.png',
+            pieceTheme: pieceTheme(),
         });
         const info = el.querySelector('.move-info');
 
