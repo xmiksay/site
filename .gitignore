@@ -2,4 +2,6 @@
 .env
 /client/node_modules
 /client/dist
+/design/preview
+/design/node_modules
 .mcp.json
