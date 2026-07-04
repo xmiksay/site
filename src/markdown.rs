@@ -38,7 +38,8 @@
 //! Only an allow-list of names is treated as directives; any other `<tag>`
 //! (including a real `<img>`) passes through as raw HTML. Directives inside
 //! fenced code blocks (` ``` `, `~~~`) and inline code spans (`` ` ``) are
-//! passed through verbatim.
+//! passed through verbatim — *except* a fence whose info string is `mermaid`,
+//! which renders as a diagram just like `<mermaid>`.
 //!
 //! Each directive's rendered HTML is spliced inline (wrapped in blank lines so
 //! it forms a raw-HTML block) and passes through the markdown parser verbatim.
@@ -63,6 +64,7 @@ are directives; any other `<tag>` is passed through as raw HTML. Lookup keys:
 - `<pgn move=\"N\">PGN moves</pgn>` — playable game from an inline PGN (multiple lines allowed).
 - `<mermaid path=\"...\" theme=\"default|dark|forest|neutral\">` — diagram rendered to SVG from a stored Mermaid file.
 - `<mermaid theme=\"...\">DIAGRAM</mermaid>` — diagram rendered to SVG from an inline Mermaid definition (multiple lines allowed).
+- A fenced code block with info string `mermaid` also renders as a diagram, same as `<mermaid>`.
 - `<json path=\"...\" query=\".rows[]\" type=\"table\">` — run a jq query over a JSON file blob (or inline `<json query=\"...\">{...}</json>`) and render the result; `type=\"table\"` builds an HTML table.
 - Internal links `[Text](Path/To/Page.md)` are auto-rewritten to lowercase absolute paths.";
 
@@ -383,6 +385,18 @@ async fn expand_directives_impl(md: &str, ctx: &mut RenderCtx<'_>) -> String {
             i += 1;
             continue;
         }
+        // A fenced code block tagged `mermaid` (` ```mermaid ` / `~~~mermaid`) is
+        // rendered as a diagram rather than passed through to the highlighter.
+        // Any other fence (including an untagged one showing directive syntax as
+        // an example) is left alone below.
+        if (trimmed.starts_with("```") || trimmed.starts_with("~~~"))
+            && let Some((dir, consumed_lines)) = collect_mermaid_fence(&lines, i)
+        {
+            let html = dispatch_directive(&dir, ctx).await;
+            out.push_str(&html);
+            i += consumed_lines;
+            continue;
+        }
         if trimmed.starts_with("```") {
             in_fence = true;
             fence_char = '`';
@@ -472,6 +486,46 @@ fn collect_container(lines: &[&str], start: usize) -> Option<(Directive, usize)>
         j += 1;
     }
     None // unterminated
+}
+
+/// If `lines[start]` opens a fenced code block whose info string is `mermaid`
+/// (` ```mermaid ` / `~~~mermaid`), collect its body as an inline `<mermaid>`
+/// directive and return it with the number of lines consumed (through the
+/// closing fence). Returns `None` for any other fence — untagged (e.g. a
+/// fence used in documentation to show the `<mermaid>` tag literally), a
+/// different language, or missing a closing line — so the caller falls back
+/// to passing it through to the normal code-block highlighter unchanged.
+fn collect_mermaid_fence(lines: &[&str], start: usize) -> Option<(Directive, usize)> {
+    let open_line = lines[start].trim_end_matches(['\n', '\r']);
+    let trimmed = open_line.trim_start();
+    let (marker, close) = if trimmed.starts_with("```") {
+        ("```", "```")
+    } else {
+        ("~~~", "~~~")
+    };
+    let info = trimmed[marker.len()..].trim();
+    let lang = info.split_whitespace().next().unwrap_or("");
+    if !lang.eq_ignore_ascii_case("mermaid") {
+        return None;
+    }
+
+    let mut body = String::new();
+    let mut j = start + 1;
+    while j < lines.len() {
+        let line = lines[j];
+        let line_trimmed = line.trim_end_matches(['\n', '\r']).trim_start();
+        if line_trimmed.starts_with(close) {
+            let dir = Directive {
+                name: "mermaid".to_string(),
+                args: HashMap::new(),
+                inner: Some(body),
+            };
+            return Some((dir, j - start + 1));
+        }
+        body.push_str(line);
+        j += 1;
+    }
+    None // unterminated fence — let the normal fence handling pass it through
 }
 
 /// Walk a line and expand any `<name ...>` directive outside inline code spans.
@@ -1340,6 +1394,47 @@ mod tests {
     fn mermaid_renders_svg() {
         let svg = mermaid_svg::render("pie\n\"A\" : 1\n\"B\" : 2\n").unwrap();
         assert!(svg.starts_with("<svg"));
+    }
+
+    #[test]
+    fn fence_mermaid_collected() {
+        let md = "```mermaid\ngraph TD\n  A --> B\n```\n";
+        let lines: Vec<&str> = md.split_inclusive('\n').collect();
+        let (d, consumed) = collect_mermaid_fence(&lines, 0).unwrap();
+        assert_eq!(d.name, "mermaid");
+        assert_eq!(d.inner.as_deref(), Some("graph TD\n  A --> B\n"));
+        assert_eq!(consumed, 4);
+    }
+
+    #[test]
+    fn fence_tilde_mermaid_collected() {
+        let md = "~~~mermaid\npie\n\"A\" : 1\n~~~\n";
+        let lines: Vec<&str> = md.split_inclusive('\n').collect();
+        let (d, consumed) = collect_mermaid_fence(&lines, 0).unwrap();
+        assert_eq!(d.name, "mermaid");
+        assert_eq!(d.inner.as_deref(), Some("pie\n\"A\" : 1\n"));
+        assert_eq!(consumed, 4);
+    }
+
+    #[test]
+    fn fence_other_lang_not_collected() {
+        let md = "```rust\nfn main() {}\n```\n";
+        let lines: Vec<&str> = md.split_inclusive('\n').collect();
+        assert!(collect_mermaid_fence(&lines, 0).is_none());
+    }
+
+    #[test]
+    fn fence_untagged_not_collected() {
+        let md = "```\n<mermaid>\ngraph TD\n  A --> B\n</mermaid>\n```\n";
+        let lines: Vec<&str> = md.split_inclusive('\n').collect();
+        assert!(collect_mermaid_fence(&lines, 0).is_none());
+    }
+
+    #[test]
+    fn fence_unterminated_mermaid_not_collected() {
+        let md = "```mermaid\ngraph TD\n  A --> B\n";
+        let lines: Vec<&str> = md.split_inclusive('\n').collect();
+        assert!(collect_mermaid_fence(&lines, 0).is_none());
     }
 
     fn make_dir(name: &str, args: &[(&str, &str)]) -> Directive {
