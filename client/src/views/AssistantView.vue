@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useAssistantStore } from '../stores/assistant'
-import AssistantChat from '../components/AssistantChat.vue'
-import AssistantSessionToolbar from '../components/AssistantSessionToolbar.vue'
+import ChatPanel from '../components/ChatPanel.vue'
 import AssistantSessionTree from '../components/AssistantSessionTree.vue'
 import { firstRootSession } from '../composables/useSessionTree'
 
@@ -43,15 +42,6 @@ async function deleteSession(id: number) {
     if (next) await select(next.id)
   }
 }
-
-async function updateTitle() {
-  if (!assistant.current) return
-  const newTitle = prompt('New title', assistant.current.title)
-  if (newTitle && newTitle !== assistant.current.title) {
-    await assistant.updateSession(assistant.current.id, { title: newTitle })
-    if (assistant.current) assistant.current.title = newTitle
-  }
-}
 </script>
 
 <template>
@@ -78,35 +68,16 @@ async function updateTitle() {
     </aside>
 
     <section
-      class="flex-1 bg-white rounded-lg shadow flex-col min-w-0"
+      class="flex-1 min-w-0 flex flex-col"
       :class="!assistant.current ? 'hidden md:flex' : 'flex'"
     >
-      <header v-if="assistant.current" class="p-3 border-b flex items-center justify-between gap-2">
-        <div class="flex items-center gap-2 min-w-0">
-          <button
-            type="button"
-            class="md:hidden p-1 rounded hover:bg-gray-100 text-gray-600"
-            aria-label="Back to chats"
-            @click="assistant.current = null"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <button
-            class="text-left hover:underline truncate font-semibold"
-            @click="updateTitle"
-            :title="assistant.current.title"
-          >
-            {{ assistant.current.title }}
-          </button>
-        </div>
-        <AssistantSessionToolbar />
-      </header>
-
-      <AssistantChat v-if="assistant.current" @select-session="select" />
-
-      <div v-if="!assistant.current" class="flex-1 flex items-center justify-center text-gray-500">
+      <ChatPanel
+        v-if="assistant.current"
+        class="flex-1"
+        :show-back="true"
+        @back="assistant.current = null"
+      />
+      <div v-else class="flex-1 flex items-center justify-center text-gray-500">
         Pick a chat or start a new one.
       </div>
     </section>

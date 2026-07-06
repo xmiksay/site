@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePagesStore } from '../stores/pages'
 import { useTagsStore } from '../stores/tags'
 import PathPicker from '../components/PathPicker.vue'
 import MarkdownEditor from '../components/MarkdownEditor.vue'
+import ChatPanel from '../components/ChatPanel.vue'
 import { html as diff2htmlHtml } from 'diff2html'
 import 'diff2html/bundles/css/diff2html.min.css'
 import type { PageInput } from '../types'
@@ -25,6 +26,7 @@ const revisions = ref<Array<{ id: number; created_at: string }>>([])
 
 const exportError = ref('')
 const exporting = ref(false)
+const chatOpen = ref(false)
 
 // Diff modal state
 const diffOpen = ref(false)
@@ -34,6 +36,12 @@ const diffHtml = ref('')
 const diffRevDate = ref('')
 
 const numericId = () => (props.id ? Number(props.id) : null)
+
+const pageContext = computed(() => {
+  const id = numericId()
+  if (!id || props.create) return undefined
+  return { id, path: path.value }
+})
 
 onMounted(async () => {
   await tags.load()
@@ -143,7 +151,20 @@ async function restore(revId: number) {
       <h1 class="text-xl font-semibold">
         {{ props.create ? 'New page' : 'Edit page' }}
       </h1>
-      <div class="space-x-2">
+      <div class="flex items-center gap-2">
+        <button
+          v-if="!props.create"
+          type="button"
+          class="rounded border border-gray-300 hover:bg-gray-100 px-3 py-1.5 text-sm flex items-center gap-1.5"
+          :class="chatOpen ? 'bg-gray-100' : ''"
+          @click="chatOpen = !chatOpen"
+          title="Toggle AI assistant"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-3 3-3-3z" />
+          </svg>
+          AI
+        </button>
         <router-link to="/pages" class="text-gray-600 hover:underline text-sm">Cancel</router-link>
         <button
           v-if="!props.create"
@@ -172,67 +193,78 @@ async function restore(revId: number) {
     <p v-if="error" class="text-red-600 text-sm">{{ error }}</p>
     <p v-if="exportError" class="text-red-600 text-sm">{{ exportError }}</p>
 
-    <div class="bg-white rounded-lg shadow p-4 space-y-4">
-      <label class="block">
-        <span class="text-sm text-gray-600">Path</span>
-        <PathPicker
-          v-model="path"
-          namespace="all"
-          placeholder="obsidian/programing/rust"
-          class="mt-1"
-        />
-      </label>
-      <label class="block">
-        <span class="text-sm text-gray-600">Summary</span>
-        <input
-          v-model="summary"
-          class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5"
-        />
-      </label>
-      <div>
-        <span class="text-sm text-gray-600">Tags</span>
-        <div class="mt-1 flex flex-wrap gap-1">
-          <button
-            v-for="tag in tags.items"
-            :key="tag.id"
-            type="button"
-            class="rounded-full px-2 py-0.5 text-xs border"
-            :class="
-              tagIds.includes(tag.id)
-                ? 'bg-blue-600 border-blue-600 text-white'
-                : 'border-gray-300 text-gray-700 hover:bg-gray-100'
-            "
-            @click="toggleTag(tag.id)"
-          >
-            {{ tag.name }}
-          </button>
+    <div class="flex gap-4 items-stretch">
+      <div class="flex-1 min-w-0 space-y-4">
+        <div class="bg-white rounded-lg shadow p-4 space-y-4">
+          <label class="block">
+            <span class="text-sm text-gray-600">Path</span>
+            <PathPicker
+              v-model="path"
+              namespace="all"
+              placeholder="obsidian/programing/rust"
+              class="mt-1"
+            />
+          </label>
+          <label class="block">
+            <span class="text-sm text-gray-600">Summary</span>
+            <input
+              v-model="summary"
+              class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5"
+            />
+          </label>
+          <div>
+            <span class="text-sm text-gray-600">Tags</span>
+            <div class="mt-1 flex flex-wrap gap-1">
+              <button
+                v-for="tag in tags.items"
+                :key="tag.id"
+                type="button"
+                class="rounded-full px-2 py-0.5 text-xs border"
+                :class="
+                  tagIds.includes(tag.id)
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+                "
+                @click="toggleTag(tag.id)"
+              >
+                {{ tag.name }}
+              </button>
+            </div>
+          </div>
+          <label class="inline-flex items-center gap-2 text-sm">
+            <input v-model="isPrivate" type="checkbox" />
+            Private
+          </label>
+          <MarkdownEditor v-model="markdown" :rows="24" />
+        </div>
+
+        <div v-if="!props.create && revisions.length" class="bg-white rounded-lg shadow p-4">
+          <h2 class="font-medium mb-2">Revisions</h2>
+          <ul class="text-sm space-y-1">
+            <li
+              v-for="r in revisions"
+              :key="r.id"
+              class="flex justify-between border-b border-gray-100 py-1"
+            >
+              <button
+                type="button"
+                class="flex-1 text-left text-gray-600 hover:text-gray-900 hover:underline"
+                @click="openDiff(r)"
+              >
+                {{ r.created_at }}
+              </button>
+              <button class="text-blue-600 hover:underline" @click.stop="restore(r.id)">Restore</button>
+            </li>
+          </ul>
         </div>
       </div>
-      <label class="inline-flex items-center gap-2 text-sm">
-        <input v-model="isPrivate" type="checkbox" />
-        Private
-      </label>
-      <MarkdownEditor v-model="markdown" :rows="24" />
-    </div>
 
-    <div v-if="!props.create && revisions.length" class="bg-white rounded-lg shadow p-4">
-      <h2 class="font-medium mb-2">Revisions</h2>
-      <ul class="text-sm space-y-1">
-        <li
-          v-for="r in revisions"
-          :key="r.id"
-          class="flex justify-between border-b border-gray-100 py-1"
-        >
-          <button
-            type="button"
-            class="flex-1 text-left text-gray-600 hover:text-gray-900 hover:underline"
-            @click="openDiff(r)"
-          >
-            {{ r.created_at }}
-          </button>
-          <button class="text-blue-600 hover:underline" @click.stop="restore(r.id)">Restore</button>
-        </li>
-      </ul>
+      <div
+        v-if="chatOpen && !props.create && pageContext"
+        class="w-96 shrink-0"
+      >
+        <ChatPanel class="h-full" :page-context="pageContext" />
+      </div>
     </div>
 
     <div
