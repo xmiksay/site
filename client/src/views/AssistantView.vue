@@ -97,6 +97,29 @@ async function updateTitle() {
 
 const messageList = computed(() => assistant.current?.messages ?? [])
 
+// The turn streaming live over WS for the open session, if any — see
+// `LiveTurn`'s doc in types.ts. `null` once it settles (`done`/`error`),
+// at which point `messageList` (from the REST refetch `stores/assistant.ts`
+// triggers) is the authoritative view again.
+const liveTurn = computed(() => {
+  const turn = assistant.live
+  return turn && assistant.current?.id === turn.sessionId ? turn : null
+})
+
+watch(() => [liveTurn.value?.text, liveTurn.value?.toolCalls.length], scrollToBottom)
+
+async function decideLive(callId: string, approve: boolean, remember = false) {
+  if (!assistant.current) return
+  // `message_id` is vestigial for the engine-backed approve endpoint (kept
+  // only for URL-shape compatibility — see `sessions/turn.rs`'s doc), so any
+  // value works for a call that only exists in the live buffer, not yet in
+  // `assistant.current.messages`.
+  await assistant.approveToolCalls(assistant.current.id, 0, [
+    { tool_call_id: callId, approve, remember },
+  ])
+  scrollToBottom()
+}
+
 interface ToolCall {
   id: string
   name: string
@@ -396,7 +419,61 @@ async function decideAll(
             error: {{ messageText(m.content) }}
           </div>
         </template>
-        <div v-if="assistant.sending" class="text-xs text-gray-500">thinking…</div>
+        <div v-if="liveTurn" class="space-y-1">
+          <div
+            v-if="liveTurn.reasoning"
+            class="max-w-2xl rounded-lg px-3 py-2 bg-gray-50 text-gray-500 text-xs italic whitespace-pre-wrap"
+          >
+            {{ liveTurn.reasoning }}
+          </div>
+          <div
+            v-if="liveTurn.text"
+            class="assistant-markdown max-w-2xl rounded-lg px-3 py-2 bg-gray-100 text-gray-900"
+            v-html="renderMarkdown(liveTurn.text)"
+          ></div>
+          <div
+            v-for="tc in liveTurn.toolCalls"
+            :key="tc.id"
+            class="text-xs border-l-2 pl-2 ml-2 font-mono space-y-1"
+            :class="tc.status === 'done' ? 'border-emerald-300 text-emerald-700' : 'border-amber-300 text-gray-500'"
+          >
+            <div>→ {{ tc.name }}({{ tc.argsText }})</div>
+            <div v-if="tc.status === 'requires_approval'" class="flex gap-2 not-italic">
+              <button
+                class="px-2 py-0.5 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500"
+                :disabled="assistant.sending"
+                @click="decideLive(tc.id, true)"
+              >
+                Approve
+              </button>
+              <button
+                class="px-2 py-0.5 rounded border border-emerald-600 text-emerald-700 text-xs hover:bg-emerald-50"
+                :disabled="assistant.sending"
+                :title="`Always allow ${tc.name} — creates a permission rule`"
+                @click="decideLive(tc.id, true, true)"
+              >
+                Always allow
+              </button>
+              <button
+                class="px-2 py-0.5 rounded bg-red-600 text-white text-xs hover:bg-red-500"
+                :disabled="assistant.sending"
+                @click="decideLive(tc.id, false)"
+              >
+                Reject
+              </button>
+              <button
+                class="px-2 py-0.5 rounded border border-red-600 text-red-700 text-xs hover:bg-red-50"
+                :disabled="assistant.sending"
+                :title="`Always reject ${tc.name} — creates a deny rule`"
+                @click="decideLive(tc.id, false, true)"
+              >
+                Always reject
+              </button>
+            </div>
+            <div v-else-if="tc.status === 'done'">✓ {{ messageText(tc.output) }}</div>
+          </div>
+        </div>
+        <div v-if="assistant.sending && !liveTurn" class="text-xs text-gray-500">thinking…</div>
       </div>
 
       <footer v-if="assistant.current" class="p-3 border-t">
