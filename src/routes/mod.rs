@@ -74,7 +74,7 @@ fn build_tree(items: &[MenuItem]) -> Vec<MenuNode> {
             }
             if is_segment_prefix(&candidate.path, &child.path) {
                 let len = candidate.path.len();
-                if best.map_or(true, |(_, blen)| len > blen) {
+                if best.is_none_or(|(_, blen)| len > blen) {
                     best = Some((j, len));
                 }
             }

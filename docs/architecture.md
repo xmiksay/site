@@ -23,12 +23,16 @@ src/
     file, file_blob, file_thumbnail, gallery,
     oauth_{client,code,token},
     llm_{provider,model},
-    assistant_{session,message},
+    assistant_{session,event},
     user_mcp_server, tool_permission
-  migration/              # m_001 … m_022
-  ai/                     # config, handlers, llm, local_tools,
-                          # loop_driver, mcp_client, tool_permissions,
-                          # tool_registry
+  migration/              # m_001 … m_023
+  ai/                     # config, handlers, tool_permissions — plus the
+                          # entanglement-core/-runtime engine adapters:
+                          # engine, catalog, mcp, persistence, policy,
+                          # projection/, tools/. (llm, local_tools, mcp_client,
+                          # tool_registry are the pre-engine-swap modules —
+                          # unreachable from AppState, kept compiling only
+                          # until issue #15 Phase 4 deletes them.)
   auth.rs config.rs design.rs files.rs
   markdown.rs path_util.rs repo state.rs templates.rs
 
@@ -80,8 +84,17 @@ oauth_tokens        id, access_token unique, refresh_token unique,
 llm_providers       id, label, kind (anthropic|ollama|gemini), api_key?, base_url?
 llm_models          id, provider_id, label, model wire-id, is_default
 assistant_sessions  id, user_id, title, provider/model snapshots, model_id?,
-                    enabled_mcp_server_ids JSONB (m_018), timestamps
-assistant_messages  id, session_id, seq, role, content JSON
+                    enabled_mcp_server_ids JSONB (m_018),
+                    engine_session_id? unique (m_023 — the engine's root
+                    SessionId string, "u{user_id}:{uuid}"; nullable since
+                    pre-engine-swap rows never get one back), timestamps
+assistant_events    id, root_session_id (engine SessionId string, not a DB FK —
+                    the engine has no notion of assistant_sessions.id),
+                    payload JSONB (a serialized entanglement_runtime
+                    LogRecord), created_at (m_023). Event-sourced log that
+                    replaced the old per-message assistant_messages table;
+                    `ai::projection::project` folds a session's rows into the
+                    {role, content} shape the admin client renders.
 user_mcp_servers    id, user_id, name, url, enabled, forward_user_token,
                     headers JSON
 tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
@@ -111,7 +124,7 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 
 ### JSON API `/api/*` (session cookie required)
 
-`auth/{login,logout,me}`, `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, `assistant/*`, `llm/{providers,models}` CRUD, `tool-permissions` CRUD.
+`auth/{login,logout,me}`, `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve`, `mcp-servers` CRUD, `providers` CRUD, `models` CRUD, `permissions` CRUD (tool-permission rules).
 
 ### OAuth2 + MCP
 
@@ -139,12 +152,48 @@ Auth: `Authorization: Bearer <token>` — accepts both service tokens (legacy, n
 
 ## AI Assistant (`src/ai/`)
 
-- `loop_driver.rs` — agentic loop, streams responses
-- `tool_registry.rs` — unified registry of local tools and active MCP servers
-- `mcp_client/` — connects to user-configured MCP servers (with optional `forward_user_token`)
-- `tool_permissions.rs` — evaluates allow/deny/prompt rules ordered by priority
-- `local_tools/` — built-in tools (web search via Serper)
-- `llm/` — adapters for `anthropic`, `ollama`, `gemini`
+As of issue #15 Phase 1, the assistant runs on a single process-wide engine
+(`entanglement-core`/`-runtime`/`-provider`) instead of the old bespoke
+agentic loop — one `Holly` actor for every tenant, sessions namespaced
+`u{user_id}:{uuid}` (`ai::engine::session_id_for_user`/`user_id_from_session`).
+`AppState` exposes it as a single field, `agent_engine: Arc<SiteEngine>`
+(`src/state.rs`); `SiteEngine::spawn` wires all of the pieces below at startup.
+
+- `engine.rs` — `SiteEngine`: spawns `Holly`, the tool executor, the
+  `assistant_events` persistence subscriber, the system-prompt refresh task,
+  and a hibernate-watcher task that evicts a session from the in-process
+  "live" cache when `Holly`'s own idle-TTL sweep (`EngineConfig.idle_ttl`,
+  30 min) or a manual hibernate retires it — otherwise the next message to
+  that session would skip `resume` and get a blank in-memory session despite
+  intact history in `assistant_events`.
+- `catalog.rs` — `SiteCatalog`: builds `entanglement_provider::LlmFactory`/
+  `ModelResolver` closures from `llm_providers`/`llm_models`; `refresh()` is
+  called after provider/model CRUD.
+- `policy.rs` — `SitePolicy`: implements the engine's `PermissionResolver` +
+  `GrantStore` over the existing `tool_permissions` table (same
+  priority/wildcard rules as before, in `tool_permissions.rs`).
+- `mcp.rs` — `SiteMcp`: per-user MCP tool discovery/routing over
+  `entanglement_runtime::mcp::HttpClient`, replacing `mcp_client/`'s
+  `UserMcpManager`; tools are named `"{server}__{tool}"`.
+- `persistence.rs` — `DbSink`: the engine's `RecordSink`, appending every
+  `LogRecord` to `assistant_events`; also the lazy session-resume and
+  session-delete helpers.
+- `projection/` — pure fold of a session's `assistant_events` rows into the
+  `{role, content}` shape the admin client renders (`role` one of
+  `user | assistant | tool_result | error`).
+- `tools/` — the built-in (non-MCP) tool vocabulary (pages/tags/files/
+  galleries CRUD + `web_search`/`web_fetch`), ported to
+  `entanglement_runtime::tools::Tool`.
+- `tool_permissions.rs` — the allow/deny/prompt rule evaluator `policy.rs`
+  wraps (unchanged: first match wins, ordered by `priority ASC, id ASC`,
+  trailing `*` is a prefix wildcard).
+- `handlers/` — `/api/assistant/*`: `sessions/` (CRUD + `messages`/`approve`,
+  which drive a turn through `Holly` and project `assistant_events` on the
+  way out), `mcp_servers.rs`, `providers.rs`, `models.rs`, `permissions.rs`.
+
+`llm/`, `local_tools/`, `mcp_client/`, and `tool_registry.rs` are the
+pre-engine-swap modules: no longer reachable from `AppState`, kept compiling
+standalone until issue #15 Phase 4 deletes them outright.
 
 Configured per user via the admin SPA: `/admin/{providers,models,assistant,mcp-servers,tool-permissions}`. Provider API keys live in `llm_providers.api_key` (set through the UI, never in `.env`).
 

@@ -329,10 +329,10 @@ async fn exchange_code(
     }
 
     // Verify redirect_uri matches
-    if let Some(ref uri) = req.redirect_uri {
-        if *uri != code_model.redirect_uri {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant", "error_description": "redirect_uri mismatch"})));
-        }
+    if let Some(ref uri) = req.redirect_uri
+        && *uri != code_model.redirect_uri
+    {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant", "error_description": "redirect_uri mismatch"})));
     }
 
     // Mark code as used
@@ -471,10 +471,9 @@ pub async fn authenticate_mcp(
         .filter(oauth_token::Column::Revoked.eq(false))
         .one(&state.db)
         .await
+        && tok.expires_at > now
     {
-        if tok.expires_at > now {
-            return Ok(tok.user_id);
-        }
+        return Ok(tok.user_id);
     }
 
     // Fall back to legacy service token

@@ -164,6 +164,7 @@ fn freeze_into(base: &Path, current: &Path, map: &mut HashMap<String, Vec<u8>>) 
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // pre-existing file layout; not touched by this change
 mod tests {
     use super::*;
 
