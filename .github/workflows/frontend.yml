@@ -1,0 +1,33 @@
+name: Frontend
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - client/**
+      - .github/workflows/frontend.yml
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Typecheck + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: client/.nvmrc
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      # `make client` = npm ci + vue-tsc typecheck + vite build.
+      - name: Install + typecheck + build
+        run: make client
+
+      # `make test-client` reuses the installed node_modules and runs vitest.
+      - name: Unit tests
+        run: make test-client

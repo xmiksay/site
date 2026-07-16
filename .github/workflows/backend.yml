@@ -1,0 +1,44 @@
+name: Backend
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - src/**
+      - Cargo.toml
+      - Cargo.lock
+      - Makefile
+      - .github/workflows/backend.yml
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Lint + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Rust edition 2024 → needs a recent stable toolchain (>= 1.85).
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      # site_server embeds client/dist via rust-embed, so `clippy --all-targets`
+      # and `test --bins` need the folder to exist. A stub is enough — this job
+      # doesn't build the real SPA (that's the frontend workflow's job); in debug
+      # builds rust-embed reads the folder at runtime, not compile time.
+      - name: Stub client/dist for rust-embed
+        run: mkdir -p client/dist && printf '<!doctype html><title>stub</title>' > client/dist/index.html
+
+      # make lint = fmt --check + clippy --all-targets -D warnings.
+      - name: Lint
+        run: make lint
+
+      # make test-unit = cargo test --lib --bins.
+      - name: Unit tests
+        run: make test-unit

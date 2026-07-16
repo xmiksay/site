@@ -1,0 +1,41 @@
+name: Verify
+
+# Full gate — lint + all tests (backend + client) — run only when changes land
+# on master (i.e. a merged PR). Per-PR feedback is handled by the lighter,
+# path-filtered frontend.yml / backend.yml workflows.
+on:
+  push:
+    branches: [master]
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Lint + all tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: client/.nvmrc
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      # Build the real SPA first — rust-embed bakes client/dist into site_server
+      # before any cargo build (clippy --all-targets, test --bins).
+      - name: Build admin SPA (client/dist)
+        run: make client
+
+      # make verify = lint (fmt --check + clippy -D warnings)
+      #             + test (backend unit + integration no-op + client vitest).
+      - name: Verify
+        run: make verify
