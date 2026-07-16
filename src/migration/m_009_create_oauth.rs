@@ -32,11 +32,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(OauthClients::ClientSecret).string().null())
                     .col(ColumnDef::new(OauthClients::ClientName).string().null())
-                    .col(
-                        ColumnDef::new(OauthClients::RedirectUris)
-                            .json()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(OauthClients::RedirectUris).json().not_null())
                     .col(
                         ColumnDef::new(OauthClients::CreatedAt)
                             .timestamp_with_time_zone()
@@ -67,11 +63,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(OauthCodes::ClientId).string().not_null())
                     .col(ColumnDef::new(OauthCodes::UserId).integer().not_null())
-                    .col(
-                        ColumnDef::new(OauthCodes::RedirectUri)
-                            .string()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(OauthCodes::RedirectUri).string().not_null())
                     .col(
                         ColumnDef::new(OauthCodes::CodeChallenge)
                             .string()

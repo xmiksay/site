@@ -55,7 +55,9 @@ fn compile_all(design: &Arc<DesignStore>) -> Environment<'static> {
         match String::from_utf8(data) {
             Ok(src) => match env.add_template_owned(name.clone(), src) {
                 Ok(()) => count += 1,
-                Err(e) => tracing::error!(template = %name, error = %e, "template failed to compile"),
+                Err(e) => {
+                    tracing::error!(template = %name, error = %e, "template failed to compile")
+                }
             },
             Err(e) => tracing::error!(template = %name, error = %e, "template is not valid UTF-8"),
         }
@@ -69,18 +71,35 @@ fn compile_all(design: &Arc<DesignStore>) -> Environment<'static> {
 /// release builds it still resolves entirely from RAM.
 fn build_environment(design: Arc<DesignStore>) -> Environment<'static> {
     let mut env = Environment::new();
-    env.set_loader(move |name| match design.load(&format!("templates/{name}")) {
-        Some(data) => match String::from_utf8(data) {
-            Ok(src) => Ok(Some(src)),
-            Err(e) => Err(minijinja::Error::new(
-                minijinja::ErrorKind::InvalidOperation,
-                format!("template '{name}' is not valid UTF-8: {e}"),
-            )),
+    env.set_loader(
+        move |name| match design.load(&format!("templates/{name}")) {
+            Some(data) => match String::from_utf8(data) {
+                Ok(src) => Ok(Some(src)),
+                Err(e) => Err(minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    format!("template '{name}' is not valid UTF-8: {e}"),
+                )),
+            },
+            None => Ok(None),
         },
-        None => Ok(None),
-    });
+    );
     env.add_filter("timeformat", timeformat);
     env
+}
+
+fn timeformat(value: Value, format: Option<String>) -> Result<String, minijinja::Error> {
+    let s = value.to_string();
+    let fmt = format.as_deref().unwrap_or("%d. %m. %Y %H:%M");
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f") {
+        return Ok(dt.format(fmt).to_string());
+    }
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f") {
+        return Ok(dt.format(fmt).to_string());
+    }
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+        return Ok(d.format(fmt).to_string());
+    }
+    Ok(s)
 }
 
 #[cfg(test)]
@@ -115,19 +134,4 @@ mod tests {
             .unwrap();
         assert!(!rendered.is_empty());
     }
-}
-
-fn timeformat(value: Value, format: Option<String>) -> Result<String, minijinja::Error> {
-    let s = value.to_string();
-    let fmt = format.as_deref().unwrap_or("%d. %m. %Y %H:%M");
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f") {
-        return Ok(dt.format(fmt).to_string());
-    }
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f") {
-        return Ok(dt.format(fmt).to_string());
-    }
-    if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-        return Ok(d.format(fmt).to_string());
-    }
-    Ok(s)
 }

@@ -1,5 +1,5 @@
-use site::migration::{Migrator, MigratorTrait};
 use sea_orm::Database;
+use site::migration::{Migrator, MigratorTrait};
 
 #[tokio::main]
 async fn main() {

@@ -3,11 +3,11 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use site::design::build_static_response;
+use rust_embed::Embed;
 use site::config::Config;
+use site::design::build_static_response;
 use site::migration::{Migrator, MigratorTrait};
 use site::state::AppState;
-use rust_embed::Embed;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -61,7 +61,8 @@ async fn admin_index() -> Response {
 }
 
 async fn admin_static(Path(path): Path<String>) -> Response {
-    if let Some(resp) = AdminAssets::get(&path).map(|file| build_admin_asset_response(&path, file)) {
+    if let Some(resp) = AdminAssets::get(&path).map(|file| build_admin_asset_response(&path, file))
+    {
         return resp;
     }
     serve_admin_asset("index.html")

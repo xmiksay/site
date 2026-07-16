@@ -12,7 +12,8 @@ impl MigrationName for Migration {
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
-        db.execute_unprepared("CREATE EXTENSION IF NOT EXISTS unaccent").await?;
+        db.execute_unprepared("CREATE EXTENSION IF NOT EXISTS unaccent")
+            .await?;
         // unaccent() is STABLE; wrap as IMMUTABLE so it can be used in a generated column / index.
         db.execute_unprepared(
             "CREATE OR REPLACE FUNCTION public.f_unaccent(text) RETURNS text \
@@ -28,18 +29,19 @@ impl MigrationTrait for Migration {
              ) STORED",
         )
         .await?;
-        db.execute_unprepared(
-            "CREATE INDEX pages_search_tsv_idx ON pages USING GIN (search_tsv)",
-        )
-        .await?;
+        db.execute_unprepared("CREATE INDEX pages_search_tsv_idx ON pages USING GIN (search_tsv)")
+            .await?;
         Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let db = manager.get_connection();
-        db.execute_unprepared("DROP INDEX IF EXISTS pages_search_tsv_idx").await?;
-        db.execute_unprepared("ALTER TABLE pages DROP COLUMN IF EXISTS search_tsv").await?;
-        db.execute_unprepared("DROP FUNCTION IF EXISTS public.f_unaccent(text)").await?;
+        db.execute_unprepared("DROP INDEX IF EXISTS pages_search_tsv_idx")
+            .await?;
+        db.execute_unprepared("ALTER TABLE pages DROP COLUMN IF EXISTS search_tsv")
+            .await?;
+        db.execute_unprepared("DROP FUNCTION IF EXISTS public.f_unaccent(text)")
+            .await?;
         Ok(())
     }
 }

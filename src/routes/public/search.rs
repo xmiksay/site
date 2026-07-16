@@ -1,7 +1,7 @@
+use axum::Router;
 use axum::extract::{Query, State};
 use axum::response::Html;
 use axum::routing::get;
-use axum::Router;
 use axum_extra::extract::CookieJar;
 use minijinja::context;
 use sea_orm::EntityTrait;
@@ -47,8 +47,16 @@ pub async fn search(
     let offset = query.offset.unwrap_or(0);
 
     let q = query.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let tag_name = query.tag.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let path_prefix = query.path.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let tag_name = query
+        .tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let path_prefix = query
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
     let result = pages_repo::search(
         &state.db,
@@ -72,8 +80,16 @@ pub async fn search(
         }
     };
 
-    let prev_offset = if offset == 0 { None } else { Some(offset.saturating_sub(limit)) };
-    let next_offset = if offset + limit < total { Some(offset + limit) } else { None };
+    let prev_offset = if offset == 0 {
+        None
+    } else {
+        Some(offset.saturating_sub(limit))
+    };
+    let next_offset = if offset + limit < total {
+        Some(offset + limit)
+    } else {
+        None
+    };
 
     // Resolve tag (if filtering by name) for display
     let tag_model = if let Some(name) = tag_name {

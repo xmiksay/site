@@ -12,7 +12,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
 use crate::entity::{menu, page, tag};
 use crate::path_util;
-use crate::routes::{build_menu, Menu};
+use crate::routes::{Menu, build_menu};
 use crate::state::AppState;
 use crate::{auth, markdown};
 

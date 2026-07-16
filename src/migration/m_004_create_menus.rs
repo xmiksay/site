@@ -24,12 +24,7 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(Menus::Title).string().not_null())
-                    .col(
-                        ColumnDef::new(Menus::Path)
-                            .string()
-                            .not_null()
-                            .unique_key(),
-                    )
+                    .col(ColumnDef::new(Menus::Path).string().not_null().unique_key())
                     .col(ColumnDef::new(Menus::Markdown).text().not_null())
                     .col(
                         ColumnDef::new(Menus::OrderIndex)

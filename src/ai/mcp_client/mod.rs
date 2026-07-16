@@ -151,11 +151,8 @@ impl McpClientPool {
                                 let prefixed = format!("{}__{}", cfg.name, tool.name);
                                 let schema: Value = serde_json::to_value(&*tool.input_schema)
                                     .unwrap_or(Value::Object(serde_json::Map::new()));
-                                let description = tool
-                                    .description
-                                    .as_deref()
-                                    .unwrap_or("")
-                                    .to_string();
+                                let description =
+                                    tool.description.as_deref().unwrap_or("").to_string();
                                 info.tools.push(ToolInfo {
                                     name: tool.name.to_string(),
                                     prefixed_name: prefixed.clone(),
@@ -246,8 +243,7 @@ impl McpClientPool {
         }
         let transport = StreamableHttpClientTransport::from_config(config);
 
-        let client_result: Result<RunningService<RoleClient, ()>, _> =
-            ().serve(transport).await;
+        let client_result: Result<RunningService<RoleClient, ()>, _> = ().serve(transport).await;
         let client = client_result.map_err(|e| {
             ToolDispatchError::Transport(format!(
                 "Failed to connect to MCP server '{}': {e}",
@@ -268,16 +264,12 @@ impl McpClientPool {
         let mut params = CallToolRequestParams::new(routing.original_tool.clone());
         params.arguments = arguments;
 
-        let result = client
-            .peer()
-            .call_tool(params)
-            .await
-            .map_err(|e| {
-                ToolDispatchError::Transport(format!(
-                    "Tool call '{}' on '{}' failed: {e}",
-                    routing.original_tool, routing.server_name
-                ))
-            })?;
+        let result = client.peer().call_tool(params).await.map_err(|e| {
+            ToolDispatchError::Transport(format!(
+                "Tool call '{}' on '{}' failed: {e}",
+                routing.original_tool, routing.server_name
+            ))
+        })?;
 
         let ct = client.cancellation_token();
         ct.cancel();

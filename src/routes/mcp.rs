@@ -215,7 +215,11 @@ pub async fn handle(
     let resp = match req.method.as_str() {
         "initialize" => handle_initialize(&state, req.id).await,
         "notifications/initialized" => {
-            return (StatusCode::OK, Json(JsonRpcResponse::success(req.id, json!({})))).into_response();
+            return (
+                StatusCode::OK,
+                Json(JsonRpcResponse::success(req.id, json!({}))),
+            )
+                .into_response();
         }
         "tools/list" => handle_tools_list(req.id),
         "tools/call" => handle_tools_call(&state, user_id, req.id.clone(), req.params).await,
@@ -248,7 +252,10 @@ async fn handle_initialize(state: &AppState, id: Option<Value>) -> JsonRpcRespon
 }
 
 fn server_instructions() -> String {
-    format!("{SERVER_INSTRUCTIONS_HEADER}\n{}\n", crate::markdown::MARKDOWN_EXTENSIONS_DOC)
+    format!(
+        "{SERVER_INSTRUCTIONS_HEADER}\n{}\n",
+        crate::markdown::MARKDOWN_EXTENSIONS_DOC
+    )
 }
 
 const SERVER_INSTRUCTIONS_HEADER: &str = "\
@@ -627,7 +634,10 @@ async fn tool_edit_page(
         && args.tag_names.is_none()
         && args.private.is_none()
     {
-        return tool_error(id, "Nothing to update — provide markdown, summary, tag_names, or private");
+        return tool_error(
+            id,
+            "Nothing to update — provide markdown, summary, tag_names, or private",
+        );
     }
 
     let tag_ids = match &args.tag_names {
@@ -705,7 +715,10 @@ async fn tool_search_pages(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    out.push_str(&format!("\n\n--- total: {}, has_more: {has_more}", result.total));
+    out.push_str(&format!(
+        "\n\n--- total: {}, has_more: {has_more}",
+        result.total
+    ));
     if has_more {
         out.push_str(&format!(", next_offset: {}", offset + limit));
     }
@@ -714,7 +727,11 @@ async fn tool_search_pages(
     tool_result(id, out)
 }
 
-async fn tool_delete_page(state: &AppState, id: Option<Value>, arguments: Value) -> JsonRpcResponse {
+async fn tool_delete_page(
+    state: &AppState,
+    id: Option<Value>,
+    arguments: Value,
+) -> JsonRpcResponse {
     let args: DeletePageArgs = match parse_args(id.clone(), arguments) {
         Ok(a) => a,
         Err(r) => return r,
@@ -752,7 +769,10 @@ async fn tool_read_tag(state: &AppState, id: Option<Value>, arguments: Value) ->
         Err(r) => return r,
     };
     match tags_repo::find_by_name(&state.db, &args.name).await {
-        Ok(Some(t)) => json_result(id, json!({ "id": t.id, "name": t.name, "description": t.description })),
+        Ok(Some(t)) => json_result(
+            id,
+            json!({ "id": t.id, "name": t.name, "description": t.description }),
+        ),
         Ok(None) => tool_error(id, &format!("Tag not found: {}", args.name)),
         Err(e) => tool_error(id, &format!("Database error: {e}")),
     }
@@ -929,7 +949,11 @@ async fn tool_read_file(state: &AppState, id: Option<Value>, arguments: Value) -
     }
 }
 
-async fn tool_update_file(state: &AppState, id: Option<Value>, arguments: Value) -> JsonRpcResponse {
+async fn tool_update_file(
+    state: &AppState,
+    id: Option<Value>,
+    arguments: Value,
+) -> JsonRpcResponse {
     let args: UpdateFileArgs = match parse_args(id.clone(), arguments) {
         Ok(a) => a,
         Err(r) => return r,
@@ -944,13 +968,20 @@ async fn tool_update_file(state: &AppState, id: Option<Value>, arguments: Value)
     )
     .await
     {
-        Ok(Some(f)) => tool_result(id, format!("updated file [{}] {}", f.model.id, f.model.path)),
+        Ok(Some(f)) => tool_result(
+            id,
+            format!("updated file [{}] {}", f.model.id, f.model.path),
+        ),
         Ok(None) => tool_error(id, &format!("File not found: {}", args.id)),
         Err(e) => tool_error(id, &format!("Update failed: {e}")),
     }
 }
 
-async fn tool_delete_file(state: &AppState, id: Option<Value>, arguments: Value) -> JsonRpcResponse {
+async fn tool_delete_file(
+    state: &AppState,
+    id: Option<Value>,
+    arguments: Value,
+) -> JsonRpcResponse {
     let args: FileIdArgs = match parse_args(id.clone(), arguments) {
         Ok(a) => a,
         Err(r) => return r,
@@ -978,7 +1009,11 @@ async fn tool_list_galleries(state: &AppState, id: Option<Value>) -> JsonRpcResp
     }
 }
 
-async fn tool_read_gallery(state: &AppState, id: Option<Value>, arguments: Value) -> JsonRpcResponse {
+async fn tool_read_gallery(
+    state: &AppState,
+    id: Option<Value>,
+    arguments: Value,
+) -> JsonRpcResponse {
     let args: GalleryIdArgs = match parse_args(id.clone(), arguments) {
         Ok(a) => a,
         Err(r) => return r,
@@ -1032,7 +1067,11 @@ async fn tool_create_gallery(
     }
 }
 
-async fn tool_update_gallery(state: &AppState, id: Option<Value>, arguments: Value) -> JsonRpcResponse {
+async fn tool_update_gallery(
+    state: &AppState,
+    id: Option<Value>,
+    arguments: Value,
+) -> JsonRpcResponse {
     let args: UpdateGalleryArgs = match parse_args(id.clone(), arguments) {
         Ok(a) => a,
         Err(r) => return r,
@@ -1059,7 +1098,11 @@ async fn tool_update_gallery(state: &AppState, id: Option<Value>, arguments: Val
     }
 }
 
-async fn tool_delete_gallery(state: &AppState, id: Option<Value>, arguments: Value) -> JsonRpcResponse {
+async fn tool_delete_gallery(
+    state: &AppState,
+    id: Option<Value>,
+    arguments: Value,
+) -> JsonRpcResponse {
     let args: GalleryIdArgs = match parse_args(id.clone(), arguments) {
         Ok(a) => a,
         Err(r) => return r,
@@ -1070,4 +1113,3 @@ async fn tool_delete_gallery(state: &AppState, id: Option<Value>, arguments: Val
         Err(e) => tool_error(id, &format!("Delete failed: {e}")),
     }
 }
-

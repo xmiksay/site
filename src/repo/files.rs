@@ -129,7 +129,10 @@ pub async fn create_file(
         }
     }
 
-    Ok(CreatedFile { model, has_thumbnail })
+    Ok(CreatedFile {
+        model,
+        has_thumbnail,
+    })
 }
 
 pub async fn list_with_thumbnails(
@@ -159,7 +162,10 @@ pub async fn list_with_thumbnails(
         .into_iter()
         .map(|f| {
             let has_thumbnail = thumb_ids.contains(&f.id);
-            FileWithThumb { model: f, has_thumbnail }
+            FileWithThumb {
+                model: f,
+                has_thumbnail,
+            }
         })
         .collect())
 }
@@ -172,7 +178,10 @@ pub async fn find_with_thumbnail(
         return Ok(None);
     };
     let has_thumbnail = has_thumbnail(db, id).await?;
-    Ok(Some(FileWithThumb { model, has_thumbnail }))
+    Ok(Some(FileWithThumb {
+        model,
+        has_thumbnail,
+    }))
 }
 
 pub async fn find_by_hash(
@@ -205,7 +214,10 @@ pub async fn update_metadata(
     active.description = Set(update.description.filter(|s| !s.is_empty()));
     let updated = active.update(db).await?;
     let has_thumbnail = has_thumbnail(db, id).await?;
-    Ok(Some(FileWithThumb { model: updated, has_thumbnail }))
+    Ok(Some(FileWithThumb {
+        model: updated,
+        has_thumbnail,
+    }))
 }
 
 pub async fn delete_by_id(db: &DatabaseConnection, id: i32) -> Result<bool, DbErr> {

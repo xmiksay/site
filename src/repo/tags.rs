@@ -117,7 +117,11 @@ pub async fn resolve_ids(
         .all(db)
         .await?;
     let found: Vec<String> = tags.iter().map(|t| t.name.clone()).collect();
-    let missing: Vec<String> = names.iter().filter(|n| !found.contains(n)).cloned().collect();
+    let missing: Vec<String> = names
+        .iter()
+        .filter(|n| !found.contains(n))
+        .cloned()
+        .collect();
     if !missing.is_empty() {
         return Err(ResolveError::Unknown(missing));
     }

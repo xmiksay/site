@@ -128,10 +128,7 @@ fn collect_relative_files(base: &Path, current: &Path, names: &mut BTreeSet<Stri
 /// crafted request cannot escape the override folder.
 fn safe_join(base: &Path, rel: &str) -> Option<PathBuf> {
     let rel = Path::new(rel);
-    if rel
-        .components()
-        .any(|c| !matches!(c, Component::Normal(_)))
-    {
+    if rel.components().any(|c| !matches!(c, Component::Normal(_))) {
         return None;
     }
     Some(base.join(rel))
@@ -161,6 +158,19 @@ fn freeze_into(base: &Path, current: &Path, map: &mut HashMap<String, Vec<u8>>) 
             map.insert(rel.to_string_lossy().replace('\\', "/"), data);
         }
     }
+}
+
+pub fn build_static_response(path: &str, data: Vec<u8>) -> Response {
+    let mime = mime_guess::from_path(path).first_or_octet_stream();
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, mime.as_ref().to_string()),
+            (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
+        ],
+        data,
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -211,21 +221,11 @@ mod tests {
         let store = DesignStore {
             overlay: Overlay::Frozen(freeze_dir(&dir)),
         };
-        assert_eq!(store.load("templates/base.html").as_deref(), Some(&b"OVERRIDDEN"[..]));
+        assert_eq!(
+            store.load("templates/base.html").as_deref(),
+            Some(&b"OVERRIDDEN"[..])
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
-
-pub fn build_static_response(path: &str, data: Vec<u8>) -> Response {
-    let mime = mime_guess::from_path(path).first_or_octet_stream();
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, mime.as_ref().to_string()),
-            (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
-        ],
-        data,
-    )
-        .into_response()
 }

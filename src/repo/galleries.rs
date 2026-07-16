@@ -80,10 +80,7 @@ pub async fn list_paths(db: &DatabaseConnection) -> Result<Vec<String>, DbErr> {
         .await
 }
 
-pub async fn find_by_id(
-    db: &DatabaseConnection,
-    id: i32,
-) -> Result<Option<gallery::Model>, DbErr> {
+pub async fn find_by_id(db: &DatabaseConnection, id: i32) -> Result<Option<gallery::Model>, DbErr> {
     gallery::Entity::find_by_id(id).one(db).await
 }
 

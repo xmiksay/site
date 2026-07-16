@@ -72,13 +72,12 @@ impl LocalTool for ReadPageTool {
             "required": ["path"]
         })
     }
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        args: Value,
-    ) -> Result<Value, ToolDispatchError> {
+    async fn call(&self, ctx: &LocalToolCtx, args: Value) -> Result<Value, ToolDispatchError> {
         let path = required_str(&args, "path")?;
-        match pages_repo::find_by_path(&ctx.db, &path).await.map_err(db_err)? {
+        match pages_repo::find_by_path(&ctx.db, &path)
+            .await
+            .map_err(db_err)?
+        {
             Some(p) => {
                 let mut out = format!("# {}\n\n", p.path);
                 if let Some(s) = &p.summary {
@@ -91,7 +90,9 @@ impl LocalTool for ReadPageTool {
                 out.push_str(&p.markdown);
                 Ok(ok_text(out))
             }
-            None => Err(ToolDispatchError::Execution(format!("Page not found: {path}"))),
+            None => Err(ToolDispatchError::Execution(format!(
+                "Page not found: {path}"
+            ))),
         }
     }
 }
@@ -120,15 +121,15 @@ impl LocalTool for SearchPagesTool {
             }
         })
     }
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        args: Value,
-    ) -> Result<Value, ToolDispatchError> {
+    async fn call(&self, ctx: &LocalToolCtx, args: Value) -> Result<Value, ToolDispatchError> {
         let prefix = arg_str(&args, "prefix").map(str::to_string);
         let tag_name = arg_str(&args, "tag").map(str::to_string);
         let q = arg_str(&args, "q").map(str::to_string);
-        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20).min(100);
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(20)
+            .min(100);
         let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
 
         let result = match pages_repo::search(
@@ -192,19 +193,17 @@ impl LocalTool for EditPageTool {
             "required": ["path"]
         })
     }
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        args: Value,
-    ) -> Result<Value, ToolDispatchError> {
+    async fn call(&self, ctx: &LocalToolCtx, args: Value) -> Result<Value, ToolDispatchError> {
         let path = required_str(&args, "path")?;
         let markdown = arg_str(&args, "markdown").map(String::from);
         let summary = arg_str(&args, "summary").map(String::from);
         let private = args.get("private").and_then(|v| v.as_bool());
-        let tag_names: Option<Vec<String>> = args
-            .get("tag_names")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+        let tag_names: Option<Vec<String>> =
+            args.get("tag_names").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            });
 
         if markdown.is_none() && summary.is_none() && tag_names.is_none() && private.is_none() {
             return Err(ToolDispatchError::Execution(
@@ -213,13 +212,15 @@ impl LocalTool for EditPageTool {
         }
 
         let tag_ids = match &tag_names {
-            Some(names) if !names.is_empty() => match tags_repo::resolve_ids(&ctx.db, names).await {
-                Ok(ids) => Some(ids),
-                Err(ResolveError::Db(e)) => return Err(db_err(e)),
-                Err(e @ ResolveError::Unknown(_)) => {
-                    return Err(ToolDispatchError::Execution(e.to_string()));
+            Some(names) if !names.is_empty() => {
+                match tags_repo::resolve_ids(&ctx.db, names).await {
+                    Ok(ids) => Some(ids),
+                    Err(ResolveError::Db(e)) => return Err(db_err(e)),
+                    Err(e @ ResolveError::Unknown(_)) => {
+                        return Err(ToolDispatchError::Execution(e.to_string()));
+                    }
                 }
-            },
+            }
             _ => None,
         };
 
@@ -260,11 +261,7 @@ impl LocalTool for ListTagsTool {
     fn input_schema(&self) -> Value {
         json!({ "type": "object", "properties": {} })
     }
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        _args: Value,
-    ) -> Result<Value, ToolDispatchError> {
+    async fn call(&self, ctx: &LocalToolCtx, _args: Value) -> Result<Value, ToolDispatchError> {
         let tags = tags_repo::list_all(&ctx.db).await.map_err(db_err)?;
         if tags.is_empty() {
             return Ok(ok_text("No tags defined.".into()));
@@ -303,11 +300,7 @@ impl LocalTool for CreateTagTool {
             "required": ["name"]
         })
     }
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        args: Value,
-    ) -> Result<Value, ToolDispatchError> {
+    async fn call(&self, ctx: &LocalToolCtx, args: Value) -> Result<Value, ToolDispatchError> {
         let name = required_str(&args, "name")?;
         if name.trim().is_empty() {
             return Err(ToolDispatchError::Execution("name is required".into()));
@@ -316,7 +309,10 @@ impl LocalTool for CreateTagTool {
         let saved = tags_repo::create_tag(&ctx.db, RepoTagInput { name, description })
             .await
             .map_err(db_err)?;
-        Ok(ok_text(format!("created tag [{}] {}", saved.id, saved.name)))
+        Ok(ok_text(format!(
+            "created tag [{}] {}",
+            saved.id, saved.name
+        )))
     }
 }
 
@@ -339,15 +335,16 @@ impl LocalTool for DeletePageTool {
             "required": ["path"]
         })
     }
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        args: Value,
-    ) -> Result<Value, ToolDispatchError> {
+    async fn call(&self, ctx: &LocalToolCtx, args: Value) -> Result<Value, ToolDispatchError> {
         let path = required_str(&args, "path")?;
-        match pages_repo::delete_by_path(&ctx.db, &path).await.map_err(db_err)? {
+        match pages_repo::delete_by_path(&ctx.db, &path)
+            .await
+            .map_err(db_err)?
+        {
             true => Ok(ok_text(format!("deleted: {path}"))),
-            false => Err(ToolDispatchError::Execution(format!("Page not found: {path}"))),
+            false => Err(ToolDispatchError::Execution(format!(
+                "Page not found: {path}"
+            ))),
         }
     }
 }
@@ -370,11 +367,7 @@ impl LocalTool for ListFilesTool {
             "properties": { "mime_prefix": { "type": "string" } }
         })
     }
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        args: Value,
-    ) -> Result<Value, ToolDispatchError> {
+    async fn call(&self, ctx: &LocalToolCtx, args: Value) -> Result<Value, ToolDispatchError> {
         let prefix = arg_str(&args, "mime_prefix").map(String::from);
         let rows = files_repo::list_with_thumbnails(&ctx.db, prefix.as_deref())
             .await
@@ -428,11 +421,7 @@ impl LocalTool for CreateFileTool {
             "required": ["path"]
         })
     }
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        args: Value,
-    ) -> Result<Value, ToolDispatchError> {
+    async fn call(&self, ctx: &LocalToolCtx, args: Value) -> Result<Value, ToolDispatchError> {
         let path = required_str(&args, "path")?.trim().to_string();
         if path.is_empty() {
             return Err(ToolDispatchError::Execution("path is required".into()));
@@ -498,11 +487,7 @@ impl LocalTool for ListGalleriesTool {
     fn input_schema(&self) -> Value {
         json!({ "type": "object", "properties": {} })
     }
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        _args: Value,
-    ) -> Result<Value, ToolDispatchError> {
+    async fn call(&self, ctx: &LocalToolCtx, _args: Value) -> Result<Value, ToolDispatchError> {
         let rows = galleries_repo::list_all(&ctx.db).await.map_err(db_err)?;
         if rows.is_empty() {
             return Ok(ok_text("No galleries.".into()));
@@ -540,11 +525,7 @@ impl LocalTool for CreateGalleryTool {
             "required": ["path", "title"]
         })
     }
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        args: Value,
-    ) -> Result<Value, ToolDispatchError> {
+    async fn call(&self, ctx: &LocalToolCtx, args: Value) -> Result<Value, ToolDispatchError> {
         let path = required_str(&args, "path")?;
         if path.trim().is_empty() {
             return Err(ToolDispatchError::Execution("path is required".into()));
@@ -557,7 +538,11 @@ impl LocalTool for CreateGalleryTool {
         let file_ids: Vec<i32> = args
             .get("file_ids")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|x| x.as_i64().map(|n| n as i32)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_i64().map(|n| n as i32))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let saved = galleries_repo::create_gallery(
@@ -607,11 +592,7 @@ impl LocalTool for UpdateGalleryTool {
             "required": ["id", "path", "title"]
         })
     }
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        args: Value,
-    ) -> Result<Value, ToolDispatchError> {
+    async fn call(&self, ctx: &LocalToolCtx, args: Value) -> Result<Value, ToolDispatchError> {
         let id = args
             .get("id")
             .and_then(|v| v.as_i64())
@@ -626,7 +607,11 @@ impl LocalTool for UpdateGalleryTool {
         let file_ids: Vec<i32> = args
             .get("file_ids")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|x| x.as_i64().map(|n| n as i32)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_i64().map(|n| n as i32))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let updated = galleries_repo::update_gallery(
@@ -648,7 +633,9 @@ impl LocalTool for UpdateGalleryTool {
                 g.title,
                 g.file_ids.len()
             ))),
-            None => Err(ToolDispatchError::Execution(format!("Gallery not found: {id}"))),
+            None => Err(ToolDispatchError::Execution(format!(
+                "Gallery not found: {id}"
+            ))),
         }
     }
 }

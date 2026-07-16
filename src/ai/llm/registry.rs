@@ -5,9 +5,7 @@ use async_trait::async_trait;
 use sea_orm::{DatabaseConnection, EntityTrait, ModelTrait};
 use tokio::sync::Mutex;
 
-use crate::ai::llm::{
-    self, ChatRequest, ChatResponse, LlmProvider, ProviderError,
-};
+use crate::ai::llm::{self, ChatRequest, ChatResponse, LlmProvider, ProviderError};
 use crate::entity::{llm_model, llm_provider};
 
 /// Wrapper that serializes every `chat()` call to a given provider through a
@@ -165,13 +163,13 @@ impl ProviderRegistry {
             }
             "gemini" => {
                 let api_key = row.api_key.clone().ok_or_else(|| {
-                    RegistryError::Config(format!(
-                        "gemini provider '{}' has no api_key",
-                        row.label
-                    ))
+                    RegistryError::Config(format!("gemini provider '{}' has no api_key", row.label))
                 })?;
                 (
-                    Arc::new(llm::gemini::GeminiProvider::new(api_key, default_model.into())),
+                    Arc::new(llm::gemini::GeminiProvider::new(
+                        api_key,
+                        default_model.into(),
+                    )),
                     "gemini",
                 )
             }

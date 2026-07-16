@@ -23,10 +23,18 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(AssistantMessages::SessionId).integer().not_null())
+                    .col(
+                        ColumnDef::new(AssistantMessages::SessionId)
+                            .integer()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(AssistantMessages::Seq).integer().not_null())
                     .col(ColumnDef::new(AssistantMessages::Role).string().not_null())
-                    .col(ColumnDef::new(AssistantMessages::Content).json_binary().not_null())
+                    .col(
+                        ColumnDef::new(AssistantMessages::Content)
+                            .json_binary()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(AssistantMessages::CreatedAt)
                             .timestamp_with_time_zone()

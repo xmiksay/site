@@ -23,12 +23,7 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(Pages::Path)
-                            .string()
-                            .not_null()
-                            .unique_key(),
-                    )
+                    .col(ColumnDef::new(Pages::Path).string().not_null().unique_key())
                     .col(ColumnDef::new(Pages::Summary).text().null())
                     .col(ColumnDef::new(Pages::Markdown).text().not_null())
                     .col(
@@ -91,7 +86,11 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(Expr::current_timestamp()),
                     )
-                    .col(ColumnDef::new(PageRevisions::CreatedBy).integer().not_null())
+                    .col(
+                        ColumnDef::new(PageRevisions::CreatedBy)
+                            .integer()
+                            .not_null(),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .from(PageRevisions::Table, PageRevisions::PageId)

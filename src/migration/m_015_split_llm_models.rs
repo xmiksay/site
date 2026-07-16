@@ -132,7 +132,9 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
         // One-way migration; rolling back would risk losing model rows.
-        Err(DbErr::Migration("m_015_split_llm_models is not reversible".into()))
+        Err(DbErr::Migration(
+            "m_015_split_llm_models is not reversible".into(),
+        ))
     }
 }
 

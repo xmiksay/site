@@ -59,12 +59,10 @@ pub async fn reconstruct_at_revision(
 
     let mut content = current_markdown.to_string();
     for rev in &revisions {
-        let patch = diffy::Patch::from_str(&rev.patch).map_err(|e| {
-            ReconstructError::PatchParse(rev.id, e.to_string())
-        })?;
-        content = diffy::apply(&content, &patch).map_err(|e| {
-            ReconstructError::PatchApply(rev.id, e.to_string())
-        })?;
+        let patch = diffy::Patch::from_str(&rev.patch)
+            .map_err(|e| ReconstructError::PatchParse(rev.id, e.to_string()))?;
+        content = diffy::apply(&content, &patch)
+            .map_err(|e| ReconstructError::PatchApply(rev.id, e.to_string()))?;
     }
 
     Ok(content)
