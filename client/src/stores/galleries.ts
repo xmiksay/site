@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api, apiVoid } from '../api'
+import { useListSync } from '../composables/useListSync'
 import type { Gallery } from '../types'
 
 export interface GalleryInput {
@@ -12,6 +13,7 @@ export interface GalleryInput {
 
 export const useGalleriesStore = defineStore('galleries', () => {
   const items = ref<Gallery[]>([])
+  useListSync('galleries', items)
 
   async function load() {
     items.value = await api<Gallery[]>('/api/galleries')

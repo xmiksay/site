@@ -1,10 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api, apiVoid } from '../api'
+import { useListSync } from '../composables/useListSync'
 import type { PageDetail, PageInput, PageSummary, RevisionDetail } from '../types'
 
 export const usePagesStore = defineStore('pages', () => {
   const items = ref<PageSummary[]>([])
+  useListSync('pages', items)
 
   async function load() {
     items.value = await api<PageSummary[]>('/api/pages')

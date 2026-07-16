@@ -1,3 +1,11 @@
+export type WsTopic = 'assistant' | 'pages' | 'files' | 'galleries'
+
+export interface WsEnvelope<T = any> {
+  topic: WsTopic
+  event: string
+  payload: T
+}
+
 export interface PageSummary {
   id: number
   path: string

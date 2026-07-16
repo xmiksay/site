@@ -2,8 +2,10 @@
 import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from './stores/auth'
+import { useWsStore } from './stores/ws'
 
 const auth = useAuthStore()
+const ws = useWsStore()
 const router = useRouter()
 
 const mobileOpen = ref(false)
@@ -11,6 +13,15 @@ const mobileOpen = ref(false)
 watch(() => router.currentRoute.value.fullPath, () => {
   mobileOpen.value = false
 })
+
+watch(
+  () => auth.isLoggedIn,
+  (loggedIn) => {
+    if (loggedIn) ws.connect()
+    else ws.disconnect()
+  },
+  { immediate: true },
+)
 
 async function handleLogout() {
   await auth.logout()

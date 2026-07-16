@@ -5,6 +5,7 @@ use crate::ai::AiConfig;
 use crate::ai::engine::SiteEngine;
 use crate::config::Config;
 use crate::design::DesignStore;
+use crate::routes::ws::WsHub;
 use crate::templates::Templates;
 
 #[derive(Clone)]
@@ -13,6 +14,7 @@ pub struct AppState {
     pub tmpl: Templates,
     pub design: Arc<DesignStore>,
     pub agent_engine: Arc<SiteEngine>,
+    pub ws_hub: Arc<WsHub>,
 }
 
 pub async fn create_state(config: &Config) -> AppState {
@@ -27,11 +29,14 @@ pub async fn create_state(config: &Config) -> AppState {
     let agent_engine = SiteEngine::spawn(db.clone(), ai_config, config.serper_api_key.clone())
         .await
         .expect("Failed to spawn assistant engine");
+    let ws_hub = Arc::new(WsHub::new());
+    crate::ai::ws_bridge::spawn(agent_engine.clone(), ws_hub.clone(), db.clone());
 
     AppState {
         db,
         tmpl,
         design,
         agent_engine,
+        ws_hub,
     }
 }
