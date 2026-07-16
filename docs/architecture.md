@@ -184,11 +184,39 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
 
 - `engine.rs` — `SiteEngine`: spawns `Holly`, the tool executor, the
   `assistant_events` persistence subscriber, the system-prompt refresh task,
-  and a hibernate-watcher task that evicts a session from the in-process
-  "live" cache when `Holly`'s own idle-TTL sweep (`EngineConfig.idle_ttl`,
-  30 min) or a manual hibernate retires it — otherwise the next message to
-  that session would skip `resume` and get a blank in-memory session despite
-  intact history in `assistant_events`.
+  and a session-lifecycle watcher task that evicts a session from the
+  in-process "live" cache when `Holly`'s own idle-TTL sweep
+  (`EngineConfig.idle_ttl`, 30 min) or a manual hibernate retires it —
+  otherwise the next message to that session would skip `resume` and get a
+  blank in-memory session despite intact history in `assistant_events` — and
+  (issue #17) records every sub-agent session's parent link from its
+  `SessionStarted` event. Two submodules (kept under the 400-line cap):
+  `engine/profiles.rs` (the `researcher`/`page-writer` profile roster, below)
+  and `engine/session_tree.rs` (`root_session_of`/`user_id_from_session`/
+  `user_id_from_session_awaiting`, re-exported from `engine.rs` so every
+  existing `crate::ai::engine::...` call site is unchanged).
+  - **Sub-agents (#17):** the profile registry (`EngineConfig.profiles`) holds
+    the root `build` profile plus two spawnable leaves — `researcher`
+    (read-only: `web_search`/`web_fetch`/`read_page`/`search_pages`/
+    `list_tags`/`list_files`/`list_galleries`) and `page-writer`
+    (`read_page`/`search_pages`/`edit_page`/`create_tag`/`create_file`/
+    `list_galleries`/`create_gallery`/`update_gallery`). `build`'s
+    `spawnable_agents` allowlist is narrowed to exactly these two; each leaf's
+    `can_spawn: Some(false)` keeps spawn depth at 1. `profile_tool_specs`
+    (built via `entanglement_runtime::subagent::spawn_specs_for`) is what
+    actually advertises `agent_spawn`/`agent`/`agent_poll` to a profile that
+    may spawn — an empty `profile_tool_specs` entry withholds the whole
+    family regardless of `may_spawn()`.
+  - A sub-agent child session's own `SessionId` is a bare, unprefixed uuid
+    (`entanglement_runtime::subagent::launch` mints it with no tenant
+    namespacing) — `user_id_from_session` still resolves it correctly by
+    walking it up to its root ancestor first (`root_session_of`, backed by a
+    process-global `SESSION_PARENTS` cache fed by the watcher task above),
+    *then* parsing the root's `u{user_id}:` prefix. This is what lets
+    `policy.rs`'s DB-backed `PermissionResolver` — and every tool in
+    `tools/*`/`mcp.rs`, all of which import the same `user_id_from_session` —
+    resolve a sub-agent call against the *spawning user's* own
+    `tool_permissions` rules instead of failing closed.
 - `catalog.rs` — `SiteCatalog`: builds `entanglement_provider::LlmFactory`/
   `ModelResolver` closures from `llm_providers`/`llm_models`; `refresh()` is
   called after provider/model CRUD.
@@ -203,7 +231,20 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   session-delete helpers.
 - `projection/` — pure fold of a session's `assistant_events` rows into the
   `{role, content}` shape the admin client renders (`role` one of
-  `user | assistant | tool_result | error`).
+  `user | assistant | tool_result | error`). Since #17, `assistant_events`
+  for a session tree can hold several sessions' interleaved rows (a root plus
+  any sub-agent children); `project` partitions by session, folding a child's
+  own records independently and attaching them as a `content.sub_agents:
+  [{agent_id, profile, task, messages}]` array on the assistant message whose
+  `tool_calls` include the call that produced them. The match is *structural*,
+  not positional: `InMsg::Spawn` is never persisted, so there's no direct
+  field linking a `ToolCall` to the `SessionId` it produced, but
+  `entanglement_runtime::subagent::launch`'s own reply text always names the
+  child, and that reply is the `tool_result` paired with that call's own
+  `tool_call_id` — `extract_child_session_id` recovers the uuid from it. This
+  correctly handles a refused spawn (no valid uuid in its refusal text, so it
+  claims nothing) and concurrent siblings in one batch (each still names its
+  own child, so log order between them doesn't matter).
 - `tools/` — the built-in (non-MCP) tool vocabulary (pages/tags/files/
   galleries CRUD + `web_search`/`web_fetch`), ported to
   `entanglement_runtime::tools::Tool`.
@@ -217,12 +258,23 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   `agent_engine.holly.subscribe()` (issue #16): forwards the engine's
   content/lifecycle `OutEvent`s (`Status`, `TextDelta`, `ReasoningDelta`,
   `ToolCallDelta`, `ToolCall`, `ToolRequest`, `ToolOutput`, `Done`, `Error`,
-  `SessionHibernated`) to `WsHub` as `assistant.*` envelopes, resolving each
-  event's `SessionId` to both the owning `user_id`
-  (`engine::user_id_from_session`) and the DB `assistant_sessions.id` (a
-  small lazily-populated cache keyed by `engine_session_id`, since the
-  engine has no notion of the DB row). This is genuine token-level
-  streaming — see the WebSocket Hub section below.
+  `SessionHibernated`, plus — #17 — a sub-agent child's own `SessionStarted`)
+  to `WsHub` as `assistant.*` envelopes, resolving each event's `SessionId` to
+  both the owning `user_id` and the DB `assistant_sessions.id` off its
+  **root** ancestor (a lazily-populated cache keyed by `engine_session_id`,
+  since the engine has no notion of the DB row, and a sub-agent child is never
+  itself a DB row). Root resolution keeps its own `local_parents` map fed
+  synchronously from this same ordered broadcast, rather than trusting
+  `engine::root_session_of`'s process-global cache alone — that cache is
+  written by a *different*, independently-scheduled subscriber task, so
+  resolving a child's very own `SessionStarted` off it would race; falls back
+  to the global cache only for a child whose `SessionStarted` predates this
+  subscription. A sub-agent event's payload also carries `agent_session_id`
+  (the child's own engine `SessionId`) so the client can nest it under the
+  right root turn; a root-level event carries no such field, keeping the
+  envelope shape unchanged for any session that never spawns a sub-agent.
+  This is genuine token-level streaming — see the WebSocket Hub section
+  below.
 
 `llm/`, `local_tools/`, `mcp_client/`, and `tool_registry.rs` are the
 pre-engine-swap modules: no longer reachable from `AppState`, kept compiling
@@ -237,11 +289,11 @@ Configured per user via the admin SPA: `/admin/{providers,models,assistant,mcp-s
 Frames are JSON `Envelope { topic, event, payload }`, `topic` one of `assistant | pages | files | galleries`:
 
 - **`pages` / `files` / `galleries`** — `created`/`updated` (payload = the same summary shape the REST endpoint returns) / `deleted` (payload `{ id }`). Broadcast to **every** connected user via `WsHub::broadcast`/`broadcast_serialized` — these are shared site entities, not per-user. Published from `src/routes/api/{pages,files,galleries}.rs` after a successful create/update/delete.
-- **`assistant`** — real, token-level streaming straight off `agent_engine.holly.subscribe()` (`src/ai/ws_bridge.rs`), published only to the owning user's own connections via `WsHub::publish`. `event` is the forwarded `OutEvent`'s own `"kind"` tag and `payload` is that event's JSON shape (`entanglement_core::OutEvent` already derives `Serialize`) plus a spliced-in `db_session_id` (the `assistant_sessions.id` the engine's `SessionId` resolves to, cached per session): `status` (`AgentState`: idle/thinking/waiting_approval/waiting_answer/done/error), `text_delta`/`reasoning_delta` (incremental text), `tool_call_delta` (incremental tool-input fragment), `tool_call` (display-only, full call), `tool_request` (needs approval — approve/reject the same way as an existing message's tool call, `POST .../messages/{any}/approve`, since the engine no longer keys approvals by message id), `tool_output`, `done`, `error`, `session_hibernated`.
+- **`assistant`** — real, token-level streaming straight off `agent_engine.holly.subscribe()` (`src/ai/ws_bridge.rs`), published only to the owning user's own connections via `WsHub::publish`. `event` is the forwarded `OutEvent`'s own `"kind"` tag and `payload` is that event's JSON shape (`entanglement_core::OutEvent` already derives `Serialize`) plus a spliced-in `db_session_id` (the `assistant_sessions.id` the engine's root `SessionId` resolves to, cached per session): `status` (`AgentState`: idle/thinking/waiting_approval/waiting_answer/done/error), `text_delta`/`reasoning_delta` (incremental text), `tool_call_delta` (incremental tool-input fragment), `tool_call` (display-only, full call), `tool_request` (needs approval — approve/reject the same way as an existing message's tool call, `POST .../messages/{any}/approve`, since the engine no longer keys approvals by message id), `tool_output`, `done`, `error`, `session_hibernated`, and (#17) a sub-agent child's own `session_started` (`{session, profile, parent}`, `researcher`/`page-writer`). Any event belonging to a sub-agent child also carries `agent_session_id` (the child's own engine `SessionId`) so the client can render it nested under the spawning turn instead of the root's own top-level stream.
 
 Server sends a WS ping every 30s; a failed send (or a client `Close` frame) drops that connection's sender from the registry. `WsHub::publish`/`broadcast` also prune any sender whose receiver has been dropped.
 
-Client side: `client/src/stores/ws.ts` owns the single connection (reconnect with exponential backoff) and topic→handler dispatch; `client/src/composables/useListSync.ts` wires `pages`/`files`/`galleries` events into the matching Pinia store's `items` list; `client/src/stores/assistant.ts` accumulates `assistant.*` deltas into a `live: LiveTurn | null` (rendered by `AssistantView.vue` as an in-progress bubble) and, on `done`/`error`/`session_hibernated`, clears it and refetches the session over REST for the authoritative message list — reusing `ai::projection::project`'s fold rather than re-implementing it in TypeScript. `client/src/App.vue` connects after login, disconnects on logout.
+Client side: `client/src/stores/ws.ts` owns the single connection (reconnect with exponential backoff) and topic→handler dispatch; `client/src/composables/useListSync.ts` wires `pages`/`files`/`galleries` events into the matching Pinia store's `items` list; `client/src/stores/assistantLiveTurns.ts` (composed into `stores/assistant.ts`) accumulates `assistant.*` deltas into a `live: LiveTurn | null` (the root turn) and, since #17, `liveSubAgents: Record<string, LiveSubAgentTurn>` keyed by `agent_session_id` — a sub-agent's events carry that field instead of belonging to the root, and it is tracked independently of `live` since a detached child keeps streaming after the root's own turn has already settled. Both are rendered by `AssistantView.vue` as in-progress bubbles (`LiveSubAgentTurn.vue`/`LiveToolCallList.vue`), and on a turn's own `done`/`error`/`session_hibernated` the matching entry clears and the session refetches over REST for the authoritative message list — reusing `ai::projection::project`'s fold (including its `content.sub_agents` nesting, rendered by the self-recursive `AssistantMessageContent.vue`) rather than re-implementing it in TypeScript. `client/src/App.vue` connects after login, disconnects on logout.
 
 ## Docker
 

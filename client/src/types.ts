@@ -140,6 +140,42 @@ export interface LiveTurn {
   toolCalls: LiveToolCall[]
 }
 
+/**
+ * A sub-agent (`researcher`/`page-writer`) spawned mid-turn via an
+ * `agent_spawn`/`agent` tool call, as returned in the REST transcript on the
+ * assistant message whose `tool_calls` includes that spawn — a sibling of
+ * `tool_calls` on `AssistantMessage.content`, not a separate top-level
+ * message. The backend matches each entry to its spawning call structurally
+ * (via the call's own tool_result, not array position — a batch of several
+ * spawns, or an earlier refused spawn, can't misattribute a child), so `task`
+ * (copied from that same call's `args.prompt`) is already the right one —
+ * never re-derive it by index. `messages` never contains a `role: "user"`
+ * entry — that's what `task` is for.
+ */
+export interface AssistantSubAgent {
+  agent_id: string
+  profile: string
+  task: string
+  messages: Array<{ role: string; content: any }>
+}
+
+/**
+ * A sub-agent's own turn streaming live over the `assistant` WS topic,
+ * identified by `agent_session_id` rather than `db_session_id` — kept in its
+ * own bucket (keyed by `agentSessionId`, not nested inside `LiveTurn`)
+ * because a child keeps running detached after the root's own `live` turn
+ * has already settled and cleared.
+ */
+export interface LiveSubAgentTurn {
+  agentSessionId: string
+  dbSessionId: number
+  profile: string
+  text: string
+  reasoning: string
+  toolCalls: LiveToolCall[]
+  done: boolean
+}
+
 export interface McpServer {
   id: number
   name: string

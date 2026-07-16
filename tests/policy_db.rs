@@ -9,10 +9,10 @@
 //! delete cleans up every rule the test inserted. `site_test` isn't reset
 //! between runs, so this isolation is load-bearing, not decorative.
 
-use entanglement_core::{ApprovalScope, Permission};
+use entanglement_core::{ApprovalScope, Permission, SessionId};
 use entanglement_runtime::policy::{GrantStore, PermissionResolver};
 use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
-use site::ai::engine::SiteEngine;
+use site::ai::engine::{self, SiteEngine};
 use site::ai::policy::SitePolicy;
 use site::ai::tool_permissions::Effect;
 use site::entity::{tool_permission, user};
@@ -208,6 +208,51 @@ async fn once_scope_is_not_persisted_as_a_grant() {
         .await
         .expect("query tool_permissions");
     assert!(!rows.iter().any(|r| r.user_id == user_id));
+
+    cleanup_user(&db, user_id).await;
+}
+
+/// #17: a `researcher`/`page-writer` sub-agent's child session is a bare,
+/// unprefixed uuid (`entanglement_runtime::subagent::launch` mints it with no
+/// tenant namespacing) — `SitePolicy::resolve` must still resolve it to the
+/// *spawning user's* own `tool_permissions` rules, clamp intact, rather than
+/// failing closed on the missing `u{user_id}:` prefix. This is the
+/// clamp + resolver interplay the issue calls out: a user's `deny edit_page`
+/// rule reaches into a `page-writer` child exactly as it would the root.
+#[tokio::test]
+async fn sub_agent_child_session_resolves_against_its_spawning_users_rules() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let user_id = make_user(&db, "subagent-clamp").await;
+    let policy = SitePolicy::new(db.clone());
+    let root = SiteEngine::session_id_for_user(user_id);
+    let child = SessionId::new_uuid();
+
+    // Normally fed by `engine.rs`'s session-lifecycle watcher off a live
+    // `OutEvent::SessionStarted`; call the same recording path directly so
+    // this test needs no running `Holly`/`agent_spawn` round trip.
+    engine::record_session_started(child.clone(), Some(root.clone()));
+
+    add_rule(&db, user_id, "edit_page", Effect::Deny, 10).await;
+
+    // The clamp holds for both the child (bare uuid) and the root session —
+    // same user, same rule, same effective grade.
+    assert_eq!(
+        policy.resolve(&child, "edit_page", "").await,
+        Permission::Deny
+    );
+    assert_eq!(
+        policy.resolve(&root, "edit_page", "").await,
+        Permission::Deny
+    );
+    // A tool the rule doesn't cover still resolves normally through the
+    // child, proving this isn't just an accidental blanket deny.
+    assert_eq!(
+        policy.resolve(&child, "read_page", "").await,
+        Permission::Ask
+    );
 
     cleanup_user(&db, user_id).await;
 }

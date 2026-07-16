@@ -11,34 +11,27 @@
 //! `append` never blocks the tap. That means there is no guarantee the row
 //! for e.g. the `Done` this handler just observed is durably committed the
 //! instant the handler observes it — a naive "wait for Done, then re-query
-//! the DB" would race that writer. Instead, [`send_and_collect`] builds the
-//! exact same `LogRecord`s locally (the `InMsg`s this handler sends plus every
-//! `OutEvent` it observes for the session) and folds them onto the
-//! *previously persisted* prefix read before sending — `DbSink` will persist
-//! this same tail independently, so the next request's DB read sees it with
-//! this handler never having written anything itself.
+//! the DB" would race that writer. Instead, [`collect::send_and_collect`]
+//! builds the exact same `LogRecord`s locally (the `InMsg`s this handler
+//! sends plus every `OutEvent` it observes for the session) and folds them
+//! onto the *previously persisted* prefix read before sending — `DbSink`
+//! will persist this same tail independently, so the next request's DB read
+//! sees it with this handler never having written anything itself.
 
-use std::time::Duration;
+mod collect;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
-use entanglement_core::{AgentState, ApprovalScope, InMsg, OutEvent, SessionId};
+use entanglement_core::{ApprovalScope, InMsg, OutEvent, SessionId};
 use entanglement_runtime::session_store::{LogPayload, LogRecord};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
-use tokio::sync::broadcast;
 
 use super::{MessageView, SessionDetail, SessionSummary, load_owned};
-use crate::ai::engine::SiteEngine;
 use crate::ai::projection::{self, ProjectedMessage};
 use crate::ai::tool_permissions::Effect;
 use crate::entity::{assistant_event, assistant_session, tool_permission};
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
-
-/// A stuck turn (dead provider, hung tool) must not hang the HTTP request
-/// forever — generous enough for a real multi-tool-call turn, short enough
-/// that a client isn't left hanging indefinitely.
-const TURN_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(serde::Deserialize)]
 pub struct SendMessage {
@@ -80,7 +73,7 @@ pub async fn send_message(
     let prior = load_prior_records(&state.db, &session_id).await?;
 
     let msg = InMsg::prompt(session_id.clone(), input.text);
-    let collected = send_and_collect(engine, &session_id, vec![msg]).await?;
+    let collected = collect::send_and_collect(engine, &session_id, vec![msg]).await?;
 
     build_detail(&state, id, prior, collected).await
 }
@@ -124,9 +117,20 @@ pub async fn approve(
     // old handler's behavior for that one case.
     let mut msgs = Vec::with_capacity(body.decisions.len());
     for d in &body.decisions {
+        // #17: `PendingDecisions` (the engine's approval waiter registry) is
+        // keyed by `(session, request_id)`, not `request_id` alone — a
+        // `researcher`/`page-writer` sub-agent's own pending tool call lives
+        // under its *child* session, not this root, so an `Approve`/`Reject`
+        // addressed to the root would silently resolve nothing and leave the
+        // child parked forever. Route each decision to whichever session
+        // actually owns the call (falling back to the root if the call isn't
+        // found in `prior` yet — the same eventual-consistency assumption
+        // `remember_deny`'s tool-name lookup below already makes).
+        let target_session =
+            session_for_call(&prior, &d.tool_call_id).unwrap_or_else(|| session_id.clone());
         if d.approve {
             msgs.push(InMsg::Approve {
-                session: session_id.clone(),
+                session: target_session,
                 request_id: d.tool_call_id.clone(),
                 scope: if d.remember {
                     ApprovalScope::Always
@@ -139,14 +143,14 @@ pub async fn approve(
                 remember_deny(&state, user_id, &prior, &d.tool_call_id).await?;
             }
             msgs.push(InMsg::Reject {
-                session: session_id.clone(),
+                session: target_session,
                 request_id: d.tool_call_id.clone(),
                 reason: None,
             });
         }
     }
 
-    let collected = send_and_collect(engine, &session_id, msgs).await?;
+    let collected = collect::send_and_collect(engine, &session_id, msgs).await?;
     build_detail(&state, id, prior, collected).await
 }
 
@@ -207,6 +211,24 @@ fn tool_name_for_call(records: &[LogRecord], call_id: &str) -> Option<String> {
     })
 }
 
+/// The session that actually owns `call_id`'s pending tool call — a
+/// sub-agent (#17) child's own session if that's where the matching
+/// `ToolCall`/`ToolRequest` record lives, otherwise `None` (the caller falls
+/// back to the root). `PendingDecisions` keys a waiter by `(session,
+/// request_id)`, so `approve`/`reject` must address the exact session that
+/// registered it.
+fn session_for_call(records: &[LogRecord], call_id: &str) -> Option<SessionId> {
+    records.iter().rev().find_map(|r| match &r.payload {
+        LogPayload::Out(OutEvent::ToolCall { request_id, .. })
+        | LogPayload::Out(OutEvent::ToolRequest { request_id, .. })
+            if request_id == call_id =>
+        {
+            Some(r.session.clone())
+        }
+        _ => None,
+    })
+}
+
 fn engine_session_id(session: &assistant_session::Model) -> ApiResult<SessionId> {
     session
         .engine_session_id
@@ -232,61 +254,6 @@ pub(super) async fn load_prior_records(
                 .map_err(|e| ApiError::Internal(format!("corrupt assistant_events row: {e}")))
         })
         .collect()
-}
-
-/// Send `msgs` through the engine (subscribing first — embedding.md §1's
-/// race-avoidance: a reply must never arrive before we start listening for
-/// it), then collect every record belonging to `session` — the sent `InMsg`s
-/// plus each observed `OutEvent` — until the turn settles (`Done`, `Error`,
-/// or a paused `WaitingApproval` status) or [`TURN_TIMEOUT`] elapses.
-async fn send_and_collect(
-    engine: &SiteEngine,
-    session: &SessionId,
-    msgs: Vec<InMsg>,
-) -> ApiResult<Vec<LogRecord>> {
-    let mut sub = engine.holly.subscribe();
-    let mut collected = Vec::with_capacity(msgs.len() + 8);
-    for msg in msgs {
-        engine
-            .holly
-            .send(msg.clone())
-            .await
-            .map_err(|_| ApiError::Internal("engine inbox closed".into()))?;
-        collected.push(LogRecord::new(session.clone(), LogPayload::In(msg)));
-    }
-
-    let deadline = tokio::time::Instant::now() + TURN_TIMEOUT;
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            return Err(ApiError::Internal("assistant turn timed out".into()));
-        }
-        let ev = match tokio::time::timeout(remaining, sub.recv()).await {
-            Ok(Ok(ev)) => ev,
-            Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
-            Ok(Err(broadcast::error::RecvError::Closed)) => {
-                return Err(ApiError::Internal("engine event stream closed".into()));
-            }
-            Err(_) => return Err(ApiError::Internal("assistant turn timed out".into())),
-        };
-        if ev.session() != Some(session) {
-            continue; // another session's event on the shared fan-out
-        }
-        let settled = matches!(
-            ev,
-            OutEvent::Done { .. }
-                | OutEvent::Error { .. }
-                | OutEvent::Status {
-                    state: AgentState::WaitingApproval,
-                    ..
-                }
-        );
-        collected.push(LogRecord::new(session.clone(), LogPayload::Out(ev)));
-        if settled {
-            break;
-        }
-    }
-    Ok(collected)
 }
 
 async fn build_detail(

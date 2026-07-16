@@ -9,20 +9,31 @@
 //! without them:
 //! - `DATABASE_URL` unset -> skip (same convention as `tests/policy_db.rs`).
 //! - `http://localhost:11434` unreachable -> skip (no local Ollama).
+//!
+//! The #17 sub-agent tests below are DB-gated only, not Ollama-gated: they
+//! drive the engine with a small scripted `Llm` (`ScriptedLlm`/`stream_from_
+//! response`, the same pattern `entanglement-core`'s own test suite uses)
+//! instead of a live model, so a deterministic tool-call decision doesn't
+//! depend on a local Ollama instance's availability or non-determinism.
 
 use std::time::Duration;
 
+use async_trait::async_trait;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use entanglement_core::{Llm, LlmRequest, LlmResponse, LlmStream, ToolCall, stream_from_response};
 use http_body_util::BodyExt;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use site::ai::AiConfig;
+use site::ai::engine::SiteEngine;
 use site::auth::SESSION_COOKIE;
 use site::config::Config;
 use site::entity::{assistant_session, llm_model, llm_provider, token, user};
+use site::routes::ws::WsHub;
 use site::state::{self, AppState};
 
 const OLLAMA_BASE: &str = "http://localhost:11434";
@@ -131,6 +142,203 @@ async fn setup(db_url: &str, tag: &str) -> Fixture {
         model_id: model.id,
         user_id: saved_user.id,
         provider_id: provider.id,
+    }
+}
+
+/// A fixture backed by a scripted `Llm` instead of a real provider (#17's
+/// sub-agent tests) — no `llm_provider`/`llm_model` rows, so no `cleanup` of
+/// those is needed either. `assistant_sessions` rows are created directly
+/// (`scripted_session`, below) rather than through `POST /assistant/sessions`,
+/// which always sends `InMsg::SetModel` bound to a DB-catalog model — that
+/// would rebind the session off `llm_factory` (this fixture's scripted
+/// backend) onto the real per-model factory `SiteCatalog::model_resolver`
+/// builds. Skipping session creation's `SetModel` leaves the session on the
+/// engine-wide default (`EngineConfig.llm_factory`, set from
+/// `SiteEngine::spawn`'s `llm_factory_override`) for its whole life — exactly
+/// the scripted backend this fixture wired in.
+struct ScriptedFixture {
+    app: Router,
+    db: DatabaseConnection,
+    engine: std::sync::Arc<SiteEngine>,
+    cookie: String,
+    user_id: i32,
+}
+
+async fn setup_scripted(
+    db_url: &str,
+    tag: &str,
+    llm_factory: entanglement_core::LlmFactory,
+) -> ScriptedFixture {
+    let db = sea_orm::Database::connect(db_url)
+        .await
+        .expect("connect to DATABASE_URL");
+
+    let username = format!("assistant-flow-{tag}-{}", uuid::Uuid::new_v4());
+    let saved_user = user::ActiveModel {
+        username: Set(username),
+        password_hash: Set("unused".to_string()),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .expect("insert throwaway user");
+
+    let nonce = site::auth::generate_token();
+    token::ActiveModel {
+        nonce: Set(nonce.clone()),
+        user_id: Set(saved_user.id),
+        expires_at: Set(None),
+        label: Set(Some("test".to_string())),
+        is_service: Set(false),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .expect("insert session token");
+
+    let ai_config = std::sync::Arc::new(AiConfig::new());
+    let engine = SiteEngine::spawn(db.clone(), ai_config, None, Some(llm_factory))
+        .await
+        .expect("spawn scripted assistant engine");
+    let ws_hub = std::sync::Arc::new(WsHub::new());
+    site::ai::ws_bridge::spawn(engine.clone(), ws_hub.clone(), db.clone());
+    let state = AppState {
+        db: db.clone(),
+        tmpl: site::templates::Templates::new(std::sync::Arc::new(site::design::DesignStore::new(
+            None,
+        ))),
+        design: std::sync::Arc::new(site::design::DesignStore::new(None)),
+        agent_engine: engine.clone(),
+        ws_hub,
+    };
+    let app = site::routes::api::router(state.clone()).with_state(state);
+
+    ScriptedFixture {
+        app,
+        db,
+        engine,
+        cookie: format!("{SESSION_COOKIE}={nonce}"),
+        user_id: saved_user.id,
+    }
+}
+
+/// Mint a root engine session and its `assistant_sessions` row directly (see
+/// `ScriptedFixture`'s doc for why this bypasses `POST /assistant/sessions`).
+async fn scripted_session(fx: &ScriptedFixture) -> (i32, entanglement_core::SessionId) {
+    let session_id = SiteEngine::session_id_for_user(fx.user_id);
+    let now = chrono::Utc::now().fixed_offset();
+    let saved = assistant_session::ActiveModel {
+        user_id: Set(fx.user_id),
+        title: Set("New chat".into()),
+        provider: Set("test".into()),
+        model: Set("scripted".into()),
+        model_id: Set(None),
+        enabled_mcp_server_ids: Set(serde_json::json!([])),
+        engine_session_id: Set(Some(session_id.0.clone())),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(&fx.db)
+    .await
+    .expect("insert assistant_session row");
+    fx.engine.mark_live(session_id.clone());
+    (saved.id, session_id)
+}
+
+/// A scripted `Llm` for the `spawns_a_researcher_sub_agent_and_nests_its_
+/// progress` test: the root's first round emits `agent_spawn(researcher,
+/// "what is 2+2")`, its second round (after the spawn's own immediate tool
+/// result) just finishes with plain text. The `researcher` child (identified
+/// by its system prompt carrying `engine.rs`'s `RESEARCHER_PROMPT_SUFFIX`
+/// marker) answers directly with no tool call. Each session gets its own
+/// instance (`LlmFactory` is called once per session), so `calls` never needs
+/// to distinguish root from child — the system-prompt check does that.
+#[derive(Default)]
+struct ResearcherScriptedLlm {
+    calls: u32,
+}
+
+#[async_trait]
+impl Llm for ResearcherScriptedLlm {
+    async fn stream(&mut self, req: LlmRequest<'_>) -> anyhow::Result<LlmStream> {
+        self.calls += 1;
+        let resp = if req.system.contains("`researcher` sub-agent") {
+            LlmResponse {
+                text: "2 + 2 = 4.".into(),
+                tool_calls: vec![],
+            }
+        } else if self.calls == 1 {
+            LlmResponse {
+                text: String::new(),
+                tool_calls: vec![ToolCall::new(
+                    "spawn-1",
+                    "agent_spawn",
+                    r#"{"agent":"researcher","prompt":"what is 2+2"}"#,
+                )],
+            }
+        } else {
+            LlmResponse {
+                text: "Researching, thanks!".into(),
+                tool_calls: vec![],
+            }
+        };
+        Ok(stream_from_response(resp))
+    }
+}
+
+/// A scripted `Llm` for the `approves_a_page_writer_sub_agents_own_pending_
+/// tool_call` test: the root spawns `page-writer` with a task naming `path`;
+/// the `page-writer` child (system prompt carries `PAGE_WRITER_PROMPT_SUFFIX`)
+/// calls `edit_page` on its first round, then finishes on its second (after
+/// the approved call's tool result comes back).
+struct PageWriterScriptedLlm {
+    calls: u32,
+    path: String,
+}
+
+#[async_trait]
+impl Llm for PageWriterScriptedLlm {
+    async fn stream(&mut self, req: LlmRequest<'_>) -> anyhow::Result<LlmStream> {
+        self.calls += 1;
+        let resp = if req.system.contains("`page-writer` sub-agent") {
+            if self.calls == 1 {
+                LlmResponse {
+                    text: String::new(),
+                    tool_calls: vec![ToolCall::new(
+                        "edit-1",
+                        "edit_page",
+                        format!(
+                            r#"{{"path":"{}","markdown":"hello from a sub-agent"}}"#,
+                            self.path
+                        ),
+                    )],
+                }
+            } else {
+                LlmResponse {
+                    text: "Page created.".into(),
+                    tool_calls: vec![],
+                }
+            }
+        } else if self.calls == 1 {
+            LlmResponse {
+                text: String::new(),
+                tool_calls: vec![ToolCall::new(
+                    "spawn-1",
+                    "agent_spawn",
+                    format!(
+                        r#"{{"agent":"page-writer","prompt":"create a page at path {} with markdown content 'hello from a sub-agent'"}}"#,
+                        self.path
+                    ),
+                )],
+            }
+        } else {
+            LlmResponse {
+                text: "Delegated to page-writer.".into(),
+                tool_calls: vec![],
+            }
+        };
+        Ok(stream_from_response(resp))
     }
 }
 
@@ -300,6 +508,241 @@ async fn create_session_then_message_then_approve_completes_the_turn() {
     cleanup(&fx, session_id as i32).await;
 }
 
+/// #17: the model spawns a `researcher` sub-agent via `agent_spawn`. Unlike a
+/// host tool, `agent`/`agent_spawn`/`agent_poll` bypass permission entirely
+/// (`entanglement_runtime::tool_runner`'s `Intercept::Spawn` route) — no
+/// approval step, the tool_result comes back in the same turn. This exercises
+/// the whole chain end to end: `engine.rs`'s `researcher` profile + its
+/// `profile_tool_specs` roster actually being advertised to the root's
+/// `build` profile, the child session's tool calls resolving permission
+/// against the *same* user (the `SESSION_PARENTS`/`root_session_of` fix — a
+/// bare-uuid child session that failed to resolve would fail closed and the
+/// child's own turn would error out instead of answering), and
+/// `projection::project` nesting the child's turn under the spawning message.
+/// DB-gated only — see `ScriptedFixture`'s doc for why no live model is used.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spawns_a_researcher_sub_agent_and_nests_its_progress() {
+    let Some(db_url) = test_db_url().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+
+    let llm_factory: entanglement_core::LlmFactory =
+        std::sync::Arc::new(|| Box::new(ResearcherScriptedLlm::default()));
+    let fx = setup_scripted(&db_url, "researcher", llm_factory).await;
+    let (db_session_id, _session_id) = scripted_session(&fx).await;
+
+    let (status, resp) = send(
+        &fx.app,
+        "POST",
+        &format!("/assistant/sessions/{db_session_id}/messages"),
+        &fx.cookie,
+        Some(json!({ "text": "research 2+2" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "send_message: {resp}");
+    let messages = resp["messages"].as_array().cloned().unwrap_or_default();
+    let spawn_msg = messages
+        .iter()
+        .find(|m| {
+            m["role"] == "assistant"
+                && m["content"]["tool_calls"].as_array().is_some_and(|c| {
+                    c.iter().any(|tc| {
+                        tc["name"] == json!("agent_spawn") || tc["name"] == json!("agent")
+                    })
+                })
+        })
+        .cloned()
+        .unwrap_or_else(|| panic!("no assistant message with an agent_spawn/agent call: {resp:#}"));
+    assert_ne!(
+        spawn_msg["content"]["requires_approval"],
+        json!(true),
+        "agent_spawn bypasses permission entirely, it must never require approval: {resp:#}"
+    );
+
+    // The child runs detached (ADR-0026) — poll until its nested turn shows
+    // up fully settled instead of racing the background task.
+    let mut sub_agent_messages: Option<Value> = None;
+    let mut detail = resp;
+    for _ in 0..20 {
+        let (status, resp) = send(
+            &fx.app,
+            "GET",
+            &format!("/assistant/sessions/{db_session_id}"),
+            &fx.cookie,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "read session: {resp}");
+        let messages = resp["messages"].as_array().cloned().unwrap_or_default();
+        if let Some(m) = messages.iter().find(|m| {
+            m["content"]["sub_agents"]
+                .as_array()
+                .is_some_and(|s| !s.is_empty())
+        }) {
+            let agents = m["content"]["sub_agents"].as_array().unwrap();
+            assert_eq!(agents[0]["profile"], json!("researcher"), "{resp:#}");
+            let child_messages = agents[0]["messages"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            if child_messages
+                .iter()
+                .any(|cm| cm["role"] == "assistant" && !cm["content"]["text"].is_null())
+            {
+                sub_agent_messages = Some(json!(child_messages));
+                break;
+            }
+        }
+        detail = resp;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let sub_agent_messages = sub_agent_messages.unwrap_or_else(|| {
+        panic!("researcher sub-agent never produced a nested, settled turn: {detail:#}")
+    });
+    assert_eq!(
+        sub_agent_messages,
+        json!([{ "role": "assistant", "content": { "text": "2 + 2 = 4.", "tool_calls": [] } }])
+    );
+
+    scripted_cleanup(&fx, db_session_id).await;
+}
+
+/// #17: a `page-writer` sub-agent's own `edit_page` call needs approval (a
+/// fresh test user has no `tool_permissions` rows, so it defaults to `Ask`)
+/// — unlike `agent_spawn` itself, this *is* a permission-gated host tool, and
+/// it is gated inside the *child* session. This is the sharpest edge of the
+/// whole feature: `PendingDecisions` keys a waiter by `(session, request_id)`,
+/// so `approve`'s `session_for_call` routing (and `send_and_collect`'s
+/// matching settle-on-`targets` fix) must address the exact child session —
+/// addressing the long-since-`Done` root (the pre-#17 behavior) would
+/// silently resolve nothing and hang. DB-gated only — see `ScriptedFixture`'s
+/// doc for why no live model is used.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn approves_a_page_writer_sub_agents_own_pending_tool_call() {
+    let Some(db_url) = test_db_url().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+
+    let path = format!("test/subagent-{}", uuid::Uuid::new_v4());
+    let llm_factory: entanglement_core::LlmFactory = {
+        let path = path.clone();
+        std::sync::Arc::new(move || {
+            Box::new(PageWriterScriptedLlm {
+                calls: 0,
+                path: path.clone(),
+            })
+        })
+    };
+    let fx = setup_scripted(&db_url, "page-writer", llm_factory).await;
+    let (db_session_id, _session_id) = scripted_session(&fx).await;
+
+    let (status, resp) = send(
+        &fx.app,
+        "POST",
+        &format!("/assistant/sessions/{db_session_id}/messages"),
+        &fx.cookie,
+        Some(json!({ "text": "draft a page" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "send_message: {resp}");
+    let messages = resp["messages"].as_array().cloned().unwrap_or_default();
+    assert!(
+        messages.iter().any(|m| {
+            m["role"] == "assistant"
+                && m["content"]["tool_calls"].as_array().is_some_and(|c| {
+                    c.iter().any(|tc| {
+                        tc["name"] == json!("agent_spawn") || tc["name"] == json!("agent")
+                    })
+                })
+        }),
+        "no agent_spawn/agent call: {resp:#}"
+    );
+
+    // Poll until the page-writer child's own edit_page call shows up,
+    // pending approval, nested under the spawning turn.
+    let mut call_id: Option<String> = None;
+    let mut detail = resp;
+    for _ in 0..20 {
+        let (status, resp) = send(
+            &fx.app,
+            "GET",
+            &format!("/assistant/sessions/{db_session_id}"),
+            &fx.cookie,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "read session: {resp}");
+        let messages = resp["messages"].as_array().cloned().unwrap_or_default();
+        for m in &messages {
+            let Some(agents) = m["content"]["sub_agents"].as_array() else {
+                continue;
+            };
+            for agent in agents {
+                let child_messages = agent["messages"].as_array().cloned().unwrap_or_default();
+                // `ToolCall` (display) and `ToolRequest` (the approval pause)
+                // are two separate, separately-persisted events — a poll can
+                // land between them and see `tool_calls` populated but
+                // `requires_approval` still false. Only treat the call as
+                // ready once both have landed; otherwise keep polling instead
+                // of asserting on a transiently-incomplete read.
+                if let Some(cm) = child_messages.iter().find(|cm| {
+                    cm["content"]["requires_approval"] == json!(true)
+                        && cm["content"]["tool_calls"]
+                            .as_array()
+                            .is_some_and(|c| c.iter().any(|tc| tc["name"] == json!("edit_page")))
+                }) {
+                    call_id = cm["content"]["tool_calls"][0]["id"]
+                        .as_str()
+                        .map(String::from);
+                }
+            }
+        }
+        detail = resp;
+        if call_id.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let call_id = call_id.unwrap_or_else(|| {
+        panic!("page-writer never reached a pending edit_page call: {detail:#}")
+    });
+
+    // Approve it — this is the routing fix: the waiter for this call lives
+    // under the child session, not the root `session_id` in the URL.
+    let (status, approved) = send(
+        &fx.app,
+        "POST",
+        &format!("/assistant/sessions/{db_session_id}/messages/0/approve"),
+        &fx.cookie,
+        Some(json!({ "decisions": [{ "tool_call_id": call_id, "approve": true }] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "approve: {approved}");
+
+    let page = site::entity::page::Entity::find()
+        .filter(site::entity::page::Column::Path.eq(path.clone()))
+        .one(&fx.db)
+        .await
+        .expect("query pages");
+    assert!(
+        page.is_some(),
+        "page-writer's edit_page never created {path} after approval: {approved:#}"
+    );
+    assert!(
+        page.as_ref().is_some_and(|p| p.private),
+        "a sub-agent-created page must default to private"
+    );
+    if let Some(p) = page {
+        let _ = site::entity::page::Entity::delete_by_id(p.id)
+            .exec(&fx.db)
+            .await;
+    }
+
+    scripted_cleanup(&fx, db_session_id).await;
+}
+
 /// Best-effort teardown: purge the `assistant_events` log (not FK-linked, so
 /// not covered by the user cascade), then delete the throwaway user
 /// (cascades `assistant_sessions`/`tool_permissions`) and the provider/model
@@ -307,7 +750,6 @@ async fn create_session_then_message_then_approve_completes_the_turn() {
 /// either) — `site_test` isn't reset between runs, so this is what keeps
 /// repeated runs from accumulating rows.
 async fn cleanup(fx: &Fixture, session_id: i32) {
-    use sea_orm::EntityTrait;
     if let Ok(Some(session)) = assistant_session::Entity::find_by_id(session_id)
         .one(&fx.db)
         .await
@@ -331,4 +773,20 @@ async fn cleanup(fx: &Fixture, session_id: i32) {
     let _ = llm_provider::Entity::delete_by_id(fx.provider_id)
         .exec(&fx.db)
         .await;
+}
+
+/// Same as `cleanup`, minus the `llm_model`/`llm_provider` rows a
+/// `ScriptedFixture` never creates.
+async fn scripted_cleanup(fx: &ScriptedFixture, session_id: i32) {
+    if let Ok(Some(session)) = assistant_session::Entity::find_by_id(session_id)
+        .one(&fx.db)
+        .await
+        && let Some(engine_session_id) = session.engine_session_id
+    {
+        let sid = entanglement_core::SessionId::new(engine_session_id);
+        let _ = site::ai::persistence::delete_session_events(&fx.db, &sid).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let _ = site::ai::persistence::delete_session_events(&fx.db, &sid).await;
+    }
+    let _ = user::Entity::delete_by_id(fx.user_id).exec(&fx.db).await;
 }

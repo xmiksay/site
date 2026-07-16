@@ -9,7 +9,7 @@ How tests are organized and how to add them. All test flows go through the
 make test            # everything: backend unit + integration + client
 make test-unit       # Rust: cargo test --lib --bins
 make test-client     # Vue: vitest (installs client deps if missing)
-make test-integration # Rust tests/ — currently a no-op (see below)
+make test-integration # Rust tests/ — DB/Ollama-gated, skip gracefully if unset/unreachable (see below)
 make verify          # pre-"done" gate: lint + all tests
 ```
 
@@ -81,18 +81,50 @@ beforeEach(() => setActivePinia(createPinia()))
 
 Component specs use `@vue/test-utils` `mount()` (already installed).
 
-## Integration tests (future — not yet present)
+## Integration tests (`tests/`)
 
-`make test-integration` gracefully no-ops while `tests/` is absent. Standing up
-real HTTP/DB integration requires:
+Real HTTP/DB integration tests live under `tests/` (`cargo test --test '*'`,
+wrapped by `make test-integration`). Each test is gated on `DATABASE_URL`
+being set — `eprintln!("skipping: DATABASE_URL not set"); return;` at the top,
+not a `#[cfg]` — so `cargo test`/`make verify` stays green without a live test
+DB, and the same binary runs for real against a scratch Postgres locally or in
+CI:
 
-1. A live Postgres (the `db` service in [`docker-compose.yml`](../docker-compose.yml),
-   or [`testcontainers`](https://docs.rs/testcontainers) spun up per test run).
-2. Running the 22 migrations in `src/migration/` via the `Migrator` before the
-   first query — the schema is Postgres-specific (raw SQL, `ON CONFLICT`,
-   fulltext index), so there is no SQLite/in-memory shortcut.
-3. Adding a `[dev-dependencies]` section to `Cargo.toml` (none exists today) for
-   the test HTTP client / testcontainers.
+```bash
+docker run -d -e POSTGRES_DB=site_test -e POSTGRES_USER=site_test \
+  -e POSTGRES_PASSWORD=site_test -p 5433:5432 postgres:17-alpine
+DATABASE_URL=postgres://site_test:site_test@localhost:5433/site_test \
+  cargo run --bin site_migration
+DATABASE_URL=postgres://site_test:site_test@localhost:5433/site_test \
+  cargo test --test '*'
+```
 
-Put such tests under `tests/` (e.g. `tests/api_pages.rs`); `make test-integration`
-picks them up automatically once the directory exists.
+`site_test` isn't reset between runs — every test creates its own throwaway
+`users` row (a random tag/uuid in the username) and deletes it (cascading)
+when done; see `tests/policy_db.rs`'s module doc for the full convention.
+
+- `tests/policy_db.rs` — `SitePolicy`/`tool_permissions` resolution against a
+  real `tool_permissions` table (FK to `users`, so it can't be faked
+  in-memory).
+- `tests/assistant_session_flow.rs` — drives a session through the real HTTP
+  API (`tower::ServiceExt::oneshot`, no socket) end to end: create, message,
+  tool call, approve. Two flavors of backend:
+  - The original acceptance test uses a real local Ollama model
+    (`qwen3.5:9b`) — also gated on `http://localhost:11434` being reachable,
+    skipped gracefully otherwise. Genuinely non-deterministic (a small model
+    occasionally emits no tool call, or is slow/flaky under concurrent local
+    load) — retried a few times in-test rather than asserted on the first
+    attempt.
+  - The sub-agent tests (#17) use a small scripted `Llm` instead (`ScriptedLlm`
+    structs implementing `entanglement_core::Llm`, replying via
+    `stream_from_response(LlmResponse { text, tool_calls })` — the same
+    pattern `entanglement-core`'s own test suite uses) so a deterministic
+    tool-call decision doesn't depend on a live model at all: DB-gated only,
+    no Ollama gate, and dramatically faster (~1s vs 15-180s). `SiteEngine::
+    spawn`'s last parameter, `llm_factory_override: Option<LlmFactory>`,
+    exists solely as this seam (`None` in production, `Some(scripted)` in
+    these tests) — see `ScriptedFixture`'s doc in the test file for why
+    session creation must bypass `POST /assistant/sessions` (its `InMsg::
+    SetModel` would rebind the session onto a real catalog-driven factory,
+    discarding the override). **Prefer this pattern over a live model** for
+    any new test that needs the engine to receive a specific tool call.

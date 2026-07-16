@@ -11,7 +11,7 @@ use entanglement_core::{ApprovalScope, Permission, SessionId};
 use entanglement_runtime::policy::{GrantStore, PermissionResolver};
 use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 
-use crate::ai::engine::user_id_from_session;
+use crate::ai::engine::{user_id_from_session, user_id_from_session_awaiting};
 use crate::ai::tool_permissions::{self, Effect};
 use crate::entity::tool_permission;
 
@@ -57,7 +57,13 @@ impl SitePolicy {
 #[async_trait]
 impl PermissionResolver for SitePolicy {
     async fn resolve(&self, session: &SessionId, tool: &str, _input: &str) -> Permission {
-        let user_id = match user_id_from_session(session) {
+        // `_awaiting` (not the bare sync lookup): this runs in a detached
+        // per-call dispatch task with no ordering guarantee relative to
+        // `engine.rs`'s session watcher, which is what actually links a
+        // freshly-spawned sub-agent child to its root — see that function's
+        // doc. A plain `user_id_from_session` here would intermittently
+        // fail-closed a legitimate sub-agent's very first tool call.
+        let user_id = match user_id_from_session_awaiting(session).await {
             Ok(id) => id,
             Err(e) => {
                 tracing::error!(error = %e, session = %session.0, "cannot resolve permission: bad session id");
@@ -143,5 +149,29 @@ mod tests {
         assert!(user_id_from_session(&SessionId::new("no-prefix-here")).is_err());
         assert!(user_id_from_session(&SessionId::new("uNOTANUMBER:abc")).is_err());
         assert!(user_id_from_session(&SessionId::new("u:abc")).is_err());
+    }
+
+    /// The DB-backed half of "a sub-agent (`researcher`/`page-writer`) child
+    /// session resolves permission against its *user's* `tool_permissions`
+    /// rules, not fail closed on its unprefixed session id" is covered by
+    /// `tests/policy_db.rs` (needs a real Postgres). This just confirms the
+    /// piece `SitePolicy::resolve`/`is_granted`/`record` all share —
+    /// `user_id_from_session` — resolves a sub-agent child the same as its
+    /// root, which is `engine.rs`'s `SESSION_PARENTS` cache, exercised here
+    /// via `crate::ai::engine`'s own test-only recording path.
+    #[test]
+    fn user_id_from_session_resolves_a_sub_agent_child_to_its_root_users_id() {
+        use crate::ai::engine::root_session_of;
+        use entanglement_core::SessionId as EngineSessionId;
+
+        let root = crate::ai::engine::SiteEngine::session_id_for_user(99);
+        let child = EngineSessionId::new_uuid();
+        // `engine.rs`'s session-lifecycle watcher normally feeds this from a
+        // live `OutEvent::SessionStarted`; call the same recording path it
+        // uses so this test needs no running `Holly`.
+        crate::ai::engine::record_session_started(child.clone(), Some(root.clone()));
+
+        assert_eq!(root_session_of(&child), root);
+        assert_eq!(user_id_from_session(&child).unwrap(), 99);
     }
 }
