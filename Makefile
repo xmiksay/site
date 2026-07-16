@@ -7,7 +7,7 @@
 export CARGO_BUILD_JOBS ?= 4
 
 .DEFAULT_GOAL := help
-.PHONY: help client build run migrate dev check fmt lint test test-unit test-integration verify clean
+.PHONY: help client build run migrate dev check fmt lint test test-unit test-integration test-client verify clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -43,7 +43,10 @@ test-unit: ## Unit tests (in-module #[cfg(test)])
 test-integration: ## Integration tests (tests/) — DB/Ollama-gated, skip gracefully if unset/unreachable
 	@test -d tests && cargo test --test '*' || echo "no integration tests yet (tests/ absent)"
 
-test: test-unit test-integration ## All tests
+test-client: ## Vue admin SPA unit tests (vitest)
+	cd client && { [ -d node_modules ] || npm ci; } && npm run test
+
+test: test-unit test-integration test-client ## All tests (backend + client)
 
 verify: lint test ## Pre-"done" gate: lint + tests
 

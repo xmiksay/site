@@ -10,7 +10,7 @@ Hybrid personal site: server-rendered public pages (MiniJinja) + Vue 3 admin SPA
 - **Database:** PostgreSQL via SeaORM 1.x; migrations run automatically on startup
 - **Public rendering:** MiniJinja templates resolved via `DesignStore` (`src/design.rs`, `src/templates.rs`). Release builds compile every template at startup; debug builds live-reload (rebuilt per render, so edits show up on the next request)
 - **Admin UI:** Vue 3 SPA (Pinia, Vue Router, Tailwind 4, Vite, TypeScript) — built into `client/dist/`, embedded via `rust-embed`, served at `/admin/*` with SPA fallback to `index.html`
-- **Markdown:** pulldown-cmark with HTML-tag directives (`<page>`, `<image>`, `<file>`, `<gallery>`, `<fen>`, `<pgn>`); `<fen>`/`<pgn>` also accept an inline body, e.g. `<pgn>…</pgn>`
+- **Markdown:** pulldown-cmark with HTML-tag directives (`<page>`, `<image>`, `<file>`, `<gallery>`, `<fen>`, `<pgn>`, `<mermaid>`, `<json>`); `<fen>`/`<pgn>`/`<mermaid>`/`<json>` also accept an inline body, e.g. `<pgn>…</pgn>`. The full directive set is one source of truth: `MARKDOWN_EXTENSIONS_DOC` (`src/markdown.rs`), shared verbatim by the MCP server instructions and the AI system prompt
 - **Auth:** Argon2 password hashing, session cookies (`site_session`, 24 h), legacy service tokens, OAuth2 (PKCE)
 - **MCP:** `rmcp` crate; server at `POST /mcp`
 - **AI:** local subsystem in `src/ai/` (LLM providers, tool registry, MCP client, tool permissions, agentic loop)
@@ -52,6 +52,8 @@ cargo run --bin site_cli -- change-password <username> <password>
 
 `/check` wraps `make verify`; `/site-mcp` exercises the MCP endpoint (local vs production).
 
+Tests: `make test` (backend unit + integration + client), `make test-unit`, `make test-client`. See [`docs/testing.md`](../docs/testing.md) for how tests are organized and how to add them (backend `#[cfg(test)]`, client vitest specs, future integration harness).
+
 ## Environment
 
 | Variable | Default | Purpose |
@@ -61,6 +63,8 @@ cargo run --bin site_cli -- change-password <username> <password>
 | `PORT` | `3000` | HTTP listen port |
 | `DESIGN_DIR` | (unset) | Override folder for `{templates, assets/{css,js,img}}`, checked before the baked `design/` bundle. Debug builds read it live on each request; release builds freeze it into RAM at startup |
 | `SERPER_API_KEY` | (unset) | Enables AI assistant `web_search` tool |
+| `PUBLIC_URL` | (unset) | Public base URL used to build absolute `<loc>` entries in `/sitemap.xml` |
+| `SELF_URL` | (unset) | Fallback base URL for the sitemap when `PUBLIC_URL` is unset |
 
 ## Conventions
 
