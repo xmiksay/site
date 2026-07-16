@@ -114,6 +114,32 @@ export interface AssistantSessionDetail extends AssistantSession {
   messages: AssistantMessage[]
 }
 
+/**
+ * One in-flight tool call surfaced live via `assistant.*` WS events, before
+ * it lands in `AssistantSessionDetail.messages` via the next REST refetch.
+ */
+export interface LiveToolCall {
+  id: string
+  name: string
+  argsText: string
+  args: any
+  status: 'pending' | 'requires_approval' | 'done'
+  output?: string
+}
+
+/**
+ * The turn currently streaming for one session — accumulated from
+ * `text_delta`/`reasoning_delta`/`tool_call*`/`tool_output` envelopes on the
+ * `assistant` WS topic. Cleared once the turn settles (`done`/`error`), at
+ * which point the authoritative message list comes from a REST refetch.
+ */
+export interface LiveTurn {
+  sessionId: number
+  text: string
+  reasoning: string
+  toolCalls: LiveToolCall[]
+}
+
 export interface McpServer {
   id: number
   name: string

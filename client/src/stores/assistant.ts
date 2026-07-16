@@ -5,6 +5,8 @@ import { useWsStore } from './ws'
 import type {
   AssistantSession,
   AssistantSessionDetail,
+  LiveToolCall,
+  LiveTurn,
   LlmModel,
   LlmModelInput,
   LlmProvider,
@@ -19,24 +21,94 @@ export const useAssistantStore = defineStore('assistant', () => {
   const sessions = ref<AssistantSession[]>([])
   const current = ref<AssistantSessionDetail | null>(null)
   const sending = ref(false)
+  // The turn currently streaming, if any — see `LiveTurn`'s doc. `null` when
+  // no session has an in-flight turn right now.
+  const live = ref<LiveTurn | null>(null)
 
+  function ensureLive(sessionId: number): LiveTurn {
+    if (!live.value || live.value.sessionId !== sessionId) {
+      live.value = { sessionId, text: '', reasoning: '', toolCalls: [] }
+    }
+    return live.value
+  }
+
+  function ensureLiveToolCall(sessionId: number, id: string, name: string): LiveToolCall {
+    const turn = ensureLive(sessionId)
+    let call = turn.toolCalls.find((c) => c.id === id)
+    if (!call) {
+      call = { id, name, argsText: '', args: undefined, status: 'pending' }
+      turn.toolCalls.push(call)
+    }
+    return call
+  }
+
+  // Real, token-level streaming from the entanglement engine (issue #16
+  // connecting to #15's `Holly`) — `src/ai/ws_bridge.rs` forwards the
+  // engine's `OutEvent`s more or less verbatim, tagged with `db_session_id`
+  // (the engine only knows its own `SessionId`, not this DB row's id).
+  // `text_delta`/`reasoning_delta`/`tool_call*` accumulate into `live` for
+  // in-progress rendering; on settle (`done`/`error`/`session_hibernated`)
+  // the authoritative message list comes from a REST refetch rather than
+  // hand-folding the event stream client-side a second time — the fold
+  // logic (`ai::projection::project`) already exists once, in Rust.
   useWsStore().on('assistant', (envelope) => {
-    if (envelope.event === 'turn_started') {
-      const payload = envelope.payload as { session_id: number }
-      if (current.value?.id === payload.session_id) sending.value = true
-      return
-    }
-    if (envelope.event === 'turn_completed') {
-      const payload = envelope.payload as AssistantSessionDetail
-      if (current.value?.id === payload.id) current.value = payload
-      const idx = sessions.value.findIndex((s) => s.id === payload.id)
-      if (idx >= 0) sessions.value[idx] = payload
-      sending.value = false
-      return
-    }
-    if (envelope.event === 'error') {
-      const payload = envelope.payload as { session_id: number; message: string }
-      if (current.value?.id === payload.session_id) sending.value = false
+    const payload = envelope.payload as Record<string, any>
+    const sessionId = payload.db_session_id as number | undefined
+    if (typeof sessionId !== 'number') return
+
+    switch (envelope.event) {
+      case 'status':
+        if (
+          (payload.state === 'thinking' || payload.state === 'waiting_approval') &&
+          current.value?.id === sessionId
+        ) {
+          sending.value = true
+        }
+        break
+      case 'text_delta':
+        ensureLive(sessionId).text += payload.text ?? ''
+        break
+      case 'reasoning_delta':
+        ensureLive(sessionId).reasoning += payload.text ?? ''
+        break
+      case 'tool_call_delta': {
+        const call = ensureLiveToolCall(sessionId, payload.request_id, payload.tool)
+        call.argsText += payload.delta ?? ''
+        break
+      }
+      case 'tool_call':
+      case 'tool_request': {
+        const call = ensureLiveToolCall(sessionId, payload.request_id, payload.tool)
+        call.argsText = payload.input ?? call.argsText
+        try {
+          call.args = JSON.parse(payload.input)
+        } catch {
+          call.args = payload.input
+        }
+        call.status = envelope.event === 'tool_request' ? 'requires_approval' : 'pending'
+        break
+      }
+      case 'tool_output': {
+        const call = live.value?.toolCalls.find((c) => c.id === payload.request_id)
+        if (call) {
+          call.status = 'done'
+          call.output = payload.output
+        }
+        break
+      }
+      case 'done':
+      case 'error':
+      case 'session_hibernated':
+        if (live.value?.sessionId === sessionId) live.value = null
+        if (current.value?.id === sessionId) {
+          sending.value = false
+          loadSession(sessionId).catch(() => {
+            // best-effort — the initiating tab already has the authoritative
+            // detail from its own REST response; other tabs retry on next
+            // manual reselect if this transient refetch fails
+          })
+        }
+        break
     }
   })
 
@@ -257,6 +329,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     sessions,
     current,
     sending,
+    live,
     loadSessions,
     createSession,
     loadSession,

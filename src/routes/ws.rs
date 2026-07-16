@@ -5,13 +5,12 @@
 //! connected user (shared content). `assistant.*` events publish only to the
 //! owning user's connections.
 //!
-//! Assistant streaming here is turn-boundary, not token-level: the engine
-//! swap (#15, entanglement `Holly` + `OutEvent` deltas) hasn't landed yet, so
-//! `src/ai/loop_driver.rs` still runs a turn synchronously to completion
-//! inside the HTTP request. `src/ai/ws_bridge.rs` publishes `turn_started` /
-//! `turn_completed` / `error` around that call so other tabs stay in sync;
-//! once #15 lands, that module is where a `Holly::subscribe()` consumer
-//! replaces these calls with real deltas.
+//! `assistant.*` carries real token-level streaming: `src/ai/ws_bridge.rs`
+//! subscribes to the entanglement engine's `Holly::subscribe()` broadcast
+//! (#15) and forwards each content/lifecycle `OutEvent` (`text_delta` /
+//! `reasoning_delta` / `tool_call*` / `status` / `done` / `error` / …) to the
+//! owning user's connections, so every tab streams the same deltas as the tab
+//! that issued the prompt.
 
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
