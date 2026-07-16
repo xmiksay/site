@@ -7,6 +7,7 @@ use axum::routing::{get, post};
 use crate::entity::page;
 use crate::repo::pages::{self as pages_repo, PageNew, PageSort};
 use crate::routes::api::error::{ApiError, ApiResult};
+use crate::routes::ws::Topic;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -158,7 +159,11 @@ pub async fn create(
         }
         other => ApiError::from(other),
     })?;
-    Ok((StatusCode::CREATED, Json(PageSummary::from(&saved))))
+    let summary = PageSummary::from(&saved);
+    state
+        .ws_hub
+        .broadcast_serialized(Topic::Pages, "created", &summary);
+    Ok((StatusCode::CREATED, Json(summary)))
 }
 
 pub async fn update(
@@ -181,7 +186,11 @@ pub async fn update(
     )
     .await?
     .ok_or(ApiError::NotFound)?;
-    Ok(Json(PageSummary::from(&updated)))
+    let summary = PageSummary::from(&updated);
+    state
+        .ws_hub
+        .broadcast_serialized(Topic::Pages, "updated", &summary);
+    Ok(Json(summary))
 }
 
 pub async fn delete_one(
@@ -189,6 +198,9 @@ pub async fn delete_one(
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
     if pages_repo::delete_by_id(&state.db, id).await? {
+        state
+            .ws_hub
+            .broadcast_event(Topic::Pages, "deleted", serde_json::json!({ "id": id }));
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound)

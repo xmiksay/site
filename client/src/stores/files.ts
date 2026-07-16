@@ -1,10 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api, apiVoid } from '../api'
+import { useListSync } from '../composables/useListSync'
 import type { FileSummary } from '../types'
 
 export const useFilesStore = defineStore('files', () => {
   const items = ref<FileSummary[]>([])
+  useListSync('files', items)
 
   async function load(mimePrefix?: string) {
     const qs = mimePrefix ? `?mime_prefix=${encodeURIComponent(mimePrefix)}` : ''

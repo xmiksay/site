@@ -6,6 +6,7 @@ use axum::routing::get;
 
 use crate::repo::files::{self as files_repo, FileMetaUpdate, FileWithThumb, NewFile};
 use crate::routes::api::error::{ApiError, ApiResult};
+use crate::routes::ws::Topic;
 use crate::state::AppState;
 
 pub const MAX_UPLOAD_SIZE: usize = 50 * 1024 * 1024;
@@ -142,20 +143,21 @@ pub async fn upload(
     )
     .await?;
     let m = created.model;
-    Ok((
-        StatusCode::CREATED,
-        Json(FileSummary {
-            id: m.id,
-            hash: m.hash,
-            title: files_repo::title_from_path(&m.path),
-            path: m.path,
-            description: m.description,
-            mimetype: m.mimetype,
-            size_bytes: m.size_bytes,
-            has_thumbnail: created.has_thumbnail,
-            created_at: m.created_at.to_string(),
-        }),
-    ))
+    let summary = FileSummary {
+        id: m.id,
+        hash: m.hash,
+        title: files_repo::title_from_path(&m.path),
+        path: m.path,
+        description: m.description,
+        mimetype: m.mimetype,
+        size_bytes: m.size_bytes,
+        has_thumbnail: created.has_thumbnail,
+        created_at: m.created_at.to_string(),
+    };
+    state
+        .ws_hub
+        .broadcast_serialized(Topic::Files, "created", &summary);
+    Ok((StatusCode::CREATED, Json(summary)))
 }
 
 pub async fn update(
@@ -173,7 +175,11 @@ pub async fn update(
     )
     .await?
     .ok_or(ApiError::NotFound)?;
-    Ok(Json(FileSummary::from(updated)))
+    let summary = FileSummary::from(updated);
+    state
+        .ws_hub
+        .broadcast_serialized(Topic::Files, "updated", &summary);
+    Ok(Json(summary))
 }
 
 pub async fn delete_one(
@@ -181,6 +187,9 @@ pub async fn delete_one(
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
     if files_repo::delete_by_id(&state.db, id).await? {
+        state
+            .ws_hub
+            .broadcast_event(Topic::Files, "deleted", serde_json::json!({ "id": id }));
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound)

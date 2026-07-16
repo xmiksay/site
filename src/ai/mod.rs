@@ -5,6 +5,7 @@ pub mod local_tools;
 pub mod mcp_client;
 pub mod tool_permissions;
 pub mod tool_registry;
+pub mod ws_bridge;
 
 // New engine (entanglement-core/-runtime/-provider) adapters — Phase 1 of the
 // engine swap (issue #15), wired into `state.rs`/`handlers` as of the

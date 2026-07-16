@@ -7,6 +7,7 @@ use axum::routing::get;
 use crate::entity::gallery;
 use crate::repo::galleries::{self as galleries_repo, GalleryInput as RepoGalleryInput};
 use crate::routes::api::error::{ApiError, ApiResult};
+use crate::routes::ws::Topic;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -66,6 +67,9 @@ pub async fn create(
         },
     )
     .await?;
+    state
+        .ws_hub
+        .broadcast_serialized(Topic::Galleries, "created", &saved);
     Ok((StatusCode::CREATED, Json(saved)))
 }
 
@@ -89,6 +93,9 @@ pub async fn update(
     )
     .await?
     .ok_or(ApiError::NotFound)?;
+    state
+        .ws_hub
+        .broadcast_serialized(Topic::Galleries, "updated", &updated);
     Ok(Json(updated))
 }
 
@@ -97,6 +104,9 @@ pub async fn delete_one(
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
     if galleries_repo::delete_by_id(&state.db, id).await? {
+        state
+            .ws_hub
+            .broadcast_event(Topic::Galleries, "deleted", serde_json::json!({ "id": id }));
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound)

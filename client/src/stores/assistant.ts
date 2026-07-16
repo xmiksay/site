@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api, apiVoid } from '../api'
+import { useWsStore } from './ws'
 import type {
   AssistantSession,
   AssistantSessionDetail,
@@ -18,6 +19,26 @@ export const useAssistantStore = defineStore('assistant', () => {
   const sessions = ref<AssistantSession[]>([])
   const current = ref<AssistantSessionDetail | null>(null)
   const sending = ref(false)
+
+  useWsStore().on('assistant', (envelope) => {
+    if (envelope.event === 'turn_started') {
+      const payload = envelope.payload as { session_id: number }
+      if (current.value?.id === payload.session_id) sending.value = true
+      return
+    }
+    if (envelope.event === 'turn_completed') {
+      const payload = envelope.payload as AssistantSessionDetail
+      if (current.value?.id === payload.id) current.value = payload
+      const idx = sessions.value.findIndex((s) => s.id === payload.id)
+      if (idx >= 0) sessions.value[idx] = payload
+      sending.value = false
+      return
+    }
+    if (envelope.event === 'error') {
+      const payload = envelope.payload as { session_id: number; message: string }
+      if (current.value?.id === payload.session_id) sending.value = false
+    }
+  })
 
   async function loadSessions() {
     sessions.value = await api<AssistantSession[]>('/api/assistant/sessions')

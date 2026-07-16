@@ -14,10 +14,11 @@ src/
     public/               # catch-all, files, search, sitemap, tags
     api/                  # auth, pages, tags, files, galleries, menu,
                           # tokens, markdown, paths, assistant, llm,
-                          # tool-permissions
+                          # tool-permissions, ws
     mcp.rs                # MCP JSON-RPC endpoint
     oauth.rs              # OAuth2 server (register/authorize/token/well-known)
     revision.rs
+    ws.rs                 # global WebSocket hub (WsHub) + GET /api/ws upgrade
   entity/                 # SeaORM entity models
     user, token, page, page_revision, tag, menu,
     file, file_blob, file_thumbnail, gallery,
@@ -26,13 +27,14 @@ src/
     assistant_{session,event},
     user_mcp_server, tool_permission
   migration/              # m_001 … m_023
-  ai/                     # config, handlers, tool_permissions — plus the
-                          # entanglement-core/-runtime engine adapters:
-                          # engine, catalog, mcp, persistence, policy,
-                          # projection/, tools/. (llm, local_tools, mcp_client,
-                          # tool_registry are the pre-engine-swap modules —
-                          # unreachable from AppState, kept compiling only
-                          # until issue #15 Phase 4 deletes them.)
+  ai/                     # config, handlers, tool_permissions, ws_bridge —
+                          # plus the entanglement-core/-runtime engine
+                          # adapters: engine, catalog, mcp, persistence,
+                          # policy, projection/, tools/. (llm, local_tools,
+                          # mcp_client, tool_registry are the pre-engine-swap
+                          # modules — unreachable from AppState, kept
+                          # compiling only until issue #15 Phase 4 deletes
+                          # them.)
   auth.rs config.rs design.rs files.rs
   markdown.rs path_util.rs repo state.rs templates.rs
 
@@ -126,6 +128,10 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 
 `auth/{login,logout,me}`, `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve`, `mcp-servers` CRUD, `providers` CRUD, `models` CRUD, `permissions` CRUD (tool-permission rules).
 
+| Path | Method | Description |
+|---|---|---|
+| `/api/ws` | GET (upgrade) | Global authenticated WebSocket — see below |
+
 ### OAuth2 + MCP
 
 | Path | Method | Description |
@@ -190,12 +196,37 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
 - `handlers/` — `/api/assistant/*`: `sessions/` (CRUD + `messages`/`approve`,
   which drive a turn through `Holly` and project `assistant_events` on the
   way out), `mcp_servers.rs`, `providers.rs`, `models.rs`, `permissions.rs`.
+- `ws_bridge.rs` — a single process-wide task subscribing to
+  `agent_engine.holly.subscribe()` (issue #16): forwards the engine's
+  content/lifecycle `OutEvent`s (`Status`, `TextDelta`, `ReasoningDelta`,
+  `ToolCallDelta`, `ToolCall`, `ToolRequest`, `ToolOutput`, `Done`, `Error`,
+  `SessionHibernated`) to `WsHub` as `assistant.*` envelopes, resolving each
+  event's `SessionId` to both the owning `user_id`
+  (`engine::user_id_from_session`) and the DB `assistant_sessions.id` (a
+  small lazily-populated cache keyed by `engine_session_id`, since the
+  engine has no notion of the DB row). This is genuine token-level
+  streaming — see the WebSocket Hub section below.
 
 `llm/`, `local_tools/`, `mcp_client/`, and `tool_registry.rs` are the
 pre-engine-swap modules: no longer reachable from `AppState`, kept compiling
 standalone until issue #15 Phase 4 deletes them outright.
 
 Configured per user via the admin SPA: `/admin/{providers,models,assistant,mcp-servers,tool-permissions}`. Provider API keys live in `llm_providers.api_key` (set through the UI, never in `.env`).
+
+## WebSocket Hub (`src/routes/ws.rs`)
+
+`GET /api/ws` upgrades to a single per-tab WebSocket, authenticated the same way as the rest of `/api/*` (session cookie, checked before the upgrade). `WsHub` (in `AppState.ws_hub`) is a `DashMap<user_id, Vec<mpsc::Sender<Envelope>>>` registry; each open tab holds one entry.
+
+Frames are JSON `Envelope { topic, event, payload }`, `topic` one of `assistant | pages | files | galleries`:
+
+- **`pages` / `files` / `galleries`** — `created`/`updated` (payload = the same summary shape the REST endpoint returns) / `deleted` (payload `{ id }`). Broadcast to **every** connected user via `WsHub::broadcast`/`broadcast_serialized` — these are shared site entities, not per-user. Published from `src/routes/api/{pages,files,galleries}.rs` after a successful create/update/delete.
+- **`assistant`** — `turn_started` (`{ session_id }`), `turn_completed` (payload = full `SessionDetail`), `error` (`{ session_id, message }`). Published only to the owning user's own connections via `WsHub::publish`, from `src/ai/ws_bridge.rs`.
+
+Server sends a WS ping every 30s; a failed send (or a client `Close` frame) drops that connection's sender from the registry. `WsHub::publish`/`broadcast` also prune any sender whose receiver has been dropped.
+
+**Known limitation:** `assistant.*` is turn-boundary sync, not token-level streaming — the entanglement engine swap (#15) that would provide `Holly::subscribe()` deltas (`TextDelta`/`ReasoningDelta`/`ToolCallDelta`) hasn't landed. `ws_bridge.rs` is where that subscription plugs in once #15 ships.
+
+Client side: `client/src/stores/ws.ts` owns the single connection (reconnect with exponential backoff) and topic→handler dispatch; `client/src/composables/useListSync.ts` wires `pages`/`files`/`galleries` events into the matching Pinia store's `items` list; `client/src/stores/assistant.ts` applies `assistant.*` events to session state. `client/src/App.vue` connects after login, disconnects on logout.
 
 ## Docker
 

@@ -3,6 +3,7 @@ pub mod mcp;
 pub mod oauth;
 pub mod public;
 pub mod revision;
+pub mod ws;
 
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 
