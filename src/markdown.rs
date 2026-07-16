@@ -31,7 +31,7 @@
 //! `path`/`id`/`hash` optional.
 //!
 //! Lookup keys: exactly one of
-//! - file-based (`<file>`/`<image>`/`<fen>`/`<pgn>`/`<mermaid>`): `path`, `id`, or `hash` (sha256)
+//! - file-based (`<file>`/`<image>`/`<fen>`/`<pgn>`/`<mermaid>`/`<json>`): `path`, `id`, or `hash` (sha256)
 //! - `<gallery>`: `path` or `id`
 //! - `<page>`: `path` or `id`
 //!
@@ -58,11 +58,11 @@ are directives; any other `<tag>` is passed through as raw HTML. Lookup keys:
 - `<file path=\"...\">` — embeds an image (if mime image/*) or a download link otherwise.
 - `<image path=\"...\" alt=\"...\">` — force image embed (with link to full size and caption).
 - `<gallery path=\"...\">` — embeds a gallery grid of thumbnails.
-- `<fen path=\"...\" size=\"small|large\">` — static chess board from a stored .fen file.
+- `<fen path=\"...\" size=\"small|large\">` — static chess board from a stored .fen file (`sm`/`lg` accepted as aliases).
 - `<fen>FEN string</fen>` — static chess board from an inline FEN position.
 - `<pgn path=\"...\" move=\"N\" size=\"small|large\">` — playable game from a stored .pgn file.
 - `<pgn move=\"N\">PGN moves</pgn>` — playable game from an inline PGN (multiple lines allowed).
-- `<mermaid path=\"...\" theme=\"default|dark|forest|neutral\">` — diagram rendered to SVG from a stored Mermaid file.
+- `<mermaid path=\"...\" theme=\"default|dark|forest|neutral\" size=\"small|large\">` — diagram rendered to SVG from a stored Mermaid file.
 - `<mermaid theme=\"...\">DIAGRAM</mermaid>` — diagram rendered to SVG from an inline Mermaid definition (multiple lines allowed).
 - A fenced code block with info string `mermaid` also renders as a diagram, same as `<mermaid>`.
 - `<json path=\"...\" query=\".rows[]\" type=\"table\">` — run a jq query over a JSON file blob (or inline `<json query=\"...\">{...}</json>`) and render the result; `type=\"table\"` builds an HTML table.
@@ -75,16 +75,16 @@ use std::sync::LazyLock;
 
 use minijinja::{Environment, context};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use syntect::highlighting::{Theme, ThemeSet};
 use syntect::html::highlighted_html_for_string;
 use syntect::parsing::SyntaxSet;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::entity::file as file_entity;
-use crate::repo::files::title_from_path;
 use crate::entity::gallery as gallery_entity;
 use crate::entity::page as page_entity;
 use crate::files;
+use crate::repo::files::title_from_path;
 
 struct RenderCtx<'a> {
     db: &'a DatabaseConnection,
@@ -249,8 +249,9 @@ impl Directive {
 
 /// Surface names recognized as directives in tag form. Everything else (incl. a
 /// real `<img>`) is left untouched as raw HTML.
-const DIRECTIVE_NAMES: [&str; 8] =
-    ["page", "file", "image", "gallery", "fen", "pgn", "mermaid", "json"];
+const DIRECTIVE_NAMES: [&str; 8] = [
+    "page", "file", "image", "gallery", "fen", "pgn", "mermaid", "json",
+];
 
 fn is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-'
@@ -600,11 +601,7 @@ fn block(html: String) -> String {
 
 /// Render a `markdown/<name>.html` template; on failure, log and emit a
 /// visible inline error so authors can spot it.
-fn render_md_template(
-    ctx: &RenderCtx<'_>,
-    name: &str,
-    tctx: minijinja::value::Value,
-) -> String {
+fn render_md_template(ctx: &RenderCtx<'_>, name: &str, tctx: minijinja::value::Value) -> String {
     let path = format!("markdown/{name}.html");
     match ctx.tmpl.get_template(&path) {
         Ok(t) => match t.render(tctx) {
@@ -668,7 +665,11 @@ fn parse_file_lookup(d: &Directive, name: &str) -> Result<FileLookup, String> {
 
 async fn fetch_file(db: &DatabaseConnection, lookup: &FileLookup) -> Option<file_entity::Model> {
     match lookup {
-        FileLookup::Id(id) => file_entity::Entity::find_by_id(*id).one(db).await.ok().flatten(),
+        FileLookup::Id(id) => file_entity::Entity::find_by_id(*id)
+            .one(db)
+            .await
+            .ok()
+            .flatten(),
         FileLookup::Hash(h) => file_entity::Entity::find()
             .filter(file_entity::Column::Hash.eq(h.as_str()))
             .one(db)
@@ -744,7 +745,11 @@ fn parse_page_lookup(d: &Directive) -> Result<PageLookup, String> {
 
 async fn fetch_page(db: &DatabaseConnection, lookup: &PageLookup) -> Option<page_entity::Model> {
     match lookup {
-        PageLookup::Id(id) => page_entity::Entity::find_by_id(*id).one(db).await.ok().flatten(),
+        PageLookup::Id(id) => page_entity::Entity::find_by_id(*id)
+            .one(db)
+            .await
+            .ok()
+            .flatten(),
         PageLookup::Path(p) => page_entity::Entity::find()
             .filter(page_entity::Column::Path.eq(crate::path_util::normalize(p)))
             .one(db)
@@ -1034,7 +1039,10 @@ async fn directive_mermaid(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
                 return block(html);
             };
             let Some(src) = read_text_blob(ctx.db, &file.hash).await else {
-                let html = format!(r#"<p><em>[mermaid blob for "{}" missing]</em></p>"#, file.path);
+                let html = format!(
+                    r#"<p><em>[mermaid blob for "{}" missing]</em></p>"#,
+                    file.path
+                );
                 return block(html);
             };
             src
@@ -1046,17 +1054,18 @@ async fn directive_mermaid(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
     // off the async worker. On any failure, leave `svg` empty so the template
     // falls back to showing the raw source in a code block.
     let src = source.clone();
-    let svg = match tokio::task::spawn_blocking(move || mermaid_svg::render_with(&src, &theme)).await {
-        Ok(Ok(svg)) => svg,
-        Ok(Err(e)) => {
-            tracing::warn!(error = %e, "mermaid render failed; showing source");
-            String::new()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "mermaid render task panicked");
-            String::new()
-        }
-    };
+    let svg =
+        match tokio::task::spawn_blocking(move || mermaid_svg::render_with(&src, &theme)).await {
+            Ok(Ok(svg)) => svg,
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "mermaid render failed; showing source");
+                String::new()
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "mermaid render task panicked");
+                String::new()
+            }
+        };
 
     let html = render_md_template(
         ctx,
@@ -1090,7 +1099,10 @@ async fn directive_json(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
                 Err(msg) => return msg,
             };
             let Some(file) = fetch_file(ctx.db, &lookup).await else {
-                return format!("\n\n*[json: file \"{}\" not found]*\n\n", lookup_label(&lookup));
+                return format!(
+                    "\n\n*[json: file \"{}\" not found]*\n\n",
+                    lookup_label(&lookup)
+                );
             };
             let Some(src) = read_text_blob(ctx.db, &file.hash).await else {
                 return format!("\n\n*[json: blob for \"{}\" missing]*\n\n", file.path);
@@ -1131,7 +1143,13 @@ fn run_jq(query: &str, input: serde_json::Value) -> Result<Vec<serde_json::Value
     let arena = Arena::default();
     let loader = Loader::new(jaq_std::defs().chain(jaq_json::defs()));
     let modules = loader
-        .load(&arena, File { code: query, path: () })
+        .load(
+            &arena,
+            File {
+                code: query,
+                path: (),
+            },
+        )
         .map_err(|errs| format!("{errs:?}"))?;
     let filter = Compiler::default()
         .with_funs(jaq_std::funs().chain(jaq_json::funs()))
@@ -1153,9 +1171,7 @@ fn run_jq(query: &str, input: serde_json::Value) -> Result<Vec<serde_json::Value
 /// `.rows[]` and `.rows` both work. Object items contribute a header row (the
 /// first-seen union of keys); array items become header-less cell rows. Mixing
 /// objects and arrays is rejected.
-fn json_table(
-    outputs: Vec<serde_json::Value>,
-) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+fn json_table(outputs: Vec<serde_json::Value>) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
     use serde_json::Value;
 
     // A single jq output that is an array of objects (e.g. `.rows`) is the table
@@ -1201,7 +1217,13 @@ fn json_table(
     } else if all_arrays {
         let rows = items
             .iter()
-            .map(|item| item.as_array().unwrap().iter().map(stringify_cell).collect())
+            .map(|item| {
+                item.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(stringify_cell)
+                    .collect()
+            })
             .collect();
         Ok((Vec::new(), rows))
     } else {
@@ -1525,14 +1547,20 @@ mod tests {
     #[test]
     fn highlight_empty_lang_no_data_attr() {
         let html = highlight_code_block("", "plain text");
-        assert!(html.starts_with("<pre class=\"code-block\">"), "got: {html}");
+        assert!(
+            html.starts_with("<pre class=\"code-block\">"),
+            "got: {html}"
+        );
         assert!(!html.contains("data-lang"));
     }
 
     #[test]
     fn highlight_has_no_blank_lines() {
         let html = highlight_code_block("rust", "fn a() {}\n\nfn b() {}\n");
-        assert!(!html.contains("\n\n"), "blank line in emitted HTML: {html:?}");
+        assert!(
+            !html.contains("\n\n"),
+            "blank line in emitted HTML: {html:?}"
+        );
     }
 
     fn jv(s: &str) -> serde_json::Value {

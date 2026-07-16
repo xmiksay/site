@@ -23,10 +23,22 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(AssistantSessions::UserId).integer().not_null())
+                    .col(
+                        ColumnDef::new(AssistantSessions::UserId)
+                            .integer()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(AssistantSessions::Title).string().not_null())
-                    .col(ColumnDef::new(AssistantSessions::SystemPrompt).text().null())
-                    .col(ColumnDef::new(AssistantSessions::Provider).string().not_null())
+                    .col(
+                        ColumnDef::new(AssistantSessions::SystemPrompt)
+                            .text()
+                            .null(),
+                    )
+                    .col(
+                        ColumnDef::new(AssistantSessions::Provider)
+                            .string()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(AssistantSessions::Model).string().not_null())
                     .col(
                         ColumnDef::new(AssistantSessions::CreatedAt)

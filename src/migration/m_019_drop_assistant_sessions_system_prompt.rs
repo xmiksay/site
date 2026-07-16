@@ -26,7 +26,11 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(AssistantSessions::Table)
-                    .add_column(ColumnDef::new(AssistantSessions::SystemPrompt).text().null())
+                    .add_column(
+                        ColumnDef::new(AssistantSessions::SystemPrompt)
+                            .text()
+                            .null(),
+                    )
                     .to_owned(),
             )
             .await

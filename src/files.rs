@@ -17,10 +17,7 @@ pub async fn put_blob<C: ConnectionTrait>(db: &C, hash: &str, data: &[u8]) -> Re
     Ok(())
 }
 
-pub async fn read_blob<C: ConnectionTrait>(
-    db: &C,
-    hash: &str,
-) -> Result<Option<Vec<u8>>, DbErr> {
+pub async fn read_blob<C: ConnectionTrait>(db: &C, hash: &str) -> Result<Option<Vec<u8>>, DbErr> {
     use sea_orm::FromQueryResult;
 
     #[derive(FromQueryResult)]
@@ -63,4 +60,36 @@ pub fn make_thumbnail(data: &[u8], mimetype: &str) -> Option<Thumbnail> {
         height,
         mimetype: "image/jpeg",
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_blob_matches_known_vectors() {
+        // Canonical SHA-256 test vectors — content addressing must stay stable,
+        // since these hashes are the primary key in `file_blobs`.
+        assert_eq!(
+            hash_blob(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            hash_blob(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn hash_blob_is_deterministic_and_content_dependent() {
+        let a = hash_blob(b"hello world");
+        assert_eq!(a, hash_blob(b"hello world"));
+        assert_ne!(a, hash_blob(b"hello world!"));
+    }
+
+    #[test]
+    fn make_thumbnail_skips_non_images() {
+        assert!(make_thumbnail(b"not an image", "text/plain").is_none());
+        assert!(make_thumbnail(b"", "application/pdf").is_none());
+    }
 }

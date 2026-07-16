@@ -93,11 +93,7 @@ fn build_tree(items: &[MenuItem]) -> Vec<MenuNode> {
         }
     }
 
-    fn build(
-        idx: usize,
-        items: &[MenuItem],
-        children_of: &[Vec<usize>],
-    ) -> MenuNode {
+    fn build(idx: usize, items: &[MenuItem], children_of: &[Vec<usize>]) -> MenuNode {
         MenuNode {
             path: items[idx].path.clone(),
             label: items[idx].label.clone(),

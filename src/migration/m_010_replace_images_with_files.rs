@@ -30,7 +30,11 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(FileBlobs::Data).binary().not_null())
-                    .col(ColumnDef::new(FileBlobs::SizeBytes).big_integer().not_null())
+                    .col(
+                        ColumnDef::new(FileBlobs::SizeBytes)
+                            .big_integer()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(FileBlobs::CreatedAt)
                             .timestamp_with_time_zone()
@@ -103,18 +107,10 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .primary_key(),
                     )
-                    .col(
-                        ColumnDef::new(FileThumbnails::Hash)
-                            .char_len(64)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(FileThumbnails::Hash).char_len(64).not_null())
                     .col(ColumnDef::new(FileThumbnails::Width).integer().not_null())
                     .col(ColumnDef::new(FileThumbnails::Height).integer().not_null())
-                    .col(
-                        ColumnDef::new(FileThumbnails::Mimetype)
-                            .string()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(FileThumbnails::Mimetype).string().not_null())
                     .col(
                         ColumnDef::new(FileThumbnails::CreatedAt)
                             .timestamp_with_time_zone()

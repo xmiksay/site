@@ -75,6 +75,20 @@ docker compose exec app ./site_migration
 | `PORT` | HTTP listen port | `3000` |
 | `DESIGN_DIR` | Override folder for `{templates,css,js,img}`, checked before the baked `design/` bundle (debug: live reload; release: frozen into RAM at startup) | unset |
 | `SERPER_API_KEY` | Optional — enables the `web_search` tool inside the AI assistant | unset |
+| `PUBLIC_URL` | Public base URL for absolute `<loc>` entries in `/sitemap.xml` | unset (falls back to `SELF_URL`, then `http://localhost:3000`) |
+| `SELF_URL` | Fallback base URL for the sitemap when `PUBLIC_URL` is unset | unset |
+
+## Testing
+
+```bash
+make test          # backend unit + integration + client
+make test-unit     # Rust: cargo test --lib --bins
+make test-client   # Vue admin SPA: vitest
+make verify        # lint + all tests (pre-"done" gate)
+```
+
+See [`docs/testing.md`](docs/testing.md) for how tests are organized and how to
+add backend unit tests, client (vitest) specs, and future integration tests.
 
 ## Docker image (standalone)
 

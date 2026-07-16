@@ -1,8 +1,8 @@
+use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
 use sea_orm::EntityTrait;
 
 use crate::entity::file_thumbnail;
@@ -24,10 +24,7 @@ pub async fn serve(State(state): State<AppState>, Path(hash): Path<String>) -> R
         Ok(Some(data)) => (
             [
                 (header::CONTENT_TYPE, f.mimetype.clone()),
-                (
-                    header::CACHE_CONTROL,
-                    "public, max-age=86400".to_string(),
-                ),
+                (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
             ],
             data,
         )
@@ -36,24 +33,21 @@ pub async fn serve(State(state): State<AppState>, Path(hash): Path<String>) -> R
     }
 }
 
-pub async fn serve_thumbnail(
-    State(state): State<AppState>,
-    Path(hash): Path<String>,
-) -> Response {
+pub async fn serve_thumbnail(State(state): State<AppState>, Path(hash): Path<String>) -> Response {
     let Ok(Some(f)) = files_repo::find_by_hash(&state.db, &hash).await else {
         return (axum::http::StatusCode::NOT_FOUND, "Not found").into_response();
     };
-    let Ok(Some(thumb)) = file_thumbnail::Entity::find_by_id(f.id).one(&state.db).await else {
+    let Ok(Some(thumb)) = file_thumbnail::Entity::find_by_id(f.id)
+        .one(&state.db)
+        .await
+    else {
         return (axum::http::StatusCode::NOT_FOUND, "Not found").into_response();
     };
     match read_blob(&state.db, &thumb.hash).await {
         Ok(Some(data)) => (
             [
                 (header::CONTENT_TYPE, thumb.mimetype.clone()),
-                (
-                    header::CACHE_CONTROL,
-                    "public, max-age=86400".to_string(),
-                ),
+                (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
             ],
             data,
         )

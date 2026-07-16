@@ -26,11 +26,7 @@ pub trait LocalTool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn input_schema(&self) -> Value;
-    async fn call(
-        &self,
-        ctx: &LocalToolCtx,
-        args: Value,
-    ) -> Result<Value, ToolDispatchError>;
+    async fn call(&self, ctx: &LocalToolCtx, args: Value) -> Result<Value, ToolDispatchError>;
 }
 
 pub fn default_tools(serper_api_key: Option<String>) -> Vec<Arc<dyn LocalTool>> {

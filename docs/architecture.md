@@ -12,8 +12,8 @@ src/
     site_cli.rs           # create-user, change-password
   routes/
     public/               # catch-all, files, search, sitemap, tags
-    api/                  # auth, pages, tags, files, galleries, menu,
-                          # tokens, markdown, paths, assistant, llm,
+    api/                  # auth, users, pages, tags, files, galleries,
+                          # menu, tokens, markdown, paths, assistant, llm,
                           # tool-permissions, ws
     mcp.rs                # MCP JSON-RPC endpoint
     oauth.rs              # OAuth2 server (register/authorize/token/well-known)
@@ -126,7 +126,7 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 
 ### JSON API `/api/*` (session cookie required)
 
-`auth/{login,logout,me}`, `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve`, `mcp-servers` CRUD, `providers` CRUD, `models` CRUD, `permissions` CRUD (tool-permission rules).
+`auth/{login,logout,me}`, `users` (`GET/POST /`, `DELETE /{id}`, `PUT /{id}/password`), `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve`, `mcp-servers` CRUD, `providers` CRUD, `models` CRUD, `permissions` CRUD (tool-permission rules).
 
 | Path | Method | Description |
 |---|---|---|
@@ -152,7 +152,24 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 - **Files:** `list_files`, `create_file`, `read_file`, `update_file`, `delete_file`
 - **Galleries:** `list_galleries`, `read_gallery`, `create_gallery`, `update_gallery`, `delete_gallery`
 
-`SERVER_INSTRUCTIONS` are loaded from a private `CLAUDE` page if present (editable via admin UI), else fall back to a default constant in `src/routes/mcp.rs`. Tool/parameter descriptions live in `handle_tools_list()`.
+Server instructions are assembled by `server_instructions()` = `SERVER_INSTRUCTIONS_HEADER` + `MARKDOWN_EXTENSIONS_DOC` (`src/routes/mcp.rs`, `src/markdown.rs`). If a private `CLAUDE` page exists (editable via admin UI / MCP), its markdown replaces the assembled default entirely — so keep that page in sync with the code. Tool/parameter descriptions live in `handle_tools_list()`.
+
+### Markdown directives
+
+The renderer recognizes exactly 8 HTML-tag directives — the `DIRECTIVE_NAMES` allow-list in `src/markdown.rs`; any other `<tag>` passes through as raw HTML:
+
+| Directive | Lookup keys | Other attrs | Inline body |
+|---|---|---|---|
+| `<page>` | `path` \| `id` | — | no |
+| `<file>` | `path` \| `id` \| `hash` | — | no |
+| `<image>` | `path` \| `id` \| `hash` | `alt` | no |
+| `<gallery>` | `path` \| `id` | — | no |
+| `<fen>` | `path` \| `id` \| `hash` \| body | `size` (`small`/`large`, `sm`/`lg`) | yes |
+| `<pgn>` | `path` \| `id` \| `hash` \| body | `size`, `move` | yes |
+| `<mermaid>` | `path` \| `id` \| `hash` \| body | `theme`, `size` | yes |
+| `<json>` | `path` \| `id` \| `hash` \| body | `query` (jq, required), `type` (`table`) | yes |
+
+A fenced code block with info string `mermaid` also renders as a diagram. **Single source of truth:** the human/AI-facing description is the `MARKDOWN_EXTENSIONS_DOC` const (`src/markdown.rs`), reused verbatim by the MCP server instructions, the AI system prompt, and the local `site_tools` description — edit it there, not in each surface.
 
 Auth: `Authorization: Bearer <token>` — accepts both service tokens (legacy, no expiry) and OAuth2 access tokens (1 h, refreshable). Handler resolves to `user_id` for audit fields.
 

@@ -1,7 +1,9 @@
 /target
 .env
+/coverage
 /client/node_modules
 /client/dist
+/client/coverage
 /design/preview
 /design/node_modules
 .mcp.json

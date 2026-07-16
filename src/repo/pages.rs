@@ -28,7 +28,11 @@ pub async fn list_children(
     } else {
         format!("{prefix}%")
     };
-    let private_clause = if include_private { "TRUE" } else { "private = FALSE" };
+    let private_clause = if include_private {
+        "TRUE"
+    } else {
+        "private = FALSE"
+    };
     let sql = format!(
         "SELECT
             split_part(substr(path, $1::int + 1), '/', 1) AS name,
@@ -137,10 +141,7 @@ pub async fn find_by_path(
         .await
 }
 
-pub async fn list_all(
-    db: &DatabaseConnection,
-    sort: PageSort,
-) -> Result<Vec<page::Model>, DbErr> {
+pub async fn list_all(db: &DatabaseConnection, sort: PageSort) -> Result<Vec<page::Model>, DbErr> {
     let select = page::Entity::find();
     let select = match sort {
         PageSort::PathAsc => select.order_by_asc(page::Column::Path),
@@ -241,15 +242,17 @@ pub async fn search(
 
     // Count
     let count_sql = format!("SELECT count(*) AS c FROM pages WHERE {where_sql}");
-    let count_stmt =
-        Statement::from_sql_and_values(DbBackend::Postgres, count_sql, values.clone());
+    let count_stmt = Statement::from_sql_and_values(DbBackend::Postgres, count_sql, values.clone());
     let total: i64 = db
         .query_one(count_stmt)
         .await?
         .and_then(|r| r.try_get_by::<i64, _>("c").ok())
         .unwrap_or(0);
     if total == 0 {
-        return Ok(SearchResult { pages: vec![], total: 0 });
+        return Ok(SearchResult {
+            pages: vec![],
+            total: 0,
+        });
     }
 
     // Rows
@@ -273,7 +276,10 @@ pub async fn search(
     );
     let stmt = Statement::from_sql_and_values(DbBackend::Postgres, select_sql, values);
     let pages = page::Entity::find().from_raw_sql(stmt).all(db).await?;
-    Ok(SearchResult { pages, total: total as u64 })
+    Ok(SearchResult {
+        pages,
+        total: total as u64,
+    })
 }
 
 pub async fn create(

@@ -62,7 +62,10 @@ impl LocalTool for WebFetch {
             .map_err(|e| ToolDispatchError::Execution(format!("Fetch failed: {e}")))?;
 
         if !resp.status().is_success() {
-            return Err(ToolDispatchError::Execution(format!("HTTP {}", resp.status())));
+            return Err(ToolDispatchError::Execution(format!(
+                "HTTP {}",
+                resp.status()
+            )));
         }
 
         let bytes = resp

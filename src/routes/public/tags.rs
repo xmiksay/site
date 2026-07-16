@@ -1,7 +1,7 @@
+use axum::Router;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
-use axum::Router;
 use sea_orm::EntityTrait;
 
 use crate::entity::tag;
@@ -24,13 +24,11 @@ fn encode_query(s: &str) -> String {
     out
 }
 
-pub async fn by_tag(
-    State(state): State<AppState>,
-    Path(tag_id): Path<i32>,
-) -> Response {
+pub async fn by_tag(State(state): State<AppState>, Path(tag_id): Path<i32>) -> Response {
     match tag::Entity::find_by_id(tag_id).one(&state.db).await {
-        Ok(Some(t)) => Redirect::to(&format!("/search?tag={}", encode_query(&t.name)))
-            .into_response(),
+        Ok(Some(t)) => {
+            Redirect::to(&format!("/search?tag={}", encode_query(&t.name))).into_response()
+        }
         _ => Redirect::to("/search").into_response(),
     }
 }

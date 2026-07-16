@@ -15,7 +15,9 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .map(PathBuf::from),
-            serper_api_key: std::env::var("SERPER_API_KEY").ok().filter(|s| !s.is_empty()),
+            serper_api_key: std::env::var("SERPER_API_KEY")
+                .ok()
+                .filter(|s| !s.is_empty()),
         }
     }
 }

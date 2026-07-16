@@ -18,7 +18,10 @@ const CODE_MINUTES: i64 = 10;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/oauth/register", post(register))
-        .route("/oauth/authorize", get(authorize_form).post(authorize_submit))
+        .route(
+            "/oauth/authorize",
+            get(authorize_form).post(authorize_submit),
+        )
         .route("/oauth/token", post(token))
         .route(
             "/.well-known/oauth-protected-resource",
@@ -87,7 +90,9 @@ async fn register(
     if req.redirect_uris.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "invalid_client_metadata", "error_description": "redirect_uris required"})),
+            Json(
+                json!({"error": "invalid_client_metadata", "error_description": "redirect_uris required"}),
+            ),
         );
     }
 
@@ -96,7 +101,9 @@ async fn register(
         if url::Url::parse(uri).is_err() {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error": "invalid_client_metadata", "error_description": format!("invalid redirect_uri: {uri}")})),
+                Json(
+                    json!({"error": "invalid_client_metadata", "error_description": format!("invalid redirect_uri: {uri}")}),
+                ),
             );
         }
     }
@@ -276,10 +283,7 @@ struct TokenRequest {
     refresh_token: Option<String>,
 }
 
-async fn token(
-    State(state): State<AppState>,
-    Form(req): Form<TokenRequest>,
-) -> impl IntoResponse {
+async fn token(State(state): State<AppState>, Form(req): Form<TokenRequest>) -> impl IntoResponse {
     match req.grant_type.as_str() {
         "authorization_code" => exchange_code(&state, &req).await,
         "refresh_token" => refresh(&state, &req).await,
@@ -296,11 +300,23 @@ async fn exchange_code(
 ) -> (StatusCode, Json<serde_json::Value>) {
     let code_str = match &req.code {
         Some(c) => c,
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_request", "error_description": "code required"}))),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid_request", "error_description": "code required"})),
+            );
+        }
     };
     let verifier = match &req.code_verifier {
         Some(v) => v,
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_request", "error_description": "code_verifier required"}))),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    json!({"error": "invalid_request", "error_description": "code_verifier required"}),
+                ),
+            );
+        }
     };
 
     // Find the code
@@ -311,13 +327,23 @@ async fn exchange_code(
 
     let code_model = match code_model {
         Ok(Some(c)) => c,
-        _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant", "error_description": "code not found"}))),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid_grant", "error_description": "code not found"})),
+            );
+        }
     };
 
     // Check expiration
     let now: chrono::DateTime<chrono::FixedOffset> = chrono::Utc::now().into();
     if code_model.used || code_model.expires_at < now {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant", "error_description": "code expired or already used"})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({"error": "invalid_grant", "error_description": "code expired or already used"}),
+            ),
+        );
     }
 
     // Verify PKCE: SHA256(code_verifier) == code_challenge
@@ -325,14 +351,20 @@ async fn exchange_code(
     hasher.update(verifier.as_bytes());
     let computed = base64_url_encode(&hasher.finalize());
     if computed != code_model.code_challenge {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant", "error_description": "code_verifier mismatch"})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid_grant", "error_description": "code_verifier mismatch"})),
+        );
     }
 
     // Verify redirect_uri matches
     if let Some(ref uri) = req.redirect_uri
         && *uri != code_model.redirect_uri
     {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant", "error_description": "redirect_uri mismatch"})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid_grant", "error_description": "redirect_uri mismatch"})),
+        );
     }
 
     // Mark code as used
@@ -344,13 +376,17 @@ async fn exchange_code(
     issue_tokens(state, &code_model.client_id, code_model.user_id).await
 }
 
-async fn refresh(
-    state: &AppState,
-    req: &TokenRequest,
-) -> (StatusCode, Json<serde_json::Value>) {
+async fn refresh(state: &AppState, req: &TokenRequest) -> (StatusCode, Json<serde_json::Value>) {
     let refresh_str = match &req.refresh_token {
         Some(r) => r,
-        None => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_request", "error_description": "refresh_token required"}))),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    json!({"error": "invalid_request", "error_description": "refresh_token required"}),
+                ),
+            );
+        }
     };
 
     let tok = oauth_token::Entity::find()
@@ -361,7 +397,14 @@ async fn refresh(
 
     let tok = match tok {
         Ok(Some(t)) => t,
-        _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid_grant", "error_description": "invalid refresh token"}))),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    json!({"error": "invalid_grant", "error_description": "invalid refresh token"}),
+                ),
+            );
+        }
     };
 
     // Revoke old token
@@ -415,7 +458,10 @@ async fn issue_tokens(
 // ---------------------------------------------------------------------------
 
 /// Validate authorization request parameters.
-async fn validate_authorize_params(state: &AppState, params: &AuthorizeParams) -> Result<(), String> {
+async fn validate_authorize_params(
+    state: &AppState,
+    params: &AuthorizeParams,
+) -> Result<(), String> {
     if params.response_type != "code" {
         return Err("Unsupported response_type (must be 'code')".into());
     }
@@ -452,15 +498,11 @@ pub async fn authenticate_mcp(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| {
-            let resource_meta = format!(
-                "{}/.well-known/oauth-protected-resource",
-                base_url(headers)
-            );
+            let resource_meta =
+                format!("{}/.well-known/oauth-protected-resource", base_url(headers));
             (
                 StatusCode::UNAUTHORIZED,
-                format!(
-                    "Bearer resource_metadata=\"{resource_meta}\""
-                ),
+                format!("Bearer resource_metadata=\"{resource_meta}\""),
             )
         })?;
 
@@ -486,17 +528,19 @@ pub async fn authenticate_mcp(
         return Ok(tok.user_id);
     }
 
-    let resource_meta = format!(
-        "{}/.well-known/oauth-protected-resource",
-        base_url(headers)
-    );
+    let resource_meta = format!("{}/.well-known/oauth-protected-resource", base_url(headers));
     Err((
         StatusCode::UNAUTHORIZED,
         format!("Bearer error=\"invalid_token\", resource_metadata=\"{resource_meta}\""),
     ))
 }
 
-fn redirect_with_error(redirect_uri: &str, error: &str, desc: &str, state: Option<&str>) -> Response {
+fn redirect_with_error(
+    redirect_uri: &str,
+    error: &str,
+    desc: &str,
+    state: Option<&str>,
+) -> Response {
     if let Ok(mut url) = url::Url::parse(redirect_uri) {
         url.query_pairs_mut()
             .append_pair("error", error)
