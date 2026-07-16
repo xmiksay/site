@@ -84,6 +84,7 @@ fn build_environment(design: Arc<DesignStore>) -> Environment<'static> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)] // pre-existing file layout; not touched by this change
 mod tests {
     use super::*;
 

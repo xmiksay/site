@@ -1,9 +1,7 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use sea_orm::{
-    ActiveModelTrait, EntityTrait, ModelTrait, QueryOrder, Set,
-};
+use sea_orm::{ActiveModelTrait, EntityTrait, ModelTrait, QueryOrder, Set};
 
 use crate::entity::llm_provider;
 use crate::routes::api::error::{ApiError, ApiResult};
@@ -89,7 +87,11 @@ pub async fn create(
     }
     validate_kind(&input.kind)?;
     if matches!(input.kind.as_str(), "anthropic" | "gemini")
-        && input.api_key.as_deref().map(|s| s.is_empty()).unwrap_or(true)
+        && input
+            .api_key
+            .as_deref()
+            .map(|s| s.is_empty())
+            .unwrap_or(true)
     {
         return Err(ApiError::BadRequest(format!(
             "{} provider requires api_key",
@@ -97,9 +99,15 @@ pub async fn create(
         )));
     }
     if input.kind == "ollama"
-        && input.base_url.as_deref().map(|s| s.is_empty()).unwrap_or(true)
+        && input
+            .base_url
+            .as_deref()
+            .map(|s| s.is_empty())
+            .unwrap_or(true)
     {
-        return Err(ApiError::BadRequest("ollama provider requires base_url".into()));
+        return Err(ApiError::BadRequest(
+            "ollama provider requires base_url".into(),
+        ));
     }
 
     let saved = llm_provider::ActiveModel {
@@ -113,6 +121,12 @@ pub async fn create(
     .await
     .map_err(|e| ApiError::Conflict(format!("could not save: {e}")))?;
 
+    state
+        .agent_engine
+        .catalog
+        .refresh()
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to refresh model catalog: {e}")))?;
     Ok((StatusCode::CREATED, Json(ProviderView::from(&saved))))
 }
 
@@ -137,7 +151,12 @@ pub async fn update(
         active.base_url = Set(if u.is_empty() { None } else { Some(u) });
     }
     let updated = active.update(&state.db).await?;
-    state.provider_registry.invalidate(updated.id);
+    state
+        .agent_engine
+        .catalog
+        .refresh()
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to refresh model catalog: {e}")))?;
     Ok(Json(ProviderView::from(&updated)))
 }
 
@@ -150,6 +169,11 @@ pub async fn delete_one(
         .await?
         .ok_or(ApiError::NotFound)?;
     row.delete(&state.db).await?;
-    state.provider_registry.invalidate(id);
+    state
+        .agent_engine
+        .catalog
+        .refresh()
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to refresh model catalog: {e}")))?;
     Ok(StatusCode::NO_CONTENT)
 }

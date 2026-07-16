@@ -40,7 +40,7 @@ lint: ## Rust fmt-check + clippy (client typecheck runs via `make client` / vue-
 test-unit: ## Unit tests (in-module #[cfg(test)])
 	cargo test --lib --bins
 
-test-integration: ## Integration tests (tests/) — none yet
+test-integration: ## Integration tests (tests/) — DB/Ollama-gated, skip gracefully if unset/unreachable
 	@test -d tests && cargo test --test '*' || echo "no integration tests yet (tests/ absent)"
 
 test: test-unit test-integration ## All tests

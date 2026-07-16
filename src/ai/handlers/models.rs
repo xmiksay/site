@@ -40,10 +40,7 @@ pub struct UpdateModel {
     pub is_default: Option<bool>,
 }
 
-async fn enrich(
-    state: &AppState,
-    rows: Vec<llm_model::Model>,
-) -> ApiResult<Vec<ModelView>> {
+async fn enrich(state: &AppState, rows: Vec<llm_model::Model>) -> ApiResult<Vec<ModelView>> {
     let providers = llm_provider::Entity::find()
         .all(&state.db)
         .await?
@@ -110,7 +107,17 @@ pub async fn create(
     .await
     .map_err(|e| ApiError::Conflict(format!("could not save: {e}")))?;
 
-    let view = enrich(&state, vec![saved]).await?.into_iter().next().unwrap();
+    state
+        .agent_engine
+        .catalog
+        .refresh()
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to refresh model catalog: {e}")))?;
+    let view = enrich(&state, vec![saved])
+        .await?
+        .into_iter()
+        .next()
+        .unwrap();
     Ok((StatusCode::CREATED, Json(view)))
 }
 
@@ -137,7 +144,17 @@ pub async fn update(
         active.is_default = Set(d);
     }
     let updated = active.update(&state.db).await?;
-    let view = enrich(&state, vec![updated]).await?.into_iter().next().unwrap();
+    state
+        .agent_engine
+        .catalog
+        .refresh()
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to refresh model catalog: {e}")))?;
+    let view = enrich(&state, vec![updated])
+        .await?
+        .into_iter()
+        .next()
+        .unwrap();
     Ok(Json(view))
 }
 
@@ -150,6 +167,12 @@ pub async fn delete_one(
         .await?
         .ok_or(ApiError::NotFound)?;
     row.delete(&state.db).await?;
+    state
+        .agent_engine
+        .catalog
+        .refresh()
+        .await
+        .map_err(|e| ApiError::Internal(format!("failed to refresh model catalog: {e}")))?;
     Ok(StatusCode::NO_CONTENT)
 }
 

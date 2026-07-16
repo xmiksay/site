@@ -1,0 +1,230 @@
+//! `SiteCatalog` — the new engine's model catalog, mirroring today's
+//! `ai::llm::registry::ProviderRegistry` but building
+//! `entanglement_provider::LlmFactory`/`ModelResolver` closures instead of the
+//! old `LlmProvider` trait objects. Hydrated from the `llm_providers`/
+//! `llm_models` tables; `refresh()` re-reads them (call after provider/model
+//! CRUD in the next phase's handlers).
+//!
+//! **`ModelResolver` keying convention** (documented here for the follow-up
+//! phase that mints `InMsg::SetModel`): `provider` = `llm_providers.label`
+//! (unique display name), `model` = `llm_models.id` as a decimal string. Our
+//! own primary keys are the only unambiguous handle — two provider rows of
+//! the same `kind` (e.g. two `anthropic` connections) or two models sharing a
+//! wire id string are both legal, so keying by kind/wire-id would collide.
+
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+use anyhow::Context;
+use entanglement_provider::{
+    GEMINI_BASE, HttpClient, LlmFactory, ModelResolver, OLLAMA_BASE, ResolvedModel,
+    anthropic_factory, gemini_factory, openai_factory,
+};
+use sea_orm::{DatabaseConnection, EntityTrait};
+
+use crate::entity::{llm_model, llm_provider};
+
+/// One usable (provider row, model row) pairing, with its ready-to-call LLM
+/// factory closure baked in.
+#[derive(Clone)]
+pub struct CatalogModel {
+    pub model_id: i32,
+    pub provider_id: i32,
+    pub provider_label: String,
+    pub kind: String,
+    pub wire_model: String,
+    pub is_default: bool,
+    pub llm_factory: LlmFactory,
+}
+
+#[derive(Default)]
+struct CatalogInner {
+    by_model_id: HashMap<i32, CatalogModel>,
+    default_model_id: Option<i32>,
+}
+
+pub struct SiteCatalog {
+    db: DatabaseConnection,
+    http: HttpClient,
+    inner: RwLock<CatalogInner>,
+}
+
+impl SiteCatalog {
+    /// Load the catalog from the DB. Returns an `Arc` since `engine.rs` shares
+    /// it between `EngineConfig.model_resolver` and any future admin surface.
+    pub async fn load(db: DatabaseConnection) -> anyhow::Result<Arc<Self>> {
+        let catalog = Arc::new(SiteCatalog {
+            db,
+            http: HttpClient::new(),
+            inner: RwLock::new(CatalogInner::default()),
+        });
+        catalog.refresh().await?;
+        Ok(catalog)
+    }
+
+    /// Re-read `llm_providers`/`llm_models` and rebuild every factory closure.
+    /// Call after provider/model CRUD so live sessions pick up the change on
+    /// their next `SetModel`/new-session resolve.
+    pub async fn refresh(&self) -> anyhow::Result<()> {
+        let providers = llm_provider::Entity::find()
+            .all(&self.db)
+            .await
+            .context("loading llm_providers")?;
+        let models = llm_model::Entity::find()
+            .all(&self.db)
+            .await
+            .context("loading llm_models")?;
+
+        let mut by_model_id = HashMap::with_capacity(models.len());
+        let mut default_model_id = None;
+        for model in &models {
+            let Some(provider) = providers.iter().find(|p| p.id == model.provider_id) else {
+                tracing::warn!(
+                    model_id = model.id,
+                    "llm_models row has no matching provider; skipping"
+                );
+                continue;
+            };
+            let llm_factory = match build_factory(provider, &model.model, &self.http) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!(model_id = model.id, error = %e, "skipping unbuildable model");
+                    continue;
+                }
+            };
+            if model.is_default {
+                default_model_id = Some(model.id);
+            }
+            by_model_id.insert(
+                model.id,
+                CatalogModel {
+                    model_id: model.id,
+                    provider_id: provider.id,
+                    provider_label: provider.label.clone(),
+                    kind: provider.kind.clone(),
+                    wire_model: model.model.clone(),
+                    is_default: model.is_default,
+                    llm_factory,
+                },
+            );
+        }
+        // First model row is the fallback default if none is flagged, mirroring
+        // `ProviderRegistry::resolve_default`.
+        if default_model_id.is_none() {
+            default_model_id = models.first().map(|m| m.id);
+        }
+        *self.inner.write().unwrap() = CatalogInner {
+            by_model_id,
+            default_model_id,
+        };
+        Ok(())
+    }
+
+    pub fn model_by_id(&self, model_id: i32) -> Option<CatalogModel> {
+        self.inner
+            .read()
+            .unwrap()
+            .by_model_id
+            .get(&model_id)
+            .cloned()
+    }
+
+    pub fn default_model(&self) -> Option<CatalogModel> {
+        let inner = self.inner.read().unwrap();
+        inner
+            .default_model_id
+            .and_then(|id| inner.by_model_id.get(&id).cloned())
+    }
+
+    /// The factory `EngineConfig.llm_factory` should use before any
+    /// per-session `SetModel` — the default model's factory, or `EchoLlm` if
+    /// nothing is configured yet (matching `EngineConfig::default()`'s own
+    /// fallback, so an empty catalog degrades gracefully instead of panicking).
+    pub fn default_llm_factory(&self) -> LlmFactory {
+        match self.default_model() {
+            Some(m) => m.llm_factory,
+            None => Arc::new(|| Box::new(entanglement_provider::EchoLlm)),
+        }
+    }
+
+    /// Build the `ModelResolver` closure for `EngineConfig.model_resolver`
+    /// (live `InMsg::SetModel` support). See the module doc for the
+    /// `provider`/`model` keying convention.
+    pub fn model_resolver(self: &Arc<Self>) -> ModelResolver {
+        let catalog = self.clone();
+        Arc::new(
+            move |provider: &str, model: &str| -> Result<ResolvedModel, String> {
+                let model_id: i32 = model
+                    .parse()
+                    .map_err(|_| format!("model `{model}` is not a valid model id"))?;
+                let found = catalog
+                    .model_by_id(model_id)
+                    .ok_or_else(|| format!("model id {model_id} not found"))?;
+                if found.provider_label != provider {
+                    return Err(format!(
+                        "model id {model_id} belongs to provider `{}`, not `{provider}`",
+                        found.provider_label
+                    ));
+                }
+                Ok(ResolvedModel {
+                    provider: found.provider_label,
+                    model: found.wire_model,
+                    llm_factory: found.llm_factory,
+                    generation: None,
+                    context_window: None,
+                })
+            },
+        )
+    }
+}
+
+/// Build the `LlmFactory` for one provider row, dispatching on `kind` the
+/// same way `ai::llm::registry::ProviderRegistry::build` does today.
+fn build_factory(
+    provider: &llm_provider::Model,
+    default_model: &str,
+    http: &HttpClient,
+) -> anyhow::Result<LlmFactory> {
+    match provider.kind.as_str() {
+        "ollama" => {
+            let base_url = provider
+                .base_url
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| OLLAMA_BASE.to_string());
+            Ok(openai_factory(
+                base_url,
+                None,
+                default_model,
+                None,
+                None,
+                http.clone(),
+            ))
+        }
+        "anthropic" => {
+            let api_key = provider.api_key.clone().ok_or_else(|| {
+                anyhow::anyhow!("anthropic provider '{}' has no api_key", provider.label)
+            })?;
+            Ok(anthropic_factory(
+                api_key,
+                default_model,
+                None,
+                None,
+                http.clone(),
+            ))
+        }
+        "gemini" => {
+            let api_key = provider.api_key.clone().ok_or_else(|| {
+                anyhow::anyhow!("gemini provider '{}' has no api_key", provider.label)
+            })?;
+            Ok(gemini_factory(
+                GEMINI_BASE,
+                api_key,
+                default_model,
+                None,
+                http.clone(),
+            ))
+        }
+        other => anyhow::bail!("provider kind not supported: {other}"),
+    }
+}

@@ -1,10 +1,8 @@
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
 
-use crate::ai::{
-    AiConfig, llm::registry::ProviderRegistry, local_tools, mcp_client::UserMcpManager,
-    tool_registry::ToolRegistry,
-};
+use crate::ai::AiConfig;
+use crate::ai::engine::SiteEngine;
 use crate::config::Config;
 use crate::design::DesignStore;
 use crate::templates::Templates;
@@ -14,10 +12,7 @@ pub struct AppState {
     pub db: DatabaseConnection,
     pub tmpl: Templates,
     pub design: Arc<DesignStore>,
-    pub ai_config: Arc<AiConfig>,
-    pub provider_registry: Arc<ProviderRegistry>,
-    pub tool_registry: Arc<ToolRegistry>,
-    pub mcp_manager: Arc<UserMcpManager>,
+    pub agent_engine: Arc<SiteEngine>,
 }
 
 pub async fn create_state(config: &Config) -> AppState {
@@ -29,19 +24,14 @@ pub async fn create_state(config: &Config) -> AppState {
     let tmpl = Templates::new(design.clone());
 
     let ai_config = Arc::new(AiConfig::new());
-    let provider_registry = Arc::new(ProviderRegistry::new(db.clone()));
-    let tool_registry = Arc::new(ToolRegistry::new(local_tools::default_tools(
-        config.serper_api_key.clone(),
-    )));
-    let mcp_manager = Arc::new(UserMcpManager::new(db.clone()));
+    let agent_engine = SiteEngine::spawn(db.clone(), ai_config, config.serper_api_key.clone())
+        .await
+        .expect("Failed to spawn assistant engine");
 
     AppState {
         db,
         tmpl,
         design,
-        ai_config,
-        provider_registry,
-        tool_registry,
-        mcp_manager,
+        agent_engine,
     }
 }

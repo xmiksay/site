@@ -14,7 +14,9 @@ pub fn router() -> Router<AppState> {
         .route("/sessions", get(sessions::list).post(sessions::create))
         .route(
             "/sessions/{id}",
-            get(sessions::read).patch(sessions::update).delete(sessions::delete_one),
+            get(sessions::read)
+                .patch(sessions::update)
+                .delete(sessions::delete_one),
         )
         .route("/sessions/{id}/messages", post(sessions::send_message))
         .route(
@@ -29,18 +31,14 @@ pub fn router() -> Router<AppState> {
             "/mcp-servers/{id}",
             patch(mcp_servers::update).delete(mcp_servers::delete_one),
         )
-        .route(
-            "/providers",
-            get(providers::list).post(providers::create),
-        )
+        .route("/providers", get(providers::list).post(providers::create))
         .route(
             "/providers/{id}",
-            get(providers::read).patch(providers::update).delete(providers::delete_one),
+            get(providers::read)
+                .patch(providers::update)
+                .delete(providers::delete_one),
         )
-        .route(
-            "/models",
-            get(models::list).post(models::create),
-        )
+        .route("/models", get(models::list).post(models::create))
         .route(
             "/models/{id}",
             patch(models::update).delete(models::delete_one),

@@ -18,14 +18,18 @@ pub struct Model {
     /// IDs of `user_mcp_servers` rows whose tools are exposed to this session.
     /// Stored as JSONB array of integers; empty means no MCP tools.
     pub enabled_mcp_server_ids: Json,
+    /// The engine's root `SessionId` string (`u{user_id}:{uuid}` convention) —
+    /// this DB row's 1:1 link to its `assistant_events` log. Nullable because
+    /// rows created before the engine swap never get one back; unique because
+    /// a DB session row owns exactly one engine session (m_023).
+    #[sea_orm(nullable, unique)]
+    pub engine_session_id: Option<String>,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
-    #[sea_orm(has_many = "super::assistant_message::Entity")]
-    Messages,
     #[sea_orm(
         belongs_to = "super::llm_model::Entity",
         from = "Column::ModelId",
@@ -33,12 +37,6 @@ pub enum Relation {
         on_delete = "SetNull"
     )]
     LlmModel,
-}
-
-impl Related<super::assistant_message::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Messages.def()
-    }
 }
 
 impl Related<super::llm_model::Entity> for Entity {

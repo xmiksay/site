@@ -3,13 +3,11 @@ use std::collections::HashMap;
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
-use axum_extra::extract::CookieJar;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, QueryOrder, Set,
 };
 use serde_json::{Value, json};
 
-use crate::auth::SESSION_COOKIE;
 use crate::entity::user_mcp_server;
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -74,33 +72,68 @@ pub struct UpdateMcpServer {
     pub headers: Option<HashMap<String, String>>,
 }
 
+/// Build the `discovered` list from `SiteMcp`'s per-user tool-spec cache
+/// (`"{server}__{tool}"`-prefixed) grouped back by owning server row.
+///
+/// Behavior change from the old `UserMcpManager::discover_user_servers`: that
+/// path connected fresh on every request and reported `connected: false` with
+/// an empty `tools` list for a server that's disabled *or* whose connection
+/// failed. `SiteMcp::tool_specs_for_user` only queries enabled servers and
+/// silently drops ones it can't reach (see `mcp.rs`'s doc), and is cached for
+/// 60s — so here `connected` is inferred from "did any tool surface for this
+/// server's prefix", which can't distinguish "disabled" from "connection
+/// failed", and a server added/fixed elsewhere can lag up to 60s before this
+/// reflects it. Acceptable for this phase (see the issue's note on this exact
+/// tradeoff); a future pass could add a real per-server discovery method to
+/// `SiteMcp` if that distinction turns out to matter.
+async fn discovered_servers(
+    state: &AppState,
+    user_id: i32,
+    rows: &[user_mcp_server::Model],
+) -> Vec<Value> {
+    let specs = state.agent_engine.mcp.tool_specs_for_user(user_id).await;
+    rows.iter()
+        .map(|row| {
+            let prefix = format!("{}__", row.name);
+            let tools: Vec<Value> = specs
+                .iter()
+                .filter(|s| s.name.starts_with(&prefix))
+                .map(|s| {
+                    json!({
+                        "name": s.name.strip_prefix(&prefix).unwrap_or(&s.name),
+                        "prefixed_name": s.name,
+                        "description": s.description,
+                        "schema": s.schema,
+                    })
+                })
+                .collect();
+            json!({
+                "name": row.name,
+                "url": row.url,
+                "enabled": row.enabled,
+                "forward_user_token": row.forward_user_token,
+                "connected": !tools.is_empty(),
+                "tools": tools,
+            })
+        })
+        .collect()
+}
+
 pub async fn list(
     State(state): State<AppState>,
     Extension(user_id): Extension<i32>,
-    jar: CookieJar,
 ) -> ApiResult<Json<Value>> {
-    let token = jar
-        .get(SESSION_COOKIE)
-        .map(|c| c.value().to_string())
-        .unwrap_or_default();
-
     let registered = user_mcp_server::Entity::find()
         .filter(user_mcp_server::Column::UserId.eq(user_id))
         .order_by_asc(user_mcp_server::Column::Name)
         .all(&state.db)
         .await?;
-    let registered_view: Vec<McpServerView> =
-        registered.iter().map(McpServerView::from).collect();
-
-    let pool = state
-        .mcp_manager
-        .discover_user_servers(user_id, &token)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let registered_view: Vec<McpServerView> = registered.iter().map(McpServerView::from).collect();
+    let discovered = discovered_servers(&state, user_id, &registered).await;
 
     Ok(Json(json!({
         "user_servers": registered_view,
-        "discovered": pool.servers(),
+        "discovered": discovered,
     })))
 }
 
@@ -137,7 +170,7 @@ pub async fn create(
     .await
     .map_err(|e| ApiError::Conflict(format!("could not save: {e}")))?;
 
-    state.mcp_manager.invalidate_user(user_id);
+    state.agent_engine.mcp.invalidate_user(user_id);
     Ok((StatusCode::CREATED, Json(McpServerView::from(&saved))))
 }
 
@@ -185,7 +218,7 @@ pub async fn update(
         active.headers = Set(headers_json);
     }
     let updated = active.update(&state.db).await?;
-    state.mcp_manager.invalidate_user(user_id);
+    state.agent_engine.mcp.invalidate_user(user_id);
     Ok(Json(McpServerView::from(&updated)))
 }
 
@@ -202,6 +235,6 @@ pub async fn delete_one(
         return Err(ApiError::NotFound);
     }
     row.delete(&state.db).await?;
-    state.mcp_manager.invalidate_user(user_id);
+    state.agent_engine.mcp.invalidate_user(user_id);
     Ok(StatusCode::NO_CONTENT)
 }

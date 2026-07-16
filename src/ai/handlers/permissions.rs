@@ -86,6 +86,7 @@ pub async fn create(
     }
     .insert(&state.db)
     .await?;
+    state.agent_engine.policy.invalidate_user(user_id);
     Ok((StatusCode::CREATED, Json(RuleView::from(&saved))))
 }
 
@@ -114,6 +115,7 @@ pub async fn update(
         active.priority = Set(p);
     }
     let updated = active.update(&state.db).await?;
+    state.agent_engine.policy.invalidate_user(user_id);
     Ok(Json(RuleView::from(&updated)))
 }
 
@@ -130,5 +132,6 @@ pub async fn delete_one(
         return Err(ApiError::NotFound);
     }
     row.delete(&state.db).await?;
+    state.agent_engine.policy.invalidate_user(user_id);
     Ok(StatusCode::NO_CONTENT)
 }

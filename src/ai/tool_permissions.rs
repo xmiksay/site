@@ -10,6 +10,7 @@ pub enum Effect {
 }
 
 impl Effect {
+    #[allow(clippy::should_implement_trait)] // deliberately infallible, unlike `FromStr::from_str`
     pub fn from_str(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
             "allow" => Effect::Allow,
