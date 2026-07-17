@@ -18,7 +18,7 @@ use crate::markdown::MARKDOWN_EXTENSIONS_DOC;
 use crate::repo::format;
 use crate::repo::pages::{self as pages_repo, PageSaveError, PageUpdate, UpsertOutcome};
 use crate::repo::pages_search::{self as pages_search_repo, SearchError};
-use crate::repo::tags::{self as tags_repo, ResolveError};
+use crate::repo::tags as tags_repo;
 use crate::routes::broadcast;
 use crate::routes::ws::WsHub;
 
@@ -183,16 +183,13 @@ impl Tool for EditPageTool {
         pages_repo::validate_page_edit_fields(&markdown, &summary, &tag_names, &private)
             .map_err(anyhow::Error::msg)?;
 
-        let tag_ids = match &tag_names {
+        let (tag_ids, skipped) = match &tag_names {
             Some(names) if !names.is_empty() => match tags_repo::resolve_ids(&self.db, names).await
             {
-                Ok(ids) => Some(ids),
-                Err(ResolveError::Db(e)) => {
-                    return Err(anyhow::anyhow!(e).context("resolving tag names"));
-                }
-                Err(e @ ResolveError::Unknown(_)) => return Err(anyhow::anyhow!(e.to_string())),
+                Ok(r) => (Some(r.ids), r.missing),
+                Err(e) => return Err(anyhow::anyhow!(e).context("resolving tag names")),
             },
-            _ => None,
+            _ => (None, Vec::new()),
         };
 
         let outcome = pages_repo::upsert_by_path(
@@ -220,7 +217,10 @@ impl Tool for EditPageTool {
             Err(e @ PageSaveError::EmptyPath) => anyhow::bail!("{e}"),
             Err(e) => return Err(anyhow::anyhow!(e).context("saving page")),
         };
-        Ok(ok_text(format!("{status}: {path}")))
+        Ok(ok_text(format!(
+            "{status}: {path}{}",
+            tags_repo::skipped_note(&skipped)
+        )))
     }
 }
 
