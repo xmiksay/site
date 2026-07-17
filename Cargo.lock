@@ -4155,6 +4155,7 @@ dependencies = [
  "mermaid-svg",
  "mime_guess",
  "minijinja",
+ "parking_lot",
  "pulldown-cmark",
  "rand 0.10.1",
  "reqwest 0.13.3",

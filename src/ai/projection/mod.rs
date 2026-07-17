@@ -216,6 +216,12 @@ fn sub_agent_json(
 /// which of the two reply templates (detached `agent_spawn` vs blocking
 /// `agent`) produced the text. A refusal's text (no valid uuid anywhere)
 /// correctly yields `None` — nothing to match, not a wrong match.
+///
+/// Deliberately deferred (issue #28): `entanglement_runtime::subagent::launch`
+/// has no structured field naming the child session either, and this crate is
+/// a versioned dependency (not vendored in this repo), so there is nothing to
+/// change here yet. Replace with a structural field the day `launch` grows
+/// one.
 fn extract_child_session_id(output: &str) -> Option<String> {
     output
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
@@ -305,6 +311,12 @@ fn fold(records: &[&LogRecord]) -> Vec<ProjectedMessage> {
 /// `tool_runner`'s reply text for every failure path (`Deny`/reject/mask/
 /// unknown-tool/execution-error) starts with one of these two prefixes — see
 /// the module doc for why this is a heuristic, not a structural flag.
+///
+/// Deliberately deferred (issue #28): entanglement-core 0.1.0's
+/// `OutEvent::ToolOutput` carries no error flag to key off instead, and this
+/// crate is a versioned dependency (not vendored in this repo), so there is
+/// nothing to change here yet. Replace with a structural flag the day
+/// `ToolOutput` grows one.
 fn looks_like_tool_error(output: &str) -> bool {
     output.starts_with("tool `") || output.starts_with("unknown tool:")
 }
