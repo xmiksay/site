@@ -21,7 +21,11 @@ src/
                           # instructions.rs (server_instructions +
                           # handle_tools_list), pages.rs/tags.rs/files.rs/
                           # galleries.rs (one tool family per file)
-    oauth.rs              # OAuth2 server (register/authorize/token/well-known)
+    oauth/                # OAuth2 server: mod.rs (router + base_url),
+                          # handlers.rs (authorize/token Axum handlers),
+                          # security.rs (PKCE verify, code/token issuance +
+                          # refresh, authenticate_mcp — no Axum extractors),
+                          # metadata.rs (register + well-known discovery)
     revision.rs
     ws.rs                 # global WebSocket hub (WsHub) + GET /api/ws upgrade
     broadcast.rs          # WsHub broadcast + PageSummary/FileSummary — one
