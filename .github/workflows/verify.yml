@@ -15,6 +15,27 @@ jobs:
   verify:
     name: Lint + all tests
     runs-on: ubuntu-latest
+
+    # tests/ is DB-gated on DATABASE_URL (see docs/testing.md) — without this
+    # service and env var, make test-integration silently self-skips.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: site_test
+          POSTGRES_USER: site_test
+          POSTGRES_PASSWORD: site_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://site_test:site_test@localhost:5432/site_test
+
     steps:
       - uses: actions/checkout@v4
 
@@ -35,7 +56,11 @@ jobs:
       - name: Build admin SPA (client/dist)
         run: make client
 
+      - name: Run migrations
+        run: cargo run --bin site_migration
+
       # make verify = lint (fmt --check + clippy -D warnings)
-      #             + test (backend unit + integration no-op + client vitest).
+      #             + test (backend unit + integration + client vitest), with
+      #             a real Postgres above so integration tests actually run.
       - name: Verify
         run: make verify
