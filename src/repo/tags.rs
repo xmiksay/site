@@ -111,34 +111,32 @@ pub async fn delete_by_name(db: &DatabaseConnection, name: &str) -> Result<Optio
     Ok(Some(model.id))
 }
 
+/// Outcome of resolving tag names to IDs: the IDs that matched existing tags,
+/// plus any requested names that had no matching tag (skipped, not an error).
 #[derive(Debug)]
-pub enum ResolveError {
-    Db(DbErr),
-    Unknown(Vec<String>),
+pub struct ResolvedTags {
+    pub ids: Vec<i32>,
+    pub missing: Vec<String>,
 }
 
-impl std::fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Db(e) => write!(f, "Database error: {e}"),
-            Self::Unknown(missing) => write!(f, "Unknown tags: {}", missing.join(", ")),
-        }
+/// Human-readable suffix listing skipped tag names, or "" when none were skipped.
+pub fn skipped_note(missing: &[String]) -> String {
+    if missing.is_empty() {
+        String::new()
+    } else {
+        format!(" (skipped unknown tags: {})", missing.join(", "))
     }
 }
 
-impl From<DbErr> for ResolveError {
-    fn from(e: DbErr) -> Self {
-        Self::Db(e)
-    }
-}
-
-/// Look up tag IDs by name, returning an error listing missing names.
-pub async fn resolve_ids(
-    db: &DatabaseConnection,
-    names: &[String],
-) -> Result<Vec<i32>, ResolveError> {
+/// Look up tag IDs by name. Names with no matching tag are skipped and returned
+/// in `missing` rather than failing the whole call — a single unknown tag must
+/// not block a page write.
+pub async fn resolve_ids(db: &DatabaseConnection, names: &[String]) -> Result<ResolvedTags, DbErr> {
     if names.is_empty() {
-        return Ok(vec![]);
+        return Ok(ResolvedTags {
+            ids: vec![],
+            missing: vec![],
+        });
     }
     let tags = tag::Entity::find()
         .filter(tag::Column::Name.is_in(names.iter().map(|s| s.as_str())))
@@ -150,10 +148,10 @@ pub async fn resolve_ids(
         .filter(|n| !found.contains(n))
         .cloned()
         .collect();
-    if !missing.is_empty() {
-        return Err(ResolveError::Unknown(missing));
-    }
-    Ok(tags.iter().map(|t| t.id).collect())
+    Ok(ResolvedTags {
+        ids: tags.iter().map(|t| t.id).collect(),
+        missing,
+    })
 }
 
 /// Best-effort resolution of tag names by id. Missing ids are silently skipped.
@@ -169,4 +167,20 @@ pub async fn resolve_names(db: &DatabaseConnection, ids: &[i32]) -> Vec<String> 
         .into_iter()
         .map(|t| t.name)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::skipped_note;
+
+    #[test]
+    fn skipped_note_empty_is_blank() {
+        assert_eq!(skipped_note(&[]), "");
+    }
+
+    #[test]
+    fn skipped_note_lists_names() {
+        let note = skipped_note(&["foo".to_string(), "bar".to_string()]);
+        assert_eq!(note, " (skipped unknown tags: foo, bar)");
+    }
 }

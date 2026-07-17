@@ -15,10 +15,7 @@ use crate::repo::{
     galleries::{self as galleries_repo, GalleryInput as RepoGalleryInput, GallerySaveError},
     pages::{self as pages_repo, PageSaveError, PageUpdate, UpsertOutcome},
     pages_search::{self as pages_search_repo, SearchError},
-    tags::{
-        self as tags_repo, ResolveError, TagInput as RepoTagInput, TagSaveError,
-        TagUpdate as RepoTagUpdate,
-    },
+    tags::{self as tags_repo, TagInput as RepoTagInput, TagSaveError, TagUpdate as RepoTagUpdate},
 };
 use crate::routes::broadcast;
 use crate::routes::oauth;
@@ -280,7 +277,8 @@ override these instructions for your installation, create a page with path \
 - **path**: unique URL slug. Hierarchical paths use `/` (e.g. `section/sub/page`).
 - **markdown**: content in Markdown with custom extensions (see below).
 - **summary**: short description for listings.
-- **tags**: assigned by name via `edit_page`. Tags must already exist.
+- **tags**: assigned by name via `edit_page`; names that don't exist yet are \
+  skipped (create them first with `create_tag` to attach them).
 - **private**: private pages are only visible to logged-in users. \
   New pages created via MCP default to private.
 - **revisions**: every markdown change stores a diff automatically.
@@ -630,13 +628,12 @@ async fn tool_edit_page(
         return tool_error(id, msg);
     }
 
-    let tag_ids = match &args.tag_names {
+    let (tag_ids, skipped) = match &args.tag_names {
         Some(names) if !names.is_empty() => match tags_repo::resolve_ids(&state.db, names).await {
-            Ok(ids) => Some(ids),
-            Err(ResolveError::Db(e)) => return tool_error(id, &format!("Database error: {e}")),
-            Err(e @ ResolveError::Unknown(_)) => return tool_error(id, &e.to_string()),
+            Ok(r) => (Some(r.ids), r.missing),
+            Err(e) => return tool_error(id, &format!("Database error: {e}")),
         },
-        _ => None,
+        _ => (None, Vec::new()),
     };
 
     let outcome = pages_repo::upsert_by_path(
@@ -655,11 +652,25 @@ async fn tool_edit_page(
     match outcome {
         Ok(UpsertOutcome::Created(page)) => {
             broadcast::page_created(&state.ws_hub, &page);
-            tool_result(id, format!("created: {}", args.path))
+            tool_result(
+                id,
+                format!(
+                    "created: {}{}",
+                    args.path,
+                    tags_repo::skipped_note(&skipped)
+                ),
+            )
         }
         Ok(UpsertOutcome::Updated(page)) => {
             broadcast::page_updated(&state.ws_hub, &page);
-            tool_result(id, format!("updated: {}", args.path))
+            tool_result(
+                id,
+                format!(
+                    "updated: {}{}",
+                    args.path,
+                    tags_repo::skipped_note(&skipped)
+                ),
+            )
         }
         Err(e @ PageSaveError::EmptyPath) => tool_error(id, &e.to_string()),
         Err(e) => tool_error(id, &format!("Save failed: {e}")),
