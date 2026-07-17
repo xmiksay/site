@@ -182,21 +182,14 @@ fn build_factory(
     http: &HttpClient,
 ) -> anyhow::Result<LlmFactory> {
     match provider.kind.as_str() {
-        "ollama" => {
-            let base_url = provider
-                .base_url
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| OLLAMA_BASE.to_string());
-            Ok(openai_factory(
-                base_url,
-                None,
-                default_model,
-                None,
-                None,
-                http.clone(),
-            ))
-        }
+        "ollama" => Ok(openai_factory(
+            ollama_base_url(provider),
+            None,
+            default_model,
+            None,
+            None,
+            http.clone(),
+        )),
         "anthropic" => {
             let api_key = provider.api_key.clone().ok_or_else(|| {
                 anyhow::anyhow!("anthropic provider '{}' has no api_key", provider.label)
@@ -225,6 +218,19 @@ fn build_factory(
     }
 }
 
+/// Effective Ollama base URL for `provider`'s row: its own `base_url` unless
+/// unset/blank, else the default local endpoint. Split out from
+/// `build_factory` so the fallback is unit-testable without a network call
+/// (the resulting `LlmFactory` closure is opaque — there's no other way to
+/// observe which URL it captured).
+fn ollama_base_url(provider: &llm_provider::Model) -> String {
+    provider
+        .base_url
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| OLLAMA_BASE.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,5 +255,74 @@ mod tests {
         let inner = lock.read();
         assert!(inner.by_model_id.is_empty());
         assert!(inner.default_model_id.is_none());
+    }
+
+    fn provider(kind: &str, api_key: Option<&str>, base_url: Option<&str>) -> llm_provider::Model {
+        llm_provider::Model {
+            id: 1,
+            label: "test-provider".to_string(),
+            kind: kind.to_string(),
+            api_key: api_key.map(str::to_string),
+            base_url: base_url.map(str::to_string),
+            created_at: chrono::Utc::now().fixed_offset(),
+        }
+    }
+
+    #[test]
+    fn ollama_without_base_url_falls_back_to_default() {
+        let p = provider("ollama", None, None);
+        assert_eq!(ollama_base_url(&p), OLLAMA_BASE);
+        assert!(build_factory(&p, "model", &HttpClient::new()).is_ok());
+    }
+
+    #[test]
+    fn ollama_with_blank_base_url_falls_back_to_default() {
+        let p = provider("ollama", None, Some(""));
+        assert_eq!(ollama_base_url(&p), OLLAMA_BASE);
+    }
+
+    #[test]
+    fn ollama_with_base_url_uses_it() {
+        let p = provider("ollama", None, Some("http://example.internal:1234/v1"));
+        assert_eq!(ollama_base_url(&p), "http://example.internal:1234/v1");
+    }
+
+    #[test]
+    fn anthropic_without_api_key_errs() {
+        let p = provider("anthropic", None, None);
+        let err = build_factory(&p, "model", &HttpClient::new())
+            .err()
+            .expect("expected build_factory to fail");
+        assert!(err.to_string().contains("no api_key"));
+    }
+
+    #[test]
+    fn anthropic_with_api_key_builds_ok() {
+        let p = provider("anthropic", Some("key"), None);
+        assert!(build_factory(&p, "model", &HttpClient::new()).is_ok());
+    }
+
+    #[test]
+    fn gemini_without_api_key_errs() {
+        let p = provider("gemini", None, None);
+        let err = build_factory(&p, "model", &HttpClient::new())
+            .err()
+            .expect("expected build_factory to fail");
+        assert!(err.to_string().contains("no api_key"));
+    }
+
+    #[test]
+    fn gemini_with_api_key_builds_ok() {
+        let p = provider("gemini", Some("key"), None);
+        assert!(build_factory(&p, "model", &HttpClient::new()).is_ok());
+    }
+
+    #[test]
+    fn unsupported_kind_errs_naming_it() {
+        let p = provider("mystery", None, None);
+        let err = build_factory(&p, "model", &HttpClient::new())
+            .err()
+            .expect("expected build_factory to fail");
+        assert!(err.to_string().contains("mystery"));
     }
 }

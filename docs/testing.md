@@ -79,9 +79,10 @@ vi.mock('../api', async (importActual) => {
 beforeEach(() => setActivePinia(createPinia()))
 ```
 
-`@vue/test-utils` `mount()` is installed for component specs, but none exist
-yet — only the three store specs above. Adding the first component/view specs
-is tracked as follow-up work.
+`@vue/test-utils` `mount()` is installed for component specs; see
+[`views/LoginView.spec.ts`](../client/src/views/LoginView.spec.ts) for the
+pattern (`mount()` + the same API/store mocking convention as the store
+specs).
 
 ## Integration tests (`tests/`)
 
@@ -105,9 +106,43 @@ DATABASE_URL=postgres://site_test:site_test@localhost:5433/site_test \
 `users` row (a random tag/uuid in the username) and deletes it (cascading)
 when done; see `tests/policy_db.rs`'s module doc for the full convention.
 
+CI runs this suite for real: both `.github/workflows/backend.yml` (per-PR) and
+`verify.yml` (post-merge) start a `postgres:17-alpine` service, export
+`DATABASE_URL`, and run `site_migration` before the test step, so `tests/`
+executes on every PR rather than self-skipping.
+
 - `tests/policy_db.rs` — `SitePolicy`/`tool_permissions` resolution against a
   real `tool_permissions` table (FK to `users`, so it can't be faked
   in-memory).
+- `tests/oauth_authorize.rs`, `tests/oauth_token.rs`, `tests/oauth_refresh.rs`
+  — the OAuth2/PKCE flow (`src/routes/oauth/`) end to end over real HTTP:
+  `GET`/`POST /oauth/authorize` param validation and the login form, the
+  `authorization_code` and `refresh_token` grants at `POST /oauth/token`
+  (PKCE verification, expiry, single-use codes, refresh rotation). Share
+  fixtures/helpers via `tests/common/oauth.rs` (`#[path]`-included, not
+  declared in `tests/common/mod.rs` — these two endpoints are form-encoded,
+  not JSON, so they need their own request-building helpers).
+- `tests/mcp_endpoint.rs`, `tests/mcp_pages.rs`,
+  `tests/mcp_tags_files_galleries.rs` — the hand-rolled JSON-RPC `POST /mcp`
+  server (`src/routes/mcp/`): Bearer-token auth, `initialize` (including the
+  `CLAUDE`-page instructions override), `tools/list`, and `tools/call`
+  dispatch/error shapes for every tool family. Shared Bearer/JSON-RPC helpers
+  live in `tests/common/mcp.rs` (`#[path]`-included, same reason as
+  `common/oauth.rs`).
+- `tests/api_pages.rs`, `tests/api_files.rs`, `tests/api_galleries.rs`,
+  `tests/api_tags.rs` — the session-cookie-protected `/api/*` REST layer
+  (`src/routes/api/`) and the `src/repo/*.rs` logic it calls: page
+  create/update/revision-restore/delete, file upload with SHA-256 dedup,
+  gallery/tag CRUD and page↔tag association. Reuse `tests/common/mod.rs`'s
+  `send()`/`test_db_url()` directly (session-cookie + JSON, same shape these
+  need).
+- `tests/ai_catalog.rs`, `tests/ai_persistence.rs`, `tests/ai_mcp.rs` — the
+  `src/ai/` gaps: `SiteCatalog::load`/`refresh`/`model_resolver` against real
+  `llm_providers`/`llm_models` rows; `DbSink` append/backpressure and
+  `resume_session`'s integrity-gap refusal against `assistant_events`;
+  `SiteMcp`'s per-user route cache/TTL and `known_tool_names` against
+  `user_mcp_servers` (no live remote MCP server needed — failure-to-connect is
+  itself part of what's exercised).
 - The assistant-session flow — drives a session through the real HTTP API
   (`tower::ServiceExt::oneshot`, no socket) end to end: create, message, tool
   call, approve. Split by scenario across three top-level test files (each
