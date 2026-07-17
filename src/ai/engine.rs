@@ -3,28 +3,40 @@
 //! `state.rs` in place of the old `loop_driver`/`mcp_client` turn-driving
 //! stack.
 //!
-//! ## Session id convention
-//!
-//! Every root session is minted `u{user_id}:{uuid}` (see
-//! [`session_id_for_user`]); every tool/policy call recovers the acting user
-//! via [`user_id_from_session`], splitting on the first `:` (embedding.md §1's
-//! `{tenant}:{uuid}` convention, with `u{user_id}` as this site's "tenant").
-//! `policy.rs`, `tools/*`, and `mcp.rs` all import these two functions rather
-//! than re-deriving the format, so the convention has exactly one definition.
+//! See [`session_tree`] for the `u{user_id}:{uuid}` session-id convention and
+//! how a sub-agent (#17) child session resolves back to its owning user, and
+//! [`profiles`] for the `researcher`/`page-writer` sub-agent profile roster.
 //!
 //! ## Public API for the next phase
 //!
 //! ```ignore
-//! let engine = SiteEngine::spawn(db, ai_config, serper_api_key).await?;
+//! let engine = SiteEngine::spawn(db, ai_config, serper_api_key, None).await?;
 //! let session = SiteEngine::session_id_for_user(user_id);
 //! engine.holly.send(InMsg::prompt(session, text)).await?;
 //! ```
+//!
+//! `spawn`'s last parameter, `llm_factory_override`, exists solely as a test
+//! seam: `state.rs`'s one production call site always passes `None` (the
+//! DB-driven `SiteCatalog::default_llm_factory()` is used, as before this
+//! parameter existed); a scripted-`Llm` integration test
+//! (`tests/assistant_session_flow.rs`) passes `Some(..)` so a sub-agent spawn
+//! test doesn't depend on a live model backend for a deterministic tool-call
+//! decision.
 //!
 //! `SiteEngine::spawn` wires `tool_runner::spawn_tool_executor_with_policy`
 //! and `persistence::spawn_persistence_subscriber_with_sink` at construction,
 //! and sets `EngineConfig.idle_ttl` to 30 minutes as the "optional idle_ttl
 //! backstop" the issue calls for — the next phase does not need to call
 //! `Holly::hibernate` itself unless it wants tighter control.
+
+mod profiles;
+mod session_tree;
+
+pub use profiles::{PAGE_WRITER_PROFILE, RESEARCHER_PROFILE};
+use session_tree::evict_on_hibernate_or_end;
+pub use session_tree::{
+    record_session_started, root_session_of, user_id_from_session, user_id_from_session_awaiting,
+};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -33,7 +45,7 @@ use std::time::Duration;
 use anyhow::Context;
 use dashmap::DashSet;
 use entanglement_core::{
-    EngineConfig, Holly, OutEvent, Permission, PermissionProfile, ProfileRegistry, SessionId,
+    AgentProfile, EngineConfig, Holly, OutEvent, Permission, PermissionProfile, SessionId,
     SystemPromptResolver, ToolSpec, ToolSpecResolver,
 };
 use entanglement_runtime::hooks::Hooks;
@@ -140,10 +152,12 @@ impl SiteEngine {
     /// identities already known across every user, see `mcp.rs`'s
     /// static-registry limitation doc), the model catalog, the permission
     /// policy, the tool executor, and the DB-backed persistence subscriber.
+    /// `llm_factory_override` is a test-only seam — see the module doc.
     pub async fn spawn(
         db: DatabaseConnection,
         ai_config: Arc<AiConfig>,
         serper_api_key: Option<String>,
+        llm_factory_override: Option<entanglement_core::LlmFactory>,
     ) -> anyhow::Result<Arc<Self>> {
         let catalog = SiteCatalog::load(db.clone())
             .await
@@ -174,18 +188,36 @@ impl SiteEngine {
         };
         let system_prompt_resolver: SystemPromptResolver = {
             let cache = system_prompt_cache.clone();
-            Arc::new(
-                move |_session: &SessionId, _profile: &entanglement_core::AgentProfile| {
-                    Some(cache.read().unwrap().clone())
-                },
-            )
+            Arc::new(move |_session: &SessionId, profile: &AgentProfile| {
+                let base = cache.read().unwrap().clone();
+                let suffix = match profile.name.as_str() {
+                    RESEARCHER_PROFILE => profiles::RESEARCHER_PROMPT_SUFFIX,
+                    PAGE_WRITER_PROFILE => profiles::PAGE_WRITER_PROMPT_SUFFIX,
+                    _ => "",
+                };
+                Some(format!("{base}{suffix}"))
+            })
         };
 
-        let profiles = ProfileRegistry::new(); // just the built-in `build` profile — this site has no plan/explore/debug sub-agents
+        // The root profile plus the two spawnable sub-agents (#17) —
+        // `researcher`/`page-writer`; this site defines no plan/explore/debug
+        // primaries.
+        let profiles = profiles::build_profiles();
+        // `agent_spawn`/`agent`/`agent_poll` are advertised per-profile, not
+        // via the shared `tool_specs` (a non-spawning profile gets nothing) —
+        // see `entanglement_runtime::subagent::spawn_specs_for`'s doc.
+        let profile_tool_specs: HashMap<String, Vec<ToolSpec>> = profiles
+            .iter()
+            .filter_map(|p| {
+                let specs = entanglement_runtime::subagent::spawn_specs_for(p, &profiles);
+                (!specs.is_empty()).then(|| (p.name.clone(), specs))
+            })
+            .collect();
         let cfg = EngineConfig {
-            llm_factory: catalog.default_llm_factory(),
+            llm_factory: llm_factory_override.unwrap_or_else(|| catalog.default_llm_factory()),
             tool_specs: registry.specs(),
             profiles: profiles.clone(),
+            profile_tool_specs,
             tool_spec_resolver: Some(tool_spec_resolver),
             system_prompt_resolver: Some(system_prompt_resolver),
             model_resolver: Some(catalog.model_resolver()),
@@ -197,13 +229,24 @@ impl SiteEngine {
         let holly = Holly::spawn(cfg);
 
         let live_sessions: Arc<DashSet<SessionId>> = Arc::new(DashSet::new());
+        // Tracks session liveness (`live_sessions`) and, for #17, sub-agent
+        // parent links (`session_tree`) — both folded from the same
+        // `Holly::subscribe()` broadcast `mcp.rs`/`ws_bridge.rs` also tap.
         let hibernate_watcher = {
             let live = live_sessions.clone();
             let mut sub = holly.subscribe();
             tokio::spawn(async move {
                 loop {
                     match sub.recv().await {
-                        Ok(ev) => evict_on_hibernate_or_end(&live, &ev),
+                        Ok(ev) => {
+                            evict_on_hibernate_or_end(&live, &ev);
+                            if let OutEvent::SessionStarted {
+                                session, parent, ..
+                            } = &ev
+                            {
+                                record_session_started(session.clone(), parent.clone());
+                            }
+                        }
                         Err(broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
@@ -297,37 +340,6 @@ impl SiteEngine {
     }
 }
 
-/// Split the `u{user_id}:{uuid}` convention back apart. Fails closed (`Err`)
-/// on anything that doesn't match — callers (`policy.rs`, `tools/*`, `mcp.rs`)
-/// all treat that as "deny"/"not found" rather than defaulting to some user.
-pub fn user_id_from_session(session: &SessionId) -> anyhow::Result<i32> {
-    let rest = session
-        .0
-        .strip_prefix('u')
-        .with_context(|| format!("session id `{}` missing `u` tenant prefix", session.0))?;
-    let (uid, _rest) = rest
-        .split_once(':')
-        .with_context(|| format!("session id `{}` missing `:` separator", session.0))?;
-    uid.parse::<i32>()
-        .with_context(|| format!("session id `{}` has a non-numeric user id", session.0))
-}
-
-/// Drop `ev`'s session from `live` on `SessionHibernated`/`SessionEnded` — the
-/// fix for the stale-liveness-cache bug: `Holly`'s own idle-TTL sweep (or a
-/// manual `HibernateSession`) can evict a session from *its* `sessions` map
-/// without this process ever being told to forget it, so without this
-/// listener `ensure_live` would keep trusting a cache entry for a session
-/// `Holly` has already forgotten — the next `InMsg` to it would then lazily
-/// respawn it **blank**, silently discarding history that's still intact in
-/// `assistant_events`. Factored out of the `hibernate_watcher` task in `spawn`
-/// so it's testable without driving a real `Holly` broadcast.
-fn evict_on_hibernate_or_end(live: &DashSet<SessionId>, ev: &OutEvent) {
-    if let OutEvent::SessionHibernated { session, .. } | OutEvent::SessionEnded { session, .. } = ev
-    {
-        live.remove(session);
-    }
-}
-
 async fn load_system_prompt(db: &DatabaseConnection, fallback: &str) -> String {
     match crate::repo::pages::find_by_path(db, SYSTEM_PROMPT_PAGE_PATH).await {
         Ok(Some(page)) if !page.markdown.trim().is_empty() => page.markdown,
@@ -360,54 +372,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn hibernated_session_is_evicted_from_the_live_cache() {
-        let live: DashSet<SessionId> = DashSet::new();
-        let session = SiteEngine::session_id_for_user(9);
-        live.insert(session.clone());
-
-        evict_on_hibernate_or_end(
-            &live,
-            &OutEvent::SessionHibernated {
-                session: session.clone(),
-                ts: 0,
-            },
-        );
-
-        assert!(!live.contains(&session));
-    }
-
-    #[test]
-    fn session_ended_is_also_evicted_from_the_live_cache() {
-        let live: DashSet<SessionId> = DashSet::new();
-        let session = SiteEngine::session_id_for_user(10);
-        live.insert(session.clone());
-
-        evict_on_hibernate_or_end(
-            &live,
-            &OutEvent::SessionEnded {
-                session: session.clone(),
-                ts: 0,
-            },
-        );
-
-        assert!(!live.contains(&session));
-    }
-
-    #[test]
-    fn unrelated_event_does_not_evict_other_sessions() {
-        let live: DashSet<SessionId> = DashSet::new();
-        let session = SiteEngine::session_id_for_user(11);
-        live.insert(session.clone());
-
-        evict_on_hibernate_or_end(
-            &live,
-            &OutEvent::Done {
-                session: session.clone(),
-                seq: 1,
-            },
-        );
-
-        assert!(live.contains(&session));
-    }
+    // `evict_on_hibernate_or_end`'s own behavior (live-cache eviction, parent-
+    // cache forgetting, and that it ignores unrelated events) is tested in
+    // `session_tree.rs`, right next to the function itself.
 }
