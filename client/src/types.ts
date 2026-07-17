@@ -1,4 +1,4 @@
-export type WsTopic = 'assistant' | 'pages' | 'files' | 'galleries'
+export type WsTopic = 'assistant' | 'pages' | 'files' | 'galleries' | 'tags'
 
 export interface WsEnvelope<T = any> {
   topic: WsTopic

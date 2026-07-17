@@ -15,6 +15,27 @@ pub struct TagUpdate {
     pub description: Option<String>,
 }
 
+#[derive(Debug)]
+pub enum TagSaveError {
+    EmptyName,
+    Db(DbErr),
+}
+
+impl std::fmt::Display for TagSaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyName => write!(f, "name is required"),
+            Self::Db(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<DbErr> for TagSaveError {
+    fn from(e: DbErr) -> Self {
+        Self::Db(e)
+    }
+}
+
 pub async fn list_all(db: &DatabaseConnection) -> Result<Vec<tag::Model>, DbErr> {
     tag::Entity::find()
         .order_by_asc(tag::Column::Name)
@@ -22,14 +43,20 @@ pub async fn list_all(db: &DatabaseConnection) -> Result<Vec<tag::Model>, DbErr>
         .await
 }
 
-pub async fn create_tag(db: &DatabaseConnection, input: TagInput) -> Result<tag::Model, DbErr> {
-    tag::ActiveModel {
+pub async fn create_tag(
+    db: &DatabaseConnection,
+    input: TagInput,
+) -> Result<tag::Model, TagSaveError> {
+    if input.name.trim().is_empty() {
+        return Err(TagSaveError::EmptyName);
+    }
+    Ok(tag::ActiveModel {
         name: Set(input.name),
         description: Set(input.description.filter(|s| !s.is_empty())),
         ..Default::default()
     }
     .insert(db)
-    .await
+    .await?)
 }
 
 pub async fn find_by_name(
@@ -75,12 +102,13 @@ pub async fn update_tag_by_name(
     Ok(Some(active.update(db).await?))
 }
 
-pub async fn delete_by_name(db: &DatabaseConnection, name: &str) -> Result<bool, DbErr> {
-    let res = tag::Entity::delete_many()
-        .filter(tag::Column::Name.eq(name))
-        .exec(db)
-        .await?;
-    Ok(res.rows_affected > 0)
+/// Delete a tag by name, returning its id (for a WS broadcast) if it existed.
+pub async fn delete_by_name(db: &DatabaseConnection, name: &str) -> Result<Option<i32>, DbErr> {
+    let Some(model) = find_by_name(db, name).await? else {
+        return Ok(None);
+    };
+    tag::Entity::delete_by_id(model.id).exec(db).await?;
+    Ok(Some(model.id))
 }
 
 #[derive(Debug)]

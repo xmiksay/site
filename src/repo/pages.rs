@@ -3,9 +3,9 @@ use sea_orm::{
     EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement, Value,
 };
 
-use crate::entity::{page, page_revision, tag};
+use crate::entity::page;
 use crate::path_util;
-use crate::routes::revision::{self, ReconstructError};
+use crate::routes::revision;
 
 #[derive(Debug, Clone)]
 pub struct ChildRow {
@@ -81,6 +81,46 @@ pub struct PageUpdate {
     pub private: Option<bool>,
 }
 
+/// The "nothing to update" guard shared by every edge that upserts a page by
+/// path (MCP `edit_page`, the AI assistant's `edit_page` tool) — checked
+/// against the *raw* caller-provided fields, before `tag_names` is resolved
+/// to `tag_ids`, so an explicit empty `tag_names: []` still counts as "the
+/// caller provided a field" (existing behavior: it resolves to no tag change,
+/// not a rejected call).
+pub fn validate_page_edit_fields(
+    markdown: &Option<String>,
+    summary: &Option<String>,
+    tag_names: &Option<Vec<String>>,
+    private: &Option<bool>,
+) -> Result<(), &'static str> {
+    if markdown.is_none() && summary.is_none() && tag_names.is_none() && private.is_none() {
+        Err("Nothing to update — provide markdown, summary, tag_names, or private")
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum PageSaveError {
+    EmptyPath,
+    Db(DbErr),
+}
+
+impl std::fmt::Display for PageSaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyPath => write!(f, "path is required"),
+            Self::Db(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<DbErr> for PageSaveError {
+    fn from(e: DbErr) -> Self {
+        Self::Db(e)
+    }
+}
+
 pub struct PageNew {
     pub path: String,
     pub markdown: String,
@@ -105,11 +145,6 @@ impl PageSort {
             _ => Self::ModifiedDesc,
         }
     }
-}
-
-pub struct SearchResult {
-    pub pages: Vec<page::Model>,
-    pub total: u64,
 }
 
 pub async fn list_paths(
@@ -152,144 +187,18 @@ pub async fn list_all(db: &DatabaseConnection, sort: PageSort) -> Result<Vec<pag
     select.all(db).await
 }
 
-#[derive(Debug)]
-pub enum SearchError {
-    Db(DbErr),
-    UnknownTag,
-}
-
-impl std::fmt::Display for SearchError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Db(e) => write!(f, "{e}"),
-            Self::UnknownTag => write!(f, "unknown tag"),
-        }
-    }
-}
-
-impl From<DbErr> for SearchError {
-    fn from(e: DbErr) -> Self {
-        Self::Db(e)
-    }
-}
-
-pub async fn search(
-    db: &DatabaseConnection,
-    prefix: Option<&str>,
-    tag_name: Option<&str>,
-    q: Option<&str>,
-    include_private: bool,
-    limit: u64,
-    offset: u64,
-) -> Result<SearchResult, SearchError> {
-    let prefix = prefix.filter(|s| !s.is_empty());
-    let tag_name = tag_name.filter(|s| !s.is_empty());
-    let q_clean = q.map(|s| s.trim()).filter(|s| !s.is_empty());
-
-    // Resolve tag id up front so we can short-circuit unknown tag.
-    let tag_id = if let Some(name) = tag_name {
-        match tag::Entity::find()
-            .filter(tag::Column::Name.eq(name))
-            .one(db)
-            .await?
-        {
-            Some(t) => Some(t.id),
-            None => return Err(SearchError::UnknownTag),
-        }
-    } else {
-        None
-    };
-
-    // Build the WHERE clause and shared parameter list.
-    let mut where_sql = String::from("TRUE");
-    let mut values: Vec<Value> = Vec::new();
-    let mut next_idx = 1usize;
-    let mut placeholder = |sql: &mut String, values: &mut Vec<Value>, v: Value| -> usize {
-        values.push(v);
-        let i = next_idx;
-        next_idx += 1;
-        let _ = sql;
-        i
-    };
-
-    if !include_private {
-        where_sql.push_str(" AND private = FALSE");
-    }
-    if let Some(p) = prefix {
-        let i = placeholder(&mut where_sql, &mut values, format!("{p}%").into());
-        where_sql.push_str(&format!(" AND path LIKE ${i}"));
-    }
-    if let Some(id) = tag_id {
-        let i = placeholder(&mut where_sql, &mut values, id.into());
-        where_sql.push_str(&format!(" AND ${i} = ANY(tag_ids)"));
-    }
-    let q_idx = if let Some(q_str) = q_clean {
-        let v: Value = q_str.to_string().into();
-        let i1 = placeholder(&mut where_sql, &mut values, v.clone());
-        let i2 = placeholder(&mut where_sql, &mut values, v.clone());
-        let i3 = placeholder(&mut where_sql, &mut values, v);
-        where_sql.push_str(&format!(
-            " AND (search_tsv @@ plainto_tsquery('simple', f_unaccent(${i1})) \
-                   OR f_unaccent(path) ILIKE '%' || f_unaccent(${i2}) || '%' \
-                   OR EXISTS (SELECT 1 FROM tags \
-                              WHERE tags.id = ANY(pages.tag_ids) \
-                                AND f_unaccent(tags.name) ILIKE '%' || f_unaccent(${i3}) || '%'))"
-        ));
-        Some((i1, i3))
-    } else {
-        None
-    };
-
-    // Count
-    let count_sql = format!("SELECT count(*) AS c FROM pages WHERE {where_sql}");
-    let count_stmt = Statement::from_sql_and_values(DbBackend::Postgres, count_sql, values.clone());
-    let total: i64 = db
-        .query_one(count_stmt)
-        .await?
-        .and_then(|r| r.try_get_by::<i64, _>("c").ok())
-        .unwrap_or(0);
-    if total == 0 {
-        return Ok(SearchResult {
-            pages: vec![],
-            total: 0,
-        });
-    }
-
-    // Rows
-    let order_sql = match q_idx {
-        Some((i_rank, i_tag)) => format!(
-            "ts_rank(search_tsv, plainto_tsquery('simple', f_unaccent(${i_rank}))) \
-             + CASE WHEN EXISTS (SELECT 1 FROM tags \
-                                 WHERE tags.id = ANY(pages.tag_ids) \
-                                   AND f_unaccent(tags.name) ILIKE '%' || f_unaccent(${i_tag}) || '%') \
-                    THEN 0.5 ELSE 0 END DESC, modified_at DESC"
-        ),
-        None => "modified_at DESC".to_string(),
-    };
-    let i_limit = next_idx;
-    let i_offset = next_idx + 1;
-    values.push((limit as i64).into());
-    values.push((offset as i64).into());
-
-    let select_sql = format!(
-        "SELECT * FROM pages WHERE {where_sql} ORDER BY {order_sql} LIMIT ${i_limit} OFFSET ${i_offset}"
-    );
-    let stmt = Statement::from_sql_and_values(DbBackend::Postgres, select_sql, values);
-    let pages = page::Entity::find().from_raw_sql(stmt).all(db).await?;
-    Ok(SearchResult {
-        pages,
-        total: total as u64,
-    })
-}
-
 pub async fn create(
     db: &DatabaseConnection,
     user_id: i32,
     input: PageNew,
-) -> Result<page::Model, DbErr> {
+) -> Result<page::Model, PageSaveError> {
+    let path = path_util::normalize(&input.path);
+    if path.is_empty() {
+        return Err(PageSaveError::EmptyPath);
+    }
     let now = chrono::Utc::now().fixed_offset();
-    page::ActiveModel {
-        path: Set(path_util::normalize(&input.path)),
+    Ok(page::ActiveModel {
+        path: Set(path),
         summary: Set(input.summary.filter(|s| !s.is_empty())),
         markdown: Set(input.markdown),
         tag_ids: Set(input.tag_ids),
@@ -301,7 +210,7 @@ pub async fn create(
         ..Default::default()
     }
     .insert(db)
-    .await
+    .await?)
 }
 
 pub async fn replace(
@@ -309,7 +218,11 @@ pub async fn replace(
     user_id: i32,
     id: i32,
     input: PageNew,
-) -> Result<Option<page::Model>, DbErr> {
+) -> Result<Option<page::Model>, PageSaveError> {
+    let normalized_path = path_util::normalize(&input.path);
+    if normalized_path.is_empty() {
+        return Err(PageSaveError::EmptyPath);
+    }
     let Some(model) = page::Entity::find_by_id(id).one(db).await? else {
         return Ok(None);
     };
@@ -318,7 +231,7 @@ pub async fn replace(
     let new_markdown = input.markdown.clone();
 
     let mut active: page::ActiveModel = model.into();
-    active.path = Set(path_util::normalize(&input.path));
+    active.path = Set(normalized_path);
     active.summary = Set(input.summary.filter(|s| !s.is_empty()));
     active.markdown = Set(input.markdown);
     active.tag_ids = Set(input.tag_ids);
@@ -344,9 +257,12 @@ pub async fn upsert_by_path(
     user_id: i32,
     path: &str,
     update: PageUpdate,
-) -> Result<UpsertOutcome, DbErr> {
+) -> Result<UpsertOutcome, PageSaveError> {
     let now = chrono::Utc::now().fixed_offset();
     let path = path_util::normalize(path);
+    if path.is_empty() {
+        return Err(PageSaveError::EmptyPath);
+    }
     let existing = find_by_path(db, &path).await?;
 
     match existing {
@@ -402,83 +318,11 @@ pub async fn delete_by_id(db: &DatabaseConnection, id: i32) -> Result<bool, DbEr
     Ok(res.rows_affected > 0)
 }
 
-pub async fn delete_by_path(db: &DatabaseConnection, path: &str) -> Result<bool, DbErr> {
-    let res = page::Entity::delete_many()
-        .filter(page::Column::Path.eq(path_util::normalize(path)))
-        .exec(db)
-        .await?;
-    Ok(res.rows_affected > 0)
-}
-
-/// Load a single revision belonging to `page_id` (None if it isn't that page's).
-pub async fn get_revision(
-    db: &DatabaseConnection,
-    page_id: i32,
-    rev_id: i32,
-) -> Result<Option<page_revision::Model>, DbErr> {
-    page_revision::Entity::find_by_id(rev_id)
-        .filter(page_revision::Column::PageId.eq(page_id))
-        .one(db)
-        .await
-}
-
-pub async fn list_revisions(
-    db: &DatabaseConnection,
-    page_id: i32,
-) -> Result<Vec<page_revision::Model>, DbErr> {
-    page_revision::Entity::find()
-        .filter(page_revision::Column::PageId.eq(page_id))
-        .order_by_desc(page_revision::Column::CreatedAt)
-        .all(db)
-        .await
-}
-
-#[derive(Debug)]
-pub enum RestoreError {
-    NotFound,
-    Reconstruct(ReconstructError),
-    Db(DbErr),
-}
-
-impl std::fmt::Display for RestoreError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotFound => write!(f, "Page not found"),
-            Self::Reconstruct(e) => write!(f, "{e}"),
-            Self::Db(e) => write!(f, "Database error: {e}"),
-        }
-    }
-}
-
-impl From<DbErr> for RestoreError {
-    fn from(e: DbErr) -> Self {
-        Self::Db(e)
-    }
-}
-
-pub async fn restore_revision(
-    db: &DatabaseConnection,
-    user_id: i32,
-    page_id: i32,
-    revision_id: i32,
-) -> Result<page::Model, RestoreError> {
-    let model = page::Entity::find_by_id(page_id)
-        .one(db)
-        .await?
-        .ok_or(RestoreError::NotFound)?;
-
-    let restored = revision::reconstruct_at_revision(db, page_id, revision_id, &model.markdown)
-        .await
-        .map_err(RestoreError::Reconstruct)?;
-
-    let old_markdown = model.markdown.clone();
-    let now = chrono::Utc::now().fixed_offset();
-    let mut active: page::ActiveModel = model.into();
-    active.markdown = Set(restored.clone());
-    active.modified_at = Set(now);
-    active.modified_by = Set(user_id);
-    let updated = active.update(db).await?;
-
-    revision::create_revision_if_changed(db, page_id, &old_markdown, &restored, user_id).await;
-    Ok(updated)
+/// Delete a page by path, returning its id (for a WS broadcast) if it existed.
+pub async fn delete_by_path(db: &DatabaseConnection, path: &str) -> Result<Option<i32>, DbErr> {
+    let Some(model) = find_by_path(db, path).await? else {
+        return Ok(None);
+    };
+    page::Entity::delete_by_id(model.id).exec(db).await?;
+    Ok(Some(model.id))
 }

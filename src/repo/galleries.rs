@@ -63,6 +63,29 @@ pub struct GalleryInput {
     pub file_ids: Vec<i32>,
 }
 
+#[derive(Debug)]
+pub enum GallerySaveError {
+    EmptyPath,
+    EmptyTitle,
+    Db(DbErr),
+}
+
+impl std::fmt::Display for GallerySaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyPath => write!(f, "path is required"),
+            Self::EmptyTitle => write!(f, "title is required"),
+            Self::Db(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<DbErr> for GallerySaveError {
+    fn from(e: DbErr) -> Self {
+        Self::Db(e)
+    }
+}
+
 pub async fn list_all(db: &DatabaseConnection) -> Result<Vec<gallery::Model>, DbErr> {
     gallery::Entity::find()
         .order_by_desc(gallery::Column::CreatedAt)
@@ -98,9 +121,16 @@ pub async fn create_gallery(
     db: &DatabaseConnection,
     user_id: i32,
     input: GalleryInput,
-) -> Result<gallery::Model, DbErr> {
-    gallery::ActiveModel {
-        path: Set(path_util::normalize(&input.path)),
+) -> Result<gallery::Model, GallerySaveError> {
+    if input.title.trim().is_empty() {
+        return Err(GallerySaveError::EmptyTitle);
+    }
+    let path = path_util::normalize(&input.path);
+    if path.is_empty() {
+        return Err(GallerySaveError::EmptyPath);
+    }
+    Ok(gallery::ActiveModel {
+        path: Set(path),
         title: Set(input.title),
         description: Set(input.description.filter(|s| !s.is_empty())),
         file_ids: Set(input.file_ids),
@@ -108,19 +138,23 @@ pub async fn create_gallery(
         ..Default::default()
     }
     .insert(db)
-    .await
+    .await?)
 }
 
 pub async fn update_gallery(
     db: &DatabaseConnection,
     id: i32,
     input: GalleryInput,
-) -> Result<Option<gallery::Model>, DbErr> {
+) -> Result<Option<gallery::Model>, GallerySaveError> {
+    let path = path_util::normalize(&input.path);
+    if path.is_empty() {
+        return Err(GallerySaveError::EmptyPath);
+    }
     let Some(model) = gallery::Entity::find_by_id(id).one(db).await? else {
         return Ok(None);
     };
     let mut active: gallery::ActiveModel = model.into();
-    active.path = Set(path_util::normalize(&input.path));
+    active.path = Set(path);
     active.title = Set(input.title);
     active.description = Set(input.description.filter(|s| !s.is_empty()));
     active.file_ids = Set(input.file_ids);

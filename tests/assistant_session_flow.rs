@@ -197,10 +197,16 @@ async fn setup_scripted(
     .expect("insert session token");
 
     let ai_config = std::sync::Arc::new(AiConfig::new());
-    let engine = SiteEngine::spawn(db.clone(), ai_config, None, Some(llm_factory))
-        .await
-        .expect("spawn scripted assistant engine");
     let ws_hub = std::sync::Arc::new(WsHub::new());
+    let engine = SiteEngine::spawn(
+        db.clone(),
+        ai_config,
+        ws_hub.clone(),
+        None,
+        Some(llm_factory),
+    )
+    .await
+    .expect("spawn scripted assistant engine");
     site::ai::ws_bridge::spawn(engine.clone(), ws_hub.clone(), db.clone());
     let state = AppState {
         db: db.clone(),

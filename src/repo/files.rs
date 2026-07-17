@@ -81,6 +81,29 @@ pub struct FileMetaUpdate {
     pub description: Option<String>,
 }
 
+#[derive(Debug)]
+pub enum FileSaveError {
+    EmptyPath,
+    EmptyData,
+    Db(DbErr),
+}
+
+impl std::fmt::Display for FileSaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyPath => write!(f, "path is required"),
+            Self::EmptyData => write!(f, "decoded data is empty"),
+            Self::Db(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl From<DbErr> for FileSaveError {
+    fn from(e: DbErr) -> Self {
+        Self::Db(e)
+    }
+}
+
 pub fn title_from_path(path: &str) -> String {
     path.rsplit('/')
         .find(|s| !s.is_empty())
@@ -92,7 +115,14 @@ pub async fn create_file(
     db: &DatabaseConnection,
     user_id: i32,
     input: NewFile,
-) -> Result<CreatedFile, DbErr> {
+) -> Result<CreatedFile, FileSaveError> {
+    let path = path_util::normalize(&input.path);
+    if path.is_empty() {
+        return Err(FileSaveError::EmptyPath);
+    }
+    if input.data.is_empty() {
+        return Err(FileSaveError::EmptyData);
+    }
     let hash = hash_blob(&input.data);
     let size_bytes = input.data.len() as i64;
     put_blob(db, &hash, &input.data).await?;
@@ -101,7 +131,7 @@ pub async fn create_file(
     let model = file::ActiveModel {
         hash: Set(hash),
         mimetype: Set(input.mimetype.clone()),
-        path: Set(path_util::normalize(&input.path)),
+        path: Set(path),
         description: Set(input.description.filter(|s| !s.is_empty())),
         size_bytes: Set(size_bytes),
         created_at: Set(now),

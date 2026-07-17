@@ -9,10 +9,15 @@
 //! ## Public API for the next phase
 //!
 //! ```ignore
-//! let engine = SiteEngine::spawn(db, ai_config, serper_api_key, None).await?;
+//! let engine = SiteEngine::spawn(db, ai_config, ws_hub, serper_api_key, None).await?;
 //! let session = SiteEngine::session_id_for_user(user_id);
 //! engine.holly.send(InMsg::prompt(session, text)).await?;
 //! ```
+//!
+//! `ws_hub` is threaded into the built-in tool registry (`tools::registry`)
+//! so a page/file/gallery/tag mutation made by the AI assistant broadcasts
+//! the same `WsHub` event a REST API mutation would (issue #25) — `state.rs`
+//! constructs the hub before the engine so it can be passed in here.
 //!
 //! `spawn`'s last parameter, `llm_factory_override`, exists solely as a test
 //! seam: `state.rs`'s one production call site always passes `None` (the
@@ -60,6 +65,7 @@ use crate::ai::mcp::{McpRoutedTool, SiteMcp};
 use crate::ai::persistence::{self, DbSink};
 use crate::ai::policy::SitePolicy;
 use crate::ai::tools;
+use crate::routes::ws::WsHub;
 
 /// A session-scoped tool spec cache: local specs are always present (baked
 /// into the resolver closure at construction); this only ever holds the
@@ -155,6 +161,7 @@ impl SiteEngine {
     pub async fn spawn(
         db: DatabaseConnection,
         ai_config: Arc<AiConfig>,
+        ws_hub: Arc<WsHub>,
         serper_api_key: Option<String>,
         llm_factory_override: Option<entanglement_core::LlmFactory>,
     ) -> anyhow::Result<Arc<Self>> {
@@ -165,7 +172,7 @@ impl SiteEngine {
         let mcp = SiteMcp::new(db.clone());
 
         let db_arc = Arc::new(db.clone());
-        let mut registry = tools::registry(db_arc, serper_api_key);
+        let mut registry = tools::registry(db_arc, ws_hub, serper_api_key);
         let local_specs = registry.specs();
         for name in mcp.known_tool_names(&db).await {
             registry.register(McpRoutedTool::new(name, mcp.clone()));

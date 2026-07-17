@@ -5,9 +5,11 @@ use axum::http::StatusCode;
 use axum::routing::get;
 
 use crate::entity::gallery;
-use crate::repo::galleries::{self as galleries_repo, GalleryInput as RepoGalleryInput};
+use crate::repo::galleries::{
+    self as galleries_repo, GalleryInput as RepoGalleryInput, GallerySaveError,
+};
 use crate::routes::api::error::{ApiError, ApiResult};
-use crate::routes::ws::Topic;
+use crate::routes::broadcast;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -15,6 +17,16 @@ pub fn router() -> Router<AppState> {
         .route("/", get(list).post(create))
         .route("/paths", get(list_paths))
         .route("/{id}", get(read).put(update).delete(delete_one))
+}
+
+impl From<GallerySaveError> for ApiError {
+    fn from(e: GallerySaveError) -> Self {
+        match e {
+            GallerySaveError::EmptyPath => ApiError::BadRequest("path is required".into()),
+            GallerySaveError::EmptyTitle => ApiError::BadRequest("title is required".into()),
+            GallerySaveError::Db(db) => ApiError::from(db),
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -50,12 +62,6 @@ pub async fn create(
     Extension(user_id): Extension<i32>,
     Json(input): Json<GalleryInput>,
 ) -> ApiResult<(StatusCode, Json<gallery::Model>)> {
-    if input.title.trim().is_empty() {
-        return Err(ApiError::BadRequest("title is required".into()));
-    }
-    if input.path.trim().is_empty() {
-        return Err(ApiError::BadRequest("path is required".into()));
-    }
     let saved = galleries_repo::create_gallery(
         &state.db,
         user_id,
@@ -67,9 +73,7 @@ pub async fn create(
         },
     )
     .await?;
-    state
-        .ws_hub
-        .broadcast_serialized(Topic::Galleries, "created", &saved);
+    broadcast::gallery_created(&state.ws_hub, &saved);
     Ok((StatusCode::CREATED, Json(saved)))
 }
 
@@ -78,9 +82,6 @@ pub async fn update(
     Path(id): Path<i32>,
     Json(input): Json<GalleryInput>,
 ) -> ApiResult<Json<gallery::Model>> {
-    if input.path.trim().is_empty() {
-        return Err(ApiError::BadRequest("path is required".into()));
-    }
     let updated = galleries_repo::update_gallery(
         &state.db,
         id,
@@ -93,9 +94,7 @@ pub async fn update(
     )
     .await?
     .ok_or(ApiError::NotFound)?;
-    state
-        .ws_hub
-        .broadcast_serialized(Topic::Galleries, "updated", &updated);
+    broadcast::gallery_updated(&state.ws_hub, &updated);
     Ok(Json(updated))
 }
 
@@ -104,9 +103,7 @@ pub async fn delete_one(
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
     if galleries_repo::delete_by_id(&state.db, id).await? {
-        state
-            .ws_hub
-            .broadcast_event(Topic::Galleries, "deleted", serde_json::json!({ "id": id }));
+        broadcast::gallery_deleted(&state.ws_hub, id);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound)

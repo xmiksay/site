@@ -1,10 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api, apiVoid } from '../api'
+import { useListSync } from '../composables/useListSync'
 import type { Tag } from '../types'
 
 export const useTagsStore = defineStore('tags', () => {
   const items = ref<Tag[]>([])
+  useListSync('tags', items)
 
   async function load() {
     items.value = await api<Tag[]>('/api/tags')

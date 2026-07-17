@@ -5,6 +5,7 @@ pub mod design;
 pub mod entity;
 pub mod files;
 pub mod markdown;
+pub mod mcp_args;
 pub mod migration;
 pub mod path_util;
 pub mod repo;

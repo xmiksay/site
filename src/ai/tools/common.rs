@@ -3,9 +3,10 @@
 //! *string* now (not a pre-parsed `serde_json::Value`), so every tool parses
 //! its own args via [`parse_args`].
 
-use anyhow::Context;
 use entanglement_provider::ContentPart;
 use serde_json::Value;
+
+use crate::mcp_args;
 
 /// One text content part for a non-empty string, none for an empty one —
 /// mirrors `entanglement_runtime::tools::text_parts` (private to that crate).
@@ -25,13 +26,10 @@ pub(super) fn ok_json(v: Value) -> Vec<ContentPart> {
     ok_text(s)
 }
 
-/// Parse a tool call's `input` string as a JSON object. Empty input (no
-/// arguments) is treated as `{}` rather than an error.
+/// Parse a tool call's `input` string as a JSON object — see
+/// `crate::mcp_args`, shared with the MCP server's own arg parsing.
 pub(super) fn parse_args(input: &str) -> anyhow::Result<Value> {
-    if input.trim().is_empty() {
-        return Ok(Value::Object(serde_json::Map::new()));
-    }
-    serde_json::from_str(input).context("invalid tool arguments (expected a JSON object)")
+    mcp_args::parse_str(input).map_err(|e| anyhow::anyhow!(e))
 }
 
 pub(super) fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {

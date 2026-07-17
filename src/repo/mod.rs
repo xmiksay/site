@@ -1,7 +1,10 @@
 pub mod files;
+pub mod format;
 pub mod galleries;
 pub mod menu;
 pub mod pages;
+pub mod pages_revisions;
+pub mod pages_search;
 pub mod tags;
 pub mod tokens;
 pub mod users;
