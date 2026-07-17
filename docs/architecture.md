@@ -16,8 +16,16 @@ src/
                           # menu, tokens, markdown, paths — nests
                           # ai::handlers::router() at /assistant and
                           # routes/ws.rs at /ws
-    mcp.rs                # MCP JSON-RPC endpoint
-    oauth.rs              # OAuth2 server (register/authorize/token/well-known)
+    mcp/                  # MCP JSON-RPC endpoint: mod.rs (router/dispatch),
+                          # rpc.rs (JSON-RPC envelope + parse_args),
+                          # instructions.rs (server_instructions +
+                          # handle_tools_list), pages.rs/tags.rs/files.rs/
+                          # galleries.rs (one tool family per file)
+    oauth/                # OAuth2 server: mod.rs (router + base_url),
+                          # handlers.rs (authorize/token Axum handlers),
+                          # security.rs (PKCE verify, code/token issuance +
+                          # refresh, authenticate_mcp — no Axum extractors),
+                          # metadata.rs (register + well-known discovery)
     revision.rs
     ws.rs                 # global WebSocket hub (WsHub) + GET /api/ws upgrade
     broadcast.rs          # WsHub broadcast + PageSummary/FileSummary — one
@@ -41,7 +49,11 @@ src/
                           # galleries, menu, tokens, users, format (shared
                           # MCP/AI text formatters, #25)
   auth.rs config.rs design.rs files.rs
-  markdown.rs mcp_args.rs path_util.rs state.rs templates.rs
+  markdown/              # mod.rs (entry + MARKDOWN_EXTENSIONS_DOC), directives.rs
+                          # (tag parsing), renderer.rs (expansion pipeline),
+                          # lookup.rs (file/gallery/page resolution), highlight.rs
+                          # (syntect), links.rs, handlers/ (simple/media/json)
+  mcp_args.rs path_util.rs state.rs templates.rs
                           # mcp_args.rs: shared tool-argument JSON parsing for
                           # the MCP server and the AI assistant's tools (#25)
 
@@ -154,24 +166,29 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 
 The site plays both MCP roles, in two different places: it *serves* MCP to
 external clients (this section — `POST /mcp`, a hand-rolled JSON-RPC 2.0
-handler in `src/routes/mcp.rs`, no framework crate), and it *consumes* per-user
-MCP servers on behalf of the AI assistant (`ai::mcp`'s `SiteMcp` over
-`entanglement_runtime::mcp::HttpClient`, see the AI Assistant section below).
+handler in `src/routes/mcp/` — `mod.rs` wires the route and dispatches by
+method/tool name, `rpc.rs` holds the JSON-RPC envelope types + `parse_args`,
+`instructions.rs` holds the static `initialize`/`tools/list` content, and
+`pages.rs`/`tags.rs`/`files.rs`/`galleries.rs` hold one tool family each as
+plain `async fn`s callable without the Axum router; no framework crate), and
+it *consumes* per-user MCP servers on behalf of the AI assistant (`ai::mcp`'s
+`SiteMcp` over `entanglement_runtime::mcp::HttpClient`, see the AI Assistant
+section below).
 
-`POST /mcp` exposes JSON-RPC 2.0 with these tools (defined in `src/routes/mcp.rs`):
+`POST /mcp` exposes JSON-RPC 2.0 with these tools (defined in `src/routes/mcp/{pages,tags,files,galleries}.rs`):
 
 - **Pages:** `read_page`, `edit_page`, `search_pages` (prefix/tag/q + limit/offset), `delete_page`
 - **Tags:** `list_tags`, `read_tag`, `create_tag`, `update_tag`, `delete_tag`
 - **Files:** `list_files`, `create_file`, `read_file`, `update_file`, `delete_file`
 - **Galleries:** `list_galleries`, `read_gallery`, `create_gallery`, `update_gallery`, `delete_gallery`
 
-Server instructions are assembled by `server_instructions()` = `SERVER_INSTRUCTIONS_HEADER` + `MARKDOWN_EXTENSIONS_DOC` (`src/routes/mcp.rs`, `src/markdown.rs`). If a private `CLAUDE` page exists (editable via admin UI / MCP), its markdown replaces the assembled default entirely — so keep that page in sync with the code. Tool/parameter descriptions live in `handle_tools_list()`.
+Server instructions are assembled by `server_instructions()` = `SERVER_INSTRUCTIONS_HEADER` + `MARKDOWN_EXTENSIONS_DOC` (`src/routes/mcp/instructions.rs`, `src/markdown/mod.rs`). If a private `CLAUDE` page exists (editable via admin UI / MCP), its markdown replaces the assembled default entirely — so keep that page in sync with the code. Tool/parameter descriptions live in `handle_tools_list()` (`src/routes/mcp/instructions.rs`).
 
 Every mutating tool broadcasts the same `WsHub` event a REST API mutation would (`src/routes/broadcast.rs`), so a page/tag/file/gallery change made over MCP shows up live in an open admin tab. `read_page`/`search_pages`/`list_tags` render through `src/repo/format.rs`, and the pages/galleries/files/tags "empty required field" and pages "nothing to update" guards live on the `repo` mutation functions themselves (`PageSaveError`/`GallerySaveError`/`FileSaveError`/`TagSaveError`, `pages::validate_page_edit_fields`) — the same formatters, guards, and `crate::mcp_args` argument parsing are shared verbatim with the AI assistant's built-in tools (`src/ai/tools/*.rs`), so the two edges can't drift (#25).
 
 ### Markdown directives
 
-The renderer recognizes exactly 8 HTML-tag directives — the `DIRECTIVE_NAMES` allow-list in `src/markdown.rs`; any other `<tag>` passes through as raw HTML:
+The renderer recognizes exactly 8 HTML-tag directives — the `DIRECTIVE_NAMES` allow-list in `src/markdown/directives.rs`; any other `<tag>` passes through as raw HTML:
 
 | Directive | Lookup keys | Other attrs | Inline body |
 |---|---|---|---|
@@ -184,7 +201,7 @@ The renderer recognizes exactly 8 HTML-tag directives — the `DIRECTIVE_NAMES` 
 | `<mermaid>` | `path` \| `id` \| `hash` \| body | `theme`, `size` | yes |
 | `<json>` | `path` \| `id` \| `hash` \| body | `query` (jq, required), `type` (`table`) | yes |
 
-A fenced code block with info string `mermaid` also renders as a diagram. **Single source of truth:** the human/AI-facing description is the `MARKDOWN_EXTENSIONS_DOC` const (`src/markdown.rs`), reused verbatim by the MCP server instructions, the AI system prompt, and the local `site_tools` description — edit it there, not in each surface.
+A fenced code block with info string `mermaid` also renders as a diagram. **Single source of truth:** the human/AI-facing description is the `MARKDOWN_EXTENSIONS_DOC` const (`src/markdown/mod.rs`), reused verbatim by the MCP server instructions, the AI system prompt, and the local `site_tools` description — edit it there, not in each surface.
 
 Auth: `Authorization: Bearer <token>` — accepts both service tokens (legacy, no expiry) and OAuth2 access tokens (1 h, refreshable). Handler resolves to `user_id` for audit fields.
 
@@ -303,7 +320,7 @@ Configured per user via the admin SPA: `/admin/{providers,models,assistant,mcp-s
 
 Frames are JSON `Envelope { topic, event, payload }`, `topic` one of `assistant | pages | files | galleries | tags`:
 
-- **`pages` / `files` / `galleries` / `tags`** — `created`/`updated` (payload = the same summary shape the REST endpoint returns) / `deleted` (payload `{ id }`). Broadcast to **every** connected user via `WsHub::broadcast`/`broadcast_serialized` — these are shared site entities, not per-user. Published from the shared `src/routes/broadcast.rs` helpers, called after a successful create/update/delete from all three mutating edges — `src/routes/api/{pages,files,galleries,tags}.rs`, `src/routes/mcp.rs`, and `src/ai/tools/*.rs` — so a mutation over MCP or by the AI assistant broadcasts the same event a REST API mutation would (#25).
+- **`pages` / `files` / `galleries` / `tags`** — `created`/`updated` (payload = the same summary shape the REST endpoint returns) / `deleted` (payload `{ id }`). Broadcast to **every** connected user via `WsHub::broadcast`/`broadcast_serialized` — these are shared site entities, not per-user. Published from the shared `src/routes/broadcast.rs` helpers, called after a successful create/update/delete from all three mutating edges — `src/routes/api/{pages,files,galleries,tags}.rs`, `src/routes/mcp/{pages,tags,files,galleries}.rs`, and `src/ai/tools/*.rs` — so a mutation over MCP or by the AI assistant broadcasts the same event a REST API mutation would (#25).
 - **`assistant`** — real, token-level streaming straight off `agent_engine.holly.subscribe()` (`src/ai/ws_bridge.rs`), published only to the owning user's own connections via `WsHub::publish`. `event` is the forwarded `OutEvent`'s own `"kind"` tag and `payload` is that event's JSON shape (`entanglement_core::OutEvent` already derives `Serialize`) plus a spliced-in `db_session_id` (the `assistant_sessions.id` the engine's root `SessionId` resolves to, cached per session): `status` (`AgentState`: idle/thinking/waiting_approval/waiting_answer/done/error), `text_delta`/`reasoning_delta` (incremental text), `tool_call_delta` (incremental tool-input fragment), `tool_call` (display-only, full call), `tool_request` (needs approval — approve/reject the same way as an existing message's tool call, `POST .../messages/{any}/approve`, since the engine no longer keys approvals by message id), `tool_output`, `done`, `error`, `session_hibernated`, and (#17) a sub-agent child's own `session_started` (`{session, profile, parent}`, `researcher`/`page-writer`). Any event belonging to a sub-agent child also carries `agent_session_id` (the child's own engine `SessionId`) so the client can render it nested under the spawning turn instead of the root's own top-level stream.
 
 Server sends a WS ping every 30s; a failed send (or a client `Close` frame) drops that connection's sender from the registry. `WsHub::publish`/`broadcast` also prune any sender whose receiver has been dropped.

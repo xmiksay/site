@@ -89,7 +89,7 @@ Each template name resolves to `<override>/templates/<name>` when present, else
   loads; fixtures carry pre-formatted date strings. Single shim point; the
   on-disk templates are untouched.
 - **Markdown directives** — the Rust directive parser (`expand_directives` in
-  `src/markdown.rs`) is **not** ported. Instead `fixtures.mjs` supplies the
+  `src/markdown/renderer.rs`) is **not** ported. Instead `fixtures.mjs` supplies the
   pre-expanded directive contexts, and the markdown directive templates
   (`markdown/page.html`, `gallery.html`, …) are rendered and concatenated into
   `body_html`. A `<page>` transclude whose inner content itself contains a
