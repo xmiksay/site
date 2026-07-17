@@ -19,13 +19,13 @@ Identify the target before any call; when ambiguous, ask. Never point a verifica
 After changing an MCP tool:
 
 1. **Bring it up.** `make run` (server on :3000), or confirm it's already serving.
-2. **`tools/list`.** Call it over `/mcp` and confirm the set matches the tools defined in `src/routes/mcp.rs` — Pages (`read_page`/`edit_page`/`search_pages`/`delete_page`), Tags, Files, Galleries (list/read/create/update/delete each). Tool/param descriptions come from `handle_tools_list()`.
+2. **`tools/list`.** Call it over `/mcp` and confirm the set matches the tools defined in `src/routes/mcp/{pages,tags,files,galleries}.rs` — Pages (`read_page`/`edit_page`/`search_pages`/`delete_page`), Tags, Files, Galleries (list/read/create/update/delete each). Tool/param descriptions come from `handle_tools_list()` (`src/routes/mcp/instructions.rs`).
 3. **Round-trip the changed tool** against a throwaway path — e.g. `search_pages` → `read_page`, or `edit_page` on `scratch/mcp-test` then read it back.
 4. **Auth & audit.** `Authorization: Bearer <token>` accepts a service token or an OAuth2 access token; the handler resolves it to a `user_id` for audit fields. Verify an unauthenticated call is rejected.
 5. **Report** the `tools/list` result, the round-trip outcome, and the auth check. Never claim green on red.
 
 ## Notes
 
-- `SERVER_INSTRUCTIONS` load from a private `CLAUDE` page if present (editable in the admin UI), else a default constant in `src/routes/mcp.rs`.
+- Server instructions load from a private `CLAUDE` page if present (editable in the admin UI), else `server_instructions()` in `src/routes/mcp/instructions.rs`.
 - `.mcp.json` is gitignored — it's your local connection (URL + token). Don't commit it or paste the token. To test locally, point it at `http://localhost:3000/mcp`; to operate on the real site, leave it on `https://miksanik.net/mcp` and follow the read-only-by-default rule above.
 - Production writes are real and public — confirm scope first, like the `/git` outward-facing rule (page edits keep revisions; deletes do not).
