@@ -1,4 +1,5 @@
 pub mod api;
+pub mod broadcast;
 pub mod mcp;
 pub mod oauth;
 pub mod public;

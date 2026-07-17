@@ -1,9 +1,11 @@
 //! Site-wide authenticated WebSocket hub.
 //!
 //! One long-lived connection per browser tab, registered per `user_id`.
-//! `pages.*` / `files.*` / `galleries.*` change events broadcast to every
-//! connected user (shared content). `assistant.*` events publish only to the
-//! owning user's connections.
+//! `pages.*` / `files.*` / `galleries.*` / `tags.*` change events broadcast
+//! to every connected user (shared content), published uniformly from
+//! `src/routes/broadcast.rs` regardless of which edge (REST API, MCP, or the
+//! AI assistant) performed the mutation. `assistant.*` events publish only to
+//! the owning user's connections.
 //!
 //! `assistant.*` carries real token-level streaming: `src/ai/ws_bridge.rs`
 //! subscribes to the entanglement engine's `Holly::subscribe()` broadcast
@@ -36,6 +38,7 @@ pub enum Topic {
     Pages,
     Files,
     Galleries,
+    Tags,
 }
 
 #[derive(Clone, Debug, Serialize)]

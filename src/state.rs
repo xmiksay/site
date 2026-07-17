@@ -26,11 +26,16 @@ pub async fn create_state(config: &Config) -> AppState {
     let tmpl = Templates::new(design.clone());
 
     let ai_config = Arc::new(AiConfig::new());
-    let agent_engine =
-        SiteEngine::spawn(db.clone(), ai_config, config.serper_api_key.clone(), None)
-            .await
-            .expect("Failed to spawn assistant engine");
     let ws_hub = Arc::new(WsHub::new());
+    let agent_engine = SiteEngine::spawn(
+        db.clone(),
+        ai_config,
+        ws_hub.clone(),
+        config.serper_api_key.clone(),
+        None,
+    )
+    .await
+    .expect("Failed to spawn assistant engine");
     crate::ai::ws_bridge::spawn(agent_engine.clone(), ws_hub.clone(), db.clone());
 
     AppState {

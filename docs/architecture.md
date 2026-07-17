@@ -20,6 +20,9 @@ src/
     oauth.rs              # OAuth2 server (register/authorize/token/well-known)
     revision.rs
     ws.rs                 # global WebSocket hub (WsHub) + GET /api/ws upgrade
+    broadcast.rs          # WsHub broadcast + PageSummary/FileSummary — one
+                          # call per entity mutation, shared by the REST API,
+                          # MCP server, and AI assistant tools (#25)
   entity/                 # SeaORM entity models
     user, token, page, page_revision, tag, menu,
     file, file_blob, file_thumbnail, gallery,
@@ -32,8 +35,15 @@ src/
                           # plus the entanglement-core/-runtime engine
                           # adapters: engine, catalog, mcp, persistence,
                           # policy, projection/, tools/
+  repo/                   # shared CRUD/search/validation layer the REST API,
+                          # MCP server, and AI tools all call into — pages,
+                          # pages_search, pages_revisions, tags, files,
+                          # galleries, menu, tokens, users, format (shared
+                          # MCP/AI text formatters, #25)
   auth.rs config.rs design.rs files.rs
-  markdown.rs path_util.rs repo state.rs templates.rs
+  markdown.rs mcp_args.rs path_util.rs state.rs templates.rs
+                          # mcp_args.rs: shared tool-argument JSON parsing for
+                          # the MCP server and the AI assistant's tools (#25)
 
 client/                   # Vue 3 SPA
   src/  dist/             # dist/ is embedded into the binary
@@ -156,6 +166,8 @@ MCP servers on behalf of the AI assistant (`ai::mcp`'s `SiteMcp` over
 - **Galleries:** `list_galleries`, `read_gallery`, `create_gallery`, `update_gallery`, `delete_gallery`
 
 Server instructions are assembled by `server_instructions()` = `SERVER_INSTRUCTIONS_HEADER` + `MARKDOWN_EXTENSIONS_DOC` (`src/routes/mcp.rs`, `src/markdown.rs`). If a private `CLAUDE` page exists (editable via admin UI / MCP), its markdown replaces the assembled default entirely — so keep that page in sync with the code. Tool/parameter descriptions live in `handle_tools_list()`.
+
+Every mutating tool broadcasts the same `WsHub` event a REST API mutation would (`src/routes/broadcast.rs`), so a page/tag/file/gallery change made over MCP shows up live in an open admin tab. `read_page`/`search_pages`/`list_tags` render through `src/repo/format.rs`, and the pages/galleries/files/tags "empty required field" and pages "nothing to update" guards live on the `repo` mutation functions themselves (`PageSaveError`/`GallerySaveError`/`FileSaveError`/`TagSaveError`, `pages::validate_page_edit_fields`) — the same formatters, guards, and `crate::mcp_args` argument parsing are shared verbatim with the AI assistant's built-in tools (`src/ai/tools/*.rs`), so the two edges can't drift (#25).
 
 ### Markdown directives
 
@@ -289,14 +301,14 @@ Configured per user via the admin SPA: `/admin/{providers,models,assistant,mcp-s
 
 `GET /api/ws` upgrades to a single per-tab WebSocket, authenticated the same way as the rest of `/api/*` (session cookie, checked before the upgrade). `WsHub` (in `AppState.ws_hub`) is a `DashMap<user_id, Vec<mpsc::Sender<Envelope>>>` registry; each open tab holds one entry.
 
-Frames are JSON `Envelope { topic, event, payload }`, `topic` one of `assistant | pages | files | galleries`:
+Frames are JSON `Envelope { topic, event, payload }`, `topic` one of `assistant | pages | files | galleries | tags`:
 
-- **`pages` / `files` / `galleries`** — `created`/`updated` (payload = the same summary shape the REST endpoint returns) / `deleted` (payload `{ id }`). Broadcast to **every** connected user via `WsHub::broadcast`/`broadcast_serialized` — these are shared site entities, not per-user. Published from `src/routes/api/{pages,files,galleries}.rs` after a successful create/update/delete.
+- **`pages` / `files` / `galleries` / `tags`** — `created`/`updated` (payload = the same summary shape the REST endpoint returns) / `deleted` (payload `{ id }`). Broadcast to **every** connected user via `WsHub::broadcast`/`broadcast_serialized` — these are shared site entities, not per-user. Published from the shared `src/routes/broadcast.rs` helpers, called after a successful create/update/delete from all three mutating edges — `src/routes/api/{pages,files,galleries,tags}.rs`, `src/routes/mcp.rs`, and `src/ai/tools/*.rs` — so a mutation over MCP or by the AI assistant broadcasts the same event a REST API mutation would (#25).
 - **`assistant`** — real, token-level streaming straight off `agent_engine.holly.subscribe()` (`src/ai/ws_bridge.rs`), published only to the owning user's own connections via `WsHub::publish`. `event` is the forwarded `OutEvent`'s own `"kind"` tag and `payload` is that event's JSON shape (`entanglement_core::OutEvent` already derives `Serialize`) plus a spliced-in `db_session_id` (the `assistant_sessions.id` the engine's root `SessionId` resolves to, cached per session): `status` (`AgentState`: idle/thinking/waiting_approval/waiting_answer/done/error), `text_delta`/`reasoning_delta` (incremental text), `tool_call_delta` (incremental tool-input fragment), `tool_call` (display-only, full call), `tool_request` (needs approval — approve/reject the same way as an existing message's tool call, `POST .../messages/{any}/approve`, since the engine no longer keys approvals by message id), `tool_output`, `done`, `error`, `session_hibernated`, and (#17) a sub-agent child's own `session_started` (`{session, profile, parent}`, `researcher`/`page-writer`). Any event belonging to a sub-agent child also carries `agent_session_id` (the child's own engine `SessionId`) so the client can render it nested under the spawning turn instead of the root's own top-level stream.
 
 Server sends a WS ping every 30s; a failed send (or a client `Close` frame) drops that connection's sender from the registry. `WsHub::publish`/`broadcast` also prune any sender whose receiver has been dropped.
 
-Client side: `client/src/stores/ws.ts` owns the single connection (reconnect with exponential backoff) and topic→handler dispatch; `client/src/composables/useListSync.ts` wires `pages`/`files`/`galleries` events into the matching Pinia store's `items` list; `client/src/stores/assistantLiveTurns.ts` (composed into `stores/assistant.ts`) accumulates `assistant.*` deltas into a `live: LiveTurn | null` (the root turn) and, since #17, `liveSubAgents: Record<string, LiveSubAgentTurn>` keyed by `agent_session_id` — a sub-agent's events carry that field instead of belonging to the root, and it is tracked independently of `live` since a detached child keeps streaming after the root's own turn has already settled. Both are rendered by `AssistantView.vue` as in-progress bubbles (`LiveSubAgentTurn.vue`/`LiveToolCallList.vue`), and on a turn's own `done`/`error`/`session_hibernated` the matching entry clears and the session refetches over REST for the authoritative message list — reusing `ai::projection::project`'s fold (including its `content.sub_agents` nesting, rendered by the self-recursive `AssistantMessageContent.vue`) rather than re-implementing it in TypeScript. `client/src/App.vue` connects after login, disconnects on logout.
+Client side: `client/src/stores/ws.ts` owns the single connection (reconnect with exponential backoff) and topic→handler dispatch; `client/src/composables/useListSync.ts` wires `pages`/`files`/`galleries`/`tags` events into the matching Pinia store's `items` list; `client/src/stores/assistantLiveTurns.ts` (composed into `stores/assistant.ts`) accumulates `assistant.*` deltas into a `live: LiveTurn | null` (the root turn) and, since #17, `liveSubAgents: Record<string, LiveSubAgentTurn>` keyed by `agent_session_id` — a sub-agent's events carry that field instead of belonging to the root, and it is tracked independently of `live` since a detached child keeps streaming after the root's own turn has already settled. Both are rendered by `AssistantView.vue` as in-progress bubbles (`LiveSubAgentTurn.vue`/`LiveToolCallList.vue`), and on a turn's own `done`/`error`/`session_hibernated` the matching entry clears and the session refetches over REST for the authoritative message list — reusing `ai::projection::project`'s fold (including its `content.sub_agents` nesting, rendered by the self-recursive `AssistantMessageContent.vue`) rather than re-implementing it in TypeScript. `client/src/App.vue` connects after login, disconnects on logout.
 
 ## Docker
 

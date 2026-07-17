@@ -4,9 +4,9 @@ use axum::extract::{DefaultBodyLimit, Extension, Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 
-use crate::repo::files::{self as files_repo, FileMetaUpdate, FileWithThumb, NewFile};
+use crate::repo::files::{self as files_repo, FileMetaUpdate, FileSaveError, NewFile};
 use crate::routes::api::error::{ApiError, ApiResult};
-use crate::routes::ws::Topic;
+use crate::routes::broadcast::{self, FileSummary};
 use crate::state::AppState;
 
 pub const MAX_UPLOAD_SIZE: usize = 50 * 1024 * 1024;
@@ -18,31 +18,12 @@ pub fn router() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE))
 }
 
-#[derive(serde::Serialize)]
-pub struct FileSummary {
-    pub id: i32,
-    pub hash: String,
-    pub path: String,
-    pub title: String,
-    pub description: Option<String>,
-    pub mimetype: String,
-    pub size_bytes: i64,
-    pub has_thumbnail: bool,
-    pub created_at: String,
-}
-
-impl From<FileWithThumb> for FileSummary {
-    fn from(f: FileWithThumb) -> Self {
-        Self {
-            id: f.model.id,
-            hash: f.model.hash,
-            title: files_repo::title_from_path(&f.model.path),
-            path: f.model.path,
-            description: f.model.description,
-            mimetype: f.model.mimetype,
-            size_bytes: f.model.size_bytes,
-            has_thumbnail: f.has_thumbnail,
-            created_at: f.model.created_at.to_string(),
+impl From<FileSaveError> for ApiError {
+    fn from(e: FileSaveError) -> Self {
+        match e {
+            FileSaveError::EmptyPath => ApiError::BadRequest("path is required".into()),
+            FileSaveError::EmptyData => ApiError::BadRequest("uploaded file is empty".into()),
+            FileSaveError::Db(db) => ApiError::from(db),
         }
     }
 }
@@ -64,7 +45,11 @@ pub async fn list(
     Query(query): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<FileSummary>>> {
     let rows = files_repo::list_with_thumbnails(&state.db, query.mime_prefix.as_deref()).await?;
-    Ok(Json(rows.into_iter().map(FileSummary::from).collect()))
+    Ok(Json(
+        rows.into_iter()
+            .map(|f| FileSummary::new(&f.model, f.has_thumbnail))
+            .collect(),
+    ))
 }
 
 pub async fn read(
@@ -74,7 +59,7 @@ pub async fn read(
     let f = files_repo::find_with_thumbnail(&state.db, id)
         .await?
         .ok_or(ApiError::NotFound)?;
-    Ok(Json(FileSummary::from(f)))
+    Ok(Json(FileSummary::new(&f.model, f.has_thumbnail)))
 }
 
 pub async fn upload(
@@ -123,12 +108,7 @@ pub async fn upload(
     }
 
     let data = data.ok_or_else(|| ApiError::BadRequest("missing file field".into()))?;
-    if data.is_empty() {
-        return Err(ApiError::BadRequest("uploaded file is empty".into()));
-    }
-    let path = path
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError::BadRequest("missing path field".into()))?;
+    let path = path.ok_or_else(|| ApiError::BadRequest("missing path field".into()))?;
     let mimetype = mimetype.unwrap_or_else(|| "application/octet-stream".to_string());
 
     let created = files_repo::create_file(
@@ -142,21 +122,7 @@ pub async fn upload(
         },
     )
     .await?;
-    let m = created.model;
-    let summary = FileSummary {
-        id: m.id,
-        hash: m.hash,
-        title: files_repo::title_from_path(&m.path),
-        path: m.path,
-        description: m.description,
-        mimetype: m.mimetype,
-        size_bytes: m.size_bytes,
-        has_thumbnail: created.has_thumbnail,
-        created_at: m.created_at.to_string(),
-    };
-    state
-        .ws_hub
-        .broadcast_serialized(Topic::Files, "created", &summary);
+    let summary = broadcast::file_created(&state.ws_hub, &created.model, created.has_thumbnail);
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
@@ -175,10 +141,7 @@ pub async fn update(
     )
     .await?
     .ok_or(ApiError::NotFound)?;
-    let summary = FileSummary::from(updated);
-    state
-        .ws_hub
-        .broadcast_serialized(Topic::Files, "updated", &summary);
+    let summary = broadcast::file_updated(&state.ws_hub, &updated.model, updated.has_thumbnail);
     Ok(Json(summary))
 }
 
@@ -187,9 +150,7 @@ pub async fn delete_one(
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
     if files_repo::delete_by_id(&state.db, id).await? {
-        state
-            .ws_hub
-            .broadcast_event(Topic::Files, "deleted", serde_json::json!({ "id": id }));
+        broadcast::file_deleted(&state.ws_hub, id);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound)

@@ -22,25 +22,48 @@ use std::sync::Arc;
 use entanglement_runtime::ToolRegistry;
 use sea_orm::DatabaseConnection;
 
+use crate::routes::ws::WsHub;
+
 /// Build the registry of built-in (non-MCP) tools: the 11 site tools — a
 /// curated subset, not full CRUD (pages read/search/edit/delete, tags
 /// list/create, files list/create, galleries list/create/update) — plus
 /// `web_search`/`web_fetch`. `engine.rs`
 /// builds this once at `SiteEngine` construction and layers per-session MCP
-/// routing tools on top (see `crate::ai::mcp`).
-pub fn registry(db: Arc<DatabaseConnection>, serper_api_key: Option<String>) -> ToolRegistry {
+/// routing tools on top (see `crate::ai::mcp`). Every mutating tool also
+/// gets `ws_hub` so it broadcasts the same WS event a REST API mutation
+/// would (issue #25, `crate::routes::broadcast`).
+pub fn registry(
+    db: Arc<DatabaseConnection>,
+    ws_hub: Arc<WsHub>,
+    serper_api_key: Option<String>,
+) -> ToolRegistry {
     let mut reg = ToolRegistry::new();
     reg.register(pages::ReadPageTool { db: db.clone() });
     reg.register(pages::SearchPagesTool { db: db.clone() });
-    reg.register(pages::EditPageTool { db: db.clone() });
-    reg.register(pages::DeletePageTool { db: db.clone() });
+    reg.register(pages::EditPageTool {
+        db: db.clone(),
+        ws_hub: ws_hub.clone(),
+    });
+    reg.register(pages::DeletePageTool {
+        db: db.clone(),
+        ws_hub: ws_hub.clone(),
+    });
     reg.register(tags::ListTagsTool { db: db.clone() });
-    reg.register(tags::CreateTagTool { db: db.clone() });
+    reg.register(tags::CreateTagTool {
+        db: db.clone(),
+        ws_hub: ws_hub.clone(),
+    });
     reg.register(files::ListFilesTool { db: db.clone() });
-    reg.register(files::CreateFileTool { db: db.clone() });
+    reg.register(files::CreateFileTool {
+        db: db.clone(),
+        ws_hub: ws_hub.clone(),
+    });
     reg.register(galleries::ListGalleriesTool { db: db.clone() });
-    reg.register(galleries::CreateGalleryTool { db: db.clone() });
-    reg.register(galleries::UpdateGalleryTool { db });
+    reg.register(galleries::CreateGalleryTool {
+        db: db.clone(),
+        ws_hub: ws_hub.clone(),
+    });
+    reg.register(galleries::UpdateGalleryTool { db, ws_hub });
     reg.register(web::WebSearchTool::new(serper_api_key));
     reg.register(web::WebFetchTool);
     reg

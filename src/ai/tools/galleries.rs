@@ -14,7 +14,9 @@ use serde_json::{Value, json};
 
 use super::common::{arg_str, ok_text, parse_args, required_str};
 use crate::ai::engine::user_id_from_session;
-use crate::repo::galleries::{self as galleries_repo, GalleryInput};
+use crate::repo::galleries::{self as galleries_repo, GalleryInput, GallerySaveError};
+use crate::routes::broadcast;
+use crate::routes::ws::WsHub;
 
 pub struct ListGalleriesTool {
     pub db: Arc<DatabaseConnection>,
@@ -67,6 +69,7 @@ fn parse_file_ids(args: &Value) -> Vec<i32> {
 
 pub struct CreateGalleryTool {
     pub db: Arc<DatabaseConnection>,
+    pub ws_hub: Arc<WsHub>,
 }
 
 #[async_trait]
@@ -102,17 +105,11 @@ impl Tool for CreateGalleryTool {
         let user_id = user_id_from_session(session)?;
         let args = parse_args(input)?;
         let path = required_str(&args, "path")?;
-        if path.trim().is_empty() {
-            anyhow::bail!("path is required");
-        }
         let title = required_str(&args, "title")?;
-        if title.trim().is_empty() {
-            anyhow::bail!("title is required");
-        }
         let description = arg_str(&args, "description").map(String::from);
         let file_ids = parse_file_ids(&args);
 
-        let saved = galleries_repo::create_gallery(
+        let saved = match galleries_repo::create_gallery(
             &self.db,
             user_id,
             GalleryInput {
@@ -123,7 +120,14 @@ impl Tool for CreateGalleryTool {
             },
         )
         .await
-        .context("creating gallery")?;
+        {
+            Ok(g) => g,
+            Err(e @ (GallerySaveError::EmptyPath | GallerySaveError::EmptyTitle)) => {
+                anyhow::bail!("{e}")
+            }
+            Err(e) => return Err(anyhow::anyhow!(e).context("creating gallery")),
+        };
+        broadcast::gallery_created(&self.ws_hub, &saved);
         Ok(ok_text(format!(
             "created gallery [{}] {} ({} files)",
             saved.id,
@@ -135,6 +139,7 @@ impl Tool for CreateGalleryTool {
 
 pub struct UpdateGalleryTool {
     pub db: Arc<DatabaseConnection>,
+    pub ws_hub: Arc<WsHub>,
 }
 
 #[async_trait]
@@ -173,14 +178,11 @@ impl Tool for UpdateGalleryTool {
             .and_then(|v| v.as_i64())
             .ok_or_else(|| anyhow::anyhow!("id is required"))? as i32;
         let path = required_str(&args, "path")?;
-        if path.trim().is_empty() {
-            anyhow::bail!("path is required");
-        }
         let title = required_str(&args, "title")?;
         let description = arg_str(&args, "description").map(String::from);
         let file_ids = parse_file_ids(&args);
 
-        let updated = galleries_repo::update_gallery(
+        let updated = match galleries_repo::update_gallery(
             &self.db,
             id,
             GalleryInput {
@@ -191,14 +193,21 @@ impl Tool for UpdateGalleryTool {
             },
         )
         .await
-        .context("updating gallery")?;
+        {
+            Ok(updated) => updated,
+            Err(e @ GallerySaveError::EmptyPath) => anyhow::bail!("{e}"),
+            Err(e) => return Err(anyhow::anyhow!(e).context("updating gallery")),
+        };
         match updated {
-            Some(g) => Ok(ok_text(format!(
-                "updated gallery [{}] {} ({} files)",
-                g.id,
-                g.title,
-                g.file_ids.len()
-            ))),
+            Some(g) => {
+                broadcast::gallery_updated(&self.ws_hub, &g);
+                Ok(ok_text(format!(
+                    "updated gallery [{}] {} ({} files)",
+                    g.id,
+                    g.title,
+                    g.file_ids.len()
+                )))
+            }
             None => anyhow::bail!("Gallery not found: {id}"),
         }
     }

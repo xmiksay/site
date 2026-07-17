@@ -14,7 +14,9 @@ use serde_json::{Value, json};
 
 use super::common::{arg_str, ok_json, ok_text, parse_args, required_str};
 use crate::ai::engine::user_id_from_session;
-use crate::repo::files::{self as files_repo, NewFile};
+use crate::repo::files::{self as files_repo, FileSaveError, NewFile};
+use crate::routes::broadcast;
+use crate::routes::ws::WsHub;
 
 pub struct ListFilesTool {
     pub db: Arc<DatabaseConnection>,
@@ -68,6 +70,7 @@ impl Tool for ListFilesTool {
 
 pub struct CreateFileTool {
     pub db: Arc<DatabaseConnection>,
+    pub ws_hub: Arc<WsHub>,
 }
 
 #[async_trait]
@@ -106,9 +109,6 @@ impl Tool for CreateFileTool {
         let user_id = user_id_from_session(session)?;
         let args = parse_args(input)?;
         let path = required_str(&args, "path")?.trim().to_string();
-        if path.is_empty() {
-            anyhow::bail!("path is required");
-        }
         let description = arg_str(&args, "description").map(String::from);
         let mimetype = arg_str(&args, "mimetype")
             .map(String::from)
@@ -122,11 +122,8 @@ impl Tool for CreateFileTool {
             (_, Some(text)) if !text.is_empty() => text.as_bytes().to_vec(),
             _ => anyhow::bail!("either data_base64 or data is required"),
         };
-        if data.is_empty() {
-            anyhow::bail!("decoded data is empty");
-        }
 
-        let created = files_repo::create_file(
+        let created = match files_repo::create_file(
             &self.db,
             user_id,
             NewFile {
@@ -137,12 +134,19 @@ impl Tool for CreateFileTool {
             },
         )
         .await
-        .context("creating file")?;
+        {
+            Ok(created) => created,
+            Err(e @ (FileSaveError::EmptyPath | FileSaveError::EmptyData)) => {
+                anyhow::bail!("{e}")
+            }
+            Err(e) => return Err(anyhow::anyhow!(e).context("creating file")),
+        };
+        let summary = broadcast::file_created(&self.ws_hub, &created.model, created.has_thumbnail);
 
         Ok(ok_json(json!({
             "id": created.model.id,
             "path": created.model.path,
-            "title": files_repo::title_from_path(&created.model.path),
+            "title": summary.title,
             "mimetype": created.model.mimetype,
             "size_bytes": created.model.size_bytes,
             "has_thumbnail": created.has_thumbnail,

@@ -12,7 +12,10 @@ use sea_orm::DatabaseConnection;
 use serde_json::{Value, json};
 
 use super::common::{ok_text, parse_args, required_str};
-use crate::repo::tags::{self as tags_repo, TagInput};
+use crate::repo::format;
+use crate::repo::tags::{self as tags_repo, TagInput, TagSaveError};
+use crate::routes::broadcast;
+use crate::routes::ws::WsHub;
 
 pub struct ListTagsTool {
     pub db: Arc<DatabaseConnection>,
@@ -40,23 +43,13 @@ impl Tool for ListTagsTool {
         let tags = tags_repo::list_all(&self.db)
             .await
             .context("listing tags")?;
-        if tags.is_empty() {
-            return Ok(ok_text("No tags defined.".into()));
-        }
-        let out = tags
-            .iter()
-            .map(|t| match &t.description {
-                Some(d) if !d.is_empty() => format!("{}: {d}", t.name),
-                _ => t.name.clone(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        Ok(ok_text(out))
+        Ok(ok_text(format::format_tags(&tags)))
     }
 }
 
 pub struct CreateTagTool {
     pub db: Arc<DatabaseConnection>,
+    pub ws_hub: Arc<WsHub>,
 }
 
 #[async_trait]
@@ -87,16 +80,16 @@ impl Tool for CreateTagTool {
     ) -> anyhow::Result<Vec<ContentPart>> {
         let args = parse_args(input)?;
         let name = required_str(&args, "name")?;
-        if name.trim().is_empty() {
-            anyhow::bail!("name is required");
-        }
         let description = args
             .get("description")
             .and_then(|v| v.as_str())
             .map(String::from);
-        let saved = tags_repo::create_tag(&self.db, TagInput { name, description })
-            .await
-            .context("creating tag")?;
+        let saved = match tags_repo::create_tag(&self.db, TagInput { name, description }).await {
+            Ok(t) => t,
+            Err(e @ TagSaveError::EmptyName) => anyhow::bail!("{e}"),
+            Err(e) => return Err(anyhow::anyhow!(e).context("creating tag")),
+        };
+        broadcast::tag_created(&self.ws_hub, &saved);
         Ok(ok_text(format!(
             "created tag [{}] {}",
             saved.id, saved.name

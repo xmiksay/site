@@ -5,9 +5,10 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 
 use crate::entity::page;
-use crate::repo::pages::{self as pages_repo, PageNew, PageSort};
+use crate::repo::pages::{self as pages_repo, PageNew, PageSaveError, PageSort};
+use crate::repo::pages_revisions;
 use crate::routes::api::error::{ApiError, ApiResult};
-use crate::routes::ws::Topic;
+use crate::routes::broadcast::{self, PageSummary};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -19,27 +20,14 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/revisions/{rev_id}/restore", post(restore))
 }
 
-#[derive(serde::Serialize)]
-pub struct PageSummary {
-    pub id: i32,
-    pub path: String,
-    pub summary: Option<String>,
-    pub tag_ids: Vec<i32>,
-    pub private: bool,
-    pub created_at: String,
-    pub modified_at: String,
-}
-
-impl From<&page::Model> for PageSummary {
-    fn from(p: &page::Model) -> Self {
-        Self {
-            id: p.id,
-            path: p.path.clone(),
-            summary: p.summary.clone(),
-            tag_ids: p.tag_ids.clone(),
-            private: p.private,
-            created_at: p.created_at.to_string(),
-            modified_at: p.modified_at.to_string(),
+impl From<PageSaveError> for ApiError {
+    fn from(e: PageSaveError) -> Self {
+        match e {
+            PageSaveError::EmptyPath => ApiError::BadRequest("path is required".into()),
+            PageSaveError::Db(db @ (sea_orm::DbErr::Exec(_) | sea_orm::DbErr::Query(_))) => {
+                ApiError::Conflict(format!("path already exists: {db}"))
+            }
+            PageSaveError::Db(db) => ApiError::from(db),
         }
     }
 }
@@ -117,7 +105,7 @@ pub async fn read(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    let revisions: Vec<RevisionSummary> = pages_repo::list_revisions(&state.db, id)
+    let revisions: Vec<RevisionSummary> = pages_revisions::list_revisions(&state.db, id)
         .await?
         .iter()
         .map(|r| RevisionSummary {
@@ -138,9 +126,6 @@ pub async fn create(
     Extension(user_id): Extension<i32>,
     Json(input): Json<PageInput>,
 ) -> ApiResult<(StatusCode, Json<PageSummary>)> {
-    if input.path.is_empty() {
-        return Err(ApiError::BadRequest("path is required".into()));
-    }
     let saved = pages_repo::create(
         &state.db,
         user_id,
@@ -152,17 +137,8 @@ pub async fn create(
             private: input.private,
         },
     )
-    .await
-    .map_err(|e| match e {
-        sea_orm::DbErr::Exec(_) | sea_orm::DbErr::Query(_) => {
-            ApiError::Conflict(format!("path already exists: {e}"))
-        }
-        other => ApiError::from(other),
-    })?;
-    let summary = PageSummary::from(&saved);
-    state
-        .ws_hub
-        .broadcast_serialized(Topic::Pages, "created", &summary);
+    .await?;
+    let summary = broadcast::page_created(&state.ws_hub, &saved);
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
@@ -186,10 +162,7 @@ pub async fn update(
     )
     .await?
     .ok_or(ApiError::NotFound)?;
-    let summary = PageSummary::from(&updated);
-    state
-        .ws_hub
-        .broadcast_serialized(Topic::Pages, "updated", &summary);
+    let summary = broadcast::page_updated(&state.ws_hub, &updated);
     Ok(Json(summary))
 }
 
@@ -198,9 +171,7 @@ pub async fn delete_one(
     Path(id): Path<i32>,
 ) -> ApiResult<StatusCode> {
     if pages_repo::delete_by_id(&state.db, id).await? {
-        state
-            .ws_hub
-            .broadcast_event(Topic::Pages, "deleted", serde_json::json!({ "id": id }));
+        broadcast::page_deleted(&state.ws_hub, id);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::NotFound)
@@ -217,7 +188,7 @@ pub async fn read_revision(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    let rev = pages_repo::get_revision(&state.db, id, rev_id)
+    let rev = pages_revisions::get_revision(&state.db, id, rev_id)
         .await?
         .ok_or(ApiError::NotFound)?;
 
@@ -244,11 +215,11 @@ pub async fn restore(
     Extension(user_id): Extension<i32>,
     Path((id, rev_id)): Path<(i32, i32)>,
 ) -> ApiResult<Json<PageSummary>> {
-    let updated = pages_repo::restore_revision(&state.db, user_id, id, rev_id)
+    let updated = pages_revisions::restore_revision(&state.db, user_id, id, rev_id)
         .await
         .map_err(|e| match e {
-            pages_repo::RestoreError::NotFound => ApiError::NotFound,
-            pages_repo::RestoreError::Db(db) => ApiError::from(db),
+            pages_revisions::RestoreError::NotFound => ApiError::NotFound,
+            pages_revisions::RestoreError::Db(db) => ApiError::from(db),
             other => ApiError::Internal(other.to_string()),
         })?;
     Ok(Json(PageSummary::from(&updated)))

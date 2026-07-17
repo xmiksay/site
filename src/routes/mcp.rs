@@ -8,12 +8,19 @@ use serde_json::{Value, json};
 
 use base64::Engine;
 
+use crate::mcp_args;
 use crate::repo::{
-    files::{self as files_repo, FileMetaUpdate, NewFile},
-    galleries::{self as galleries_repo, GalleryInput as RepoGalleryInput},
-    pages::{self as pages_repo, PageUpdate, UpsertOutcome},
-    tags::{self as tags_repo, ResolveError, TagInput as RepoTagInput, TagUpdate as RepoTagUpdate},
+    files::{self as files_repo, FileMetaUpdate, FileSaveError, NewFile},
+    format,
+    galleries::{self as galleries_repo, GalleryInput as RepoGalleryInput, GallerySaveError},
+    pages::{self as pages_repo, PageSaveError, PageUpdate, UpsertOutcome},
+    pages_search::{self as pages_search_repo, SearchError},
+    tags::{
+        self as tags_repo, ResolveError, TagInput as RepoTagInput, TagSaveError,
+        TagUpdate as RepoTagUpdate,
+    },
 };
+use crate::routes::broadcast;
 use crate::routes::oauth;
 use crate::state::AppState;
 
@@ -582,8 +589,7 @@ fn parse_args<T: serde::de::DeserializeOwned>(
     id: Option<Value>,
     arguments: Value,
 ) -> Result<T, JsonRpcResponse> {
-    serde_json::from_value(arguments)
-        .map_err(|e| tool_error(id, &format!("Invalid arguments: {e}")))
+    mcp_args::parse_value(arguments).map_err(|e| tool_error(id, &e))
 }
 
 // ============================== Pages ==============================
@@ -597,20 +603,7 @@ async fn tool_read_page(state: &AppState, id: Option<Value>, arguments: Value) -
     match pages_repo::find_by_path(&state.db, &args.path).await {
         Ok(Some(p)) => {
             let tag_names = tags_repo::resolve_names(&state.db, &p.tag_ids).await;
-            let mut out = format!("# {}\n\n", p.path);
-            if !tag_names.is_empty() {
-                out.push_str(&format!("Tags: {}\n", tag_names.join(", ")));
-            }
-            if let Some(ref summary) = p.summary {
-                out.push_str(&format!("Summary: {summary}\n"));
-            }
-            out.push_str(&format!("Modified: {}\n", p.modified_at));
-            if p.private {
-                out.push_str("Private: yes\n");
-            }
-            out.push_str("\n---\n");
-            out.push_str(&p.markdown);
-            tool_result(id, out)
+            tool_result(id, format::format_page(&p, &tag_names))
         }
         Ok(None) => tool_error(id, &format!("Page not found: {}", args.path)),
         Err(e) => tool_error(id, &format!("Database error: {e}")),
@@ -628,15 +621,13 @@ async fn tool_edit_page(
         Err(r) => return r,
     };
 
-    if args.markdown.is_none()
-        && args.summary.is_none()
-        && args.tag_names.is_none()
-        && args.private.is_none()
-    {
-        return tool_error(
-            id,
-            "Nothing to update — provide markdown, summary, tag_names, or private",
-        );
+    if let Err(msg) = pages_repo::validate_page_edit_fields(
+        &args.markdown,
+        &args.summary,
+        &args.tag_names,
+        &args.private,
+    ) {
+        return tool_error(id, msg);
     }
 
     let tag_ids = match &args.tag_names {
@@ -662,8 +653,15 @@ async fn tool_edit_page(
     .await;
 
     match outcome {
-        Ok(UpsertOutcome::Created(_)) => tool_result(id, format!("created: {}", args.path)),
-        Ok(UpsertOutcome::Updated(_)) => tool_result(id, format!("updated: {}", args.path)),
+        Ok(UpsertOutcome::Created(page)) => {
+            broadcast::page_created(&state.ws_hub, &page);
+            tool_result(id, format!("created: {}", args.path))
+        }
+        Ok(UpsertOutcome::Updated(page)) => {
+            broadcast::page_updated(&state.ws_hub, &page);
+            tool_result(id, format!("updated: {}", args.path))
+        }
+        Err(e @ PageSaveError::EmptyPath) => tool_error(id, &e.to_string()),
         Err(e) => tool_error(id, &format!("Save failed: {e}")),
     }
 }
@@ -680,7 +678,7 @@ async fn tool_search_pages(
     let limit = args.limit.unwrap_or(20).min(100);
     let offset = args.offset.unwrap_or(0);
 
-    let result = match pages_repo::search(
+    let result = match pages_search_repo::search(
         &state.db,
         args.prefix.as_deref(),
         args.tag.as_deref(),
@@ -692,38 +690,15 @@ async fn tool_search_pages(
     .await
     {
         Ok(r) => r,
-        Err(pages_repo::SearchError::UnknownTag) => {
+        Err(SearchError::UnknownTag) => {
             return tool_result(id, "No pages found.".into());
         }
-        Err(pages_repo::SearchError::Db(e)) => {
+        Err(SearchError::Db(e)) => {
             return tool_error(id, &format!("Database error: {e}"));
         }
     };
 
-    if result.total == 0 {
-        return tool_result(id, "No pages found.".into());
-    }
-
-    let has_more = offset + limit < result.total;
-    let mut out = result
-        .pages
-        .iter()
-        .map(|p| match &p.summary {
-            Some(s) if !s.is_empty() => format!("{}: {s}", p.path),
-            _ => p.path.clone(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    out.push_str(&format!(
-        "\n\n--- total: {}, has_more: {has_more}",
-        result.total
-    ));
-    if has_more {
-        out.push_str(&format!(", next_offset: {}", offset + limit));
-    }
-    out.push_str(" ---");
-
-    tool_result(id, out)
+    tool_result(id, format::format_search_results(&result, limit, offset))
 }
 
 async fn tool_delete_page(
@@ -736,8 +711,11 @@ async fn tool_delete_page(
         Err(r) => return r,
     };
     match pages_repo::delete_by_path(&state.db, &args.path).await {
-        Ok(true) => tool_result(id, format!("deleted: {}", args.path)),
-        Ok(false) => tool_error(id, &format!("Page not found: {}", args.path)),
+        Ok(Some(page_id)) => {
+            broadcast::page_deleted(&state.ws_hub, page_id);
+            tool_result(id, format!("deleted: {}", args.path))
+        }
+        Ok(None) => tool_error(id, &format!("Page not found: {}", args.path)),
         Err(e) => tool_error(id, &format!("Delete failed: {e}")),
     }
 }
@@ -746,18 +724,7 @@ async fn tool_delete_page(
 
 async fn tool_list_tags(state: &AppState, id: Option<Value>) -> JsonRpcResponse {
     match tags_repo::list_all(&state.db).await {
-        Ok(tags) if tags.is_empty() => tool_result(id, "No tags defined.".into()),
-        Ok(tags) => {
-            let out = tags
-                .iter()
-                .map(|t| match &t.description {
-                    Some(d) if !d.is_empty() => format!("[{}] {}: {d}", t.id, t.name),
-                    _ => format!("[{}] {}", t.id, t.name),
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            tool_result(id, out)
-        }
+        Ok(tags) => tool_result(id, format::format_tags(&tags)),
         Err(e) => tool_error(id, &format!("Database error: {e}")),
     }
 }
@@ -782,9 +749,6 @@ async fn tool_create_tag(state: &AppState, id: Option<Value>, arguments: Value) 
         Ok(a) => a,
         Err(r) => return r,
     };
-    if args.name.is_empty() {
-        return tool_error(id, "name is required");
-    }
     match tags_repo::create_tag(
         &state.db,
         RepoTagInput {
@@ -794,7 +758,11 @@ async fn tool_create_tag(state: &AppState, id: Option<Value>, arguments: Value) 
     )
     .await
     {
-        Ok(t) => tool_result(id, format!("created tag [{}] {}", t.id, t.name)),
+        Ok(t) => {
+            broadcast::tag_created(&state.ws_hub, &t);
+            tool_result(id, format!("created tag [{}] {}", t.id, t.name))
+        }
+        Err(e @ TagSaveError::EmptyName) => tool_error(id, &e.to_string()),
         Err(e) => tool_error(id, &format!("Create failed: {e}")),
     }
 }
@@ -815,7 +783,10 @@ async fn tool_update_tag(state: &AppState, id: Option<Value>, arguments: Value) 
     )
     .await
     {
-        Ok(Some(t)) => tool_result(id, format!("updated tag [{}] {}", t.id, t.name)),
+        Ok(Some(t)) => {
+            broadcast::tag_updated(&state.ws_hub, &t);
+            tool_result(id, format!("updated tag [{}] {}", t.id, t.name))
+        }
         Ok(None) => tool_error(id, &format!("Tag not found: {name}")),
         Err(e) => tool_error(id, &format!("Update failed: {e}")),
     }
@@ -827,8 +798,11 @@ async fn tool_delete_tag(state: &AppState, id: Option<Value>, arguments: Value) 
         Err(r) => return r,
     };
     match tags_repo::delete_by_name(&state.db, &args.name).await {
-        Ok(true) => tool_result(id, format!("deleted tag {}", args.name)),
-        Ok(false) => tool_error(id, &format!("Tag not found: {}", args.name)),
+        Ok(Some(tag_id)) => {
+            broadcast::tag_deleted(&state.ws_hub, tag_id);
+            tool_result(id, format!("deleted tag {}", args.name))
+        }
+        Ok(None) => tool_error(id, &format!("Tag not found: {}", args.name)),
         Err(e) => tool_error(id, &format!("Delete failed: {e}")),
     }
 }
@@ -868,9 +842,6 @@ async fn tool_create_file(
         Ok(a) => a,
         Err(r) => return r,
     };
-    if args.path.trim().is_empty() {
-        return tool_error(id, "path is required");
-    }
     let data = match (args.data_base64, args.data) {
         (Some(b64), _) if !b64.is_empty() => {
             match base64::engine::general_purpose::STANDARD.decode(b64.as_bytes()) {
@@ -881,9 +852,6 @@ async fn tool_create_file(
         (_, Some(text)) if !text.is_empty() => text.into_bytes(),
         _ => return tool_error(id, "either data_base64 or data is required"),
     };
-    if data.is_empty() {
-        return tool_error(id, "decoded data is empty");
-    }
 
     let mimetype = args
         .mimetype
@@ -903,19 +871,23 @@ async fn tool_create_file(
     .await
     {
         Ok(created) => {
-            let title = files_repo::title_from_path(&created.model.path);
+            let summary =
+                broadcast::file_created(&state.ws_hub, &created.model, created.has_thumbnail);
             json_result(
                 id,
                 json!({
                     "id": created.model.id,
                     "path": created.model.path,
-                    "title": title,
+                    "title": summary.title,
                     "mimetype": created.model.mimetype,
                     "size_bytes": created.model.size_bytes,
                     "has_thumbnail": created.has_thumbnail,
                     "embed": format!("<image id=\"{}\">", created.model.id),
                 }),
             )
+        }
+        Err(e @ (FileSaveError::EmptyPath | FileSaveError::EmptyData)) => {
+            tool_error(id, &e.to_string())
         }
         Err(e) => tool_error(id, &format!("Create failed: {e}")),
     }
@@ -967,10 +939,13 @@ async fn tool_update_file(
     )
     .await
     {
-        Ok(Some(f)) => tool_result(
-            id,
-            format!("updated file [{}] {}", f.model.id, f.model.path),
-        ),
+        Ok(Some(f)) => {
+            broadcast::file_updated(&state.ws_hub, &f.model, f.has_thumbnail);
+            tool_result(
+                id,
+                format!("updated file [{}] {}", f.model.id, f.model.path),
+            )
+        }
         Ok(None) => tool_error(id, &format!("File not found: {}", args.id)),
         Err(e) => tool_error(id, &format!("Update failed: {e}")),
     }
@@ -986,7 +961,10 @@ async fn tool_delete_file(
         Err(r) => return r,
     };
     match files_repo::delete_by_id(&state.db, args.id).await {
-        Ok(true) => tool_result(id, format!("deleted file {}", args.id)),
+        Ok(true) => {
+            broadcast::file_deleted(&state.ws_hub, args.id);
+            tool_result(id, format!("deleted file {}", args.id))
+        }
         Ok(false) => tool_error(id, &format!("File not found: {}", args.id)),
         Err(e) => tool_error(id, &format!("Delete failed: {e}")),
     }
@@ -1043,12 +1021,6 @@ async fn tool_create_gallery(
         Ok(a) => a,
         Err(r) => return r,
     };
-    if args.title.is_empty() {
-        return tool_error(id, "title is required");
-    }
-    if args.path.trim().is_empty() {
-        return tool_error(id, "path is required");
-    }
     match galleries_repo::create_gallery(
         &state.db,
         user_id,
@@ -1061,7 +1033,13 @@ async fn tool_create_gallery(
     )
     .await
     {
-        Ok(g) => tool_result(id, format!("created gallery [{}] {}", g.id, g.title)),
+        Ok(g) => {
+            broadcast::gallery_created(&state.ws_hub, &g);
+            tool_result(id, format!("created gallery [{}] {}", g.id, g.title))
+        }
+        Err(e @ (GallerySaveError::EmptyTitle | GallerySaveError::EmptyPath)) => {
+            tool_error(id, &e.to_string())
+        }
         Err(e) => tool_error(id, &format!("Create failed: {e}")),
     }
 }
@@ -1076,9 +1054,6 @@ async fn tool_update_gallery(
         Err(r) => return r,
     };
     let gallery_id = args.id;
-    if args.path.trim().is_empty() {
-        return tool_error(id, "path is required");
-    }
     match galleries_repo::update_gallery(
         &state.db,
         gallery_id,
@@ -1091,8 +1066,12 @@ async fn tool_update_gallery(
     )
     .await
     {
-        Ok(Some(g)) => tool_result(id, format!("updated gallery [{}] {}", g.id, g.title)),
+        Ok(Some(g)) => {
+            broadcast::gallery_updated(&state.ws_hub, &g);
+            tool_result(id, format!("updated gallery [{}] {}", g.id, g.title))
+        }
         Ok(None) => tool_error(id, &format!("Gallery not found: {gallery_id}")),
+        Err(e @ GallerySaveError::EmptyPath) => tool_error(id, &e.to_string()),
         Err(e) => tool_error(id, &format!("Update failed: {e}")),
     }
 }
@@ -1107,7 +1086,10 @@ async fn tool_delete_gallery(
         Err(r) => return r,
     };
     match galleries_repo::delete_by_id(&state.db, args.id).await {
-        Ok(true) => tool_result(id, format!("deleted gallery {}", args.id)),
+        Ok(true) => {
+            broadcast::gallery_deleted(&state.ws_hub, args.id);
+            tool_result(id, format!("deleted gallery {}", args.id))
+        }
         Ok(false) => tool_error(id, &format!("Gallery not found: {}", args.id)),
         Err(e) => tool_error(id, &format!("Delete failed: {e}")),
     }

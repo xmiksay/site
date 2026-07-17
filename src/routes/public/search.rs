@@ -8,7 +8,7 @@ use sea_orm::EntityTrait;
 
 use crate::auth;
 use crate::entity::tag;
-use crate::repo::pages as pages_repo;
+use crate::repo::pages_search::{self as pages_search_repo, SearchError};
 use crate::routes::build_menu;
 use crate::state::AppState;
 
@@ -58,7 +58,7 @@ pub async fn search(
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    let result = pages_repo::search(
+    let result = pages_search_repo::search(
         &state.db,
         path_prefix,
         tag_name,
@@ -74,8 +74,8 @@ pub async fn search(
             r.pages.iter().map(PageView::from).collect::<Vec<_>>(),
             r.total,
         ),
-        Err(pages_repo::SearchError::UnknownTag) => (Vec::new(), 0),
-        Err(pages_repo::SearchError::Db(e)) => {
+        Err(SearchError::UnknownTag) => (Vec::new(), 0),
+        Err(SearchError::Db(e)) => {
             return Html(format!("<h1>Database error</h1><pre>{e}</pre>"));
         }
     };
