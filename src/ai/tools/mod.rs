@@ -22,8 +22,10 @@ use std::sync::Arc;
 use entanglement_runtime::ToolRegistry;
 use sea_orm::DatabaseConnection;
 
-/// Build the registry of built-in (non-MCP) tools: the 11 site CRUD tools
-/// (pages/tags/files/galleries) plus `web_search`/`web_fetch`. `engine.rs`
+/// Build the registry of built-in (non-MCP) tools: the 11 site tools — a
+/// curated subset, not full CRUD (pages read/search/edit/delete, tags
+/// list/create, files list/create, galleries list/create/update) — plus
+/// `web_search`/`web_fetch`. `engine.rs`
 /// builds this once at `SiteEngine` construction and layers per-session MCP
 /// routing tools on top (see `crate::ai::mcp`).
 pub fn registry(db: Arc<DatabaseConnection>, serper_api_key: Option<String>) -> ToolRegistry {

@@ -73,7 +73,7 @@ docker compose exec app ./site_migration
 | `DATABASE_URL` | PostgreSQL connection string | required (compose uses `postgres://blog:blog@db:5432/blog`) |
 | `RUST_LOG` | Log level filter | `site=debug,tower_http=debug,info` |
 | `PORT` | HTTP listen port | `3000` |
-| `DESIGN_DIR` | Override folder for `{templates,css,js,img}`, checked before the baked `design/` bundle (debug: live reload; release: frozen into RAM at startup) | unset |
+| `DESIGN_DIR` | Override folder for `{templates, assets/{css,js,img}}`, checked before the baked `design/` bundle (debug: live reload; release: frozen into RAM at startup) | unset |
 | `SERPER_API_KEY` | Optional — enables the `web_search` tool inside the AI assistant | unset |
 | `PUBLIC_URL` | Public base URL for absolute `<loc>` entries in `/sitemap.xml` | unset (falls back to `SELF_URL`, then `http://localhost:3000`) |
 | `SELF_URL` | Fallback base URL for the sitemap when `PUBLIC_URL` is unset | unset |
