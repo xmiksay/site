@@ -136,6 +136,8 @@ executes on every PR rather than self-skipping.
   gallery/tag CRUD and page↔tag association. Reuse `tests/common/mod.rs`'s
   `send()`/`test_db_url()` directly (session-cookie + JSON, same shape these
   need).
+- `tests/tags_resolve.rs` — `site::repo::tags::resolve_ids` against a real
+  `tags` table, using its own throwaway rows (not `tests/common/mod.rs`).
 - `tests/ai_catalog.rs`, `tests/ai_persistence.rs`, `tests/ai_mcp.rs` — the
   `src/ai/` gaps: `SiteCatalog::load`/`refresh`/`model_resolver` against real
   `llm_providers`/`llm_models` rows; `DbSink` append/backpressure and

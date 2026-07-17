@@ -77,16 +77,24 @@ async fn valid_service_token_proceeds_to_the_handler() {
     cleanup_user(&fx.db, fx.user_id).await;
 }
 
+// The two `initialize` scenarios below (no `CLAUDE` page vs. one present) are
+// kept as a single sequential test rather than two `#[tokio::test]`s: the
+// `CLAUDE` path is a global singleton (`src/repo/pages.rs`'s `path` is
+// site-wide, not user-scoped), and `cargo test` runs test functions
+// concurrently on separate threads within the same binary — two independent
+// tests, one asserting the page is absent while the other creates/deletes it,
+// would race.
 #[tokio::test]
-async fn initialize_reports_protocol_and_falls_back_to_default_instructions() {
+async fn initialize_reports_protocol_and_respects_the_claude_page_override() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    let fx = setup(&db_url, "init-default").await;
+    let fx = setup(&db_url, "init").await;
 
+    // No `CLAUDE` page exists yet, so this must be the built-in fallback,
+    // which always documents the markdown directive set.
     let (status, body, _) = rpc(&fx.app, Some(&fx.token), "initialize", None).await;
-
     assert_eq!(status, StatusCode::OK);
     let result = &body["result"];
     assert!(result["protocolVersion"].as_str().is_some());
@@ -95,20 +103,7 @@ async fn initialize_reports_protocol_and_falls_back_to_default_instructions() {
     let instructions = result["instructions"]
         .as_str()
         .expect("instructions should be a string");
-    // No `CLAUDE` page exists for this fixture, so it must be the built-in
-    // fallback, which always documents the markdown directive set.
     assert!(instructions.contains("Markdown extensions"));
-
-    cleanup_user(&fx.db, fx.user_id).await;
-}
-
-#[tokio::test]
-async fn initialize_uses_claude_page_markdown_when_present() {
-    let Some(db_url) = test_db_url().await else {
-        eprintln!("skipping: DATABASE_URL not set");
-        return;
-    };
-    let fx = setup(&db_url, "init-claude-page").await;
 
     let custom_markdown = "# Custom instructions for this install\n\nDo the thing.";
     pages_repo::create(
@@ -126,7 +121,6 @@ async fn initialize_uses_claude_page_markdown_when_present() {
     .expect("insert CLAUDE override page");
 
     let (status, body, _) = rpc(&fx.app, Some(&fx.token), "initialize", None).await;
-
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"]["instructions"], json!(custom_markdown));
 

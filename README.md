@@ -88,7 +88,7 @@ make verify        # lint + all tests (pre-"done" gate)
 ```
 
 See [`docs/testing.md`](docs/testing.md) for how tests are organized and how to
-add backend unit tests, client (vitest) specs, and future integration tests.
+add backend unit tests, client (vitest) specs, and `tests/` integration tests.
 
 ## Docker image (standalone)
 

@@ -52,7 +52,7 @@ cargo run --bin site_cli -- change-password <username> <password>
 
 `/check` wraps `make verify`; `/site-mcp` exercises the MCP endpoint (local vs production).
 
-Tests: `make test` (backend unit + integration + client), `make test-unit`, `make test-client`. See [`docs/testing.md`](../docs/testing.md) for how tests are organized and how to add them (backend `#[cfg(test)]`, client vitest specs, future integration harness).
+Tests: `make test` (backend unit + integration + client), `make test-unit`, `make test-client`. See [`docs/testing.md`](../docs/testing.md) for how tests are organized and how to add them (backend `#[cfg(test)]`, client vitest specs, `tests/` integration harness).
 
 ## Environment
 

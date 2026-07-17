@@ -145,6 +145,38 @@ fn assistant_tool_call(messages: &[Value]) -> Option<&Value> {
     })
 }
 
+/// The first tool call still awaiting a decision, across every message.
+///
+/// `requires_approval` (`src/ai/projection/mod.rs`'s `OpenTurn::flush_into`)
+/// is a historical marker: once set on a message it stays `true` even after
+/// every call in that message is resolved, because a turn can straddle
+/// several approve round-trips (the model may issue a fresh call after seeing
+/// a prior tool's result). The client mirrors this — `AssistantMessageContent
+/// .vue` only renders the approval prompt when `requiresApproval(content) &&
+/// decisionFor(content, tc.id) === undefined` — so "still pending" means a
+/// `tool_calls[].id` with no matching entry in that *same message's*
+/// `decisions` array, not merely the presence of the flag.
+fn first_unresolved_call(messages: &[Value]) -> Option<String> {
+    messages.iter().find_map(|m| {
+        if m["content"]["requires_approval"] != json!(true) {
+            return None;
+        }
+        let decided: std::collections::HashSet<&str> = m["content"]["decisions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| d["tool_call_id"].as_str())
+            .collect();
+        m["content"]["tool_calls"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|tc| tc["id"].as_str())
+            .find(|id| !decided.contains(id))
+            .map(str::to_string)
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn create_session_then_message_then_approve_completes_the_turn() {
     let Some(db_url) = test_db_url().await else {
@@ -213,32 +245,42 @@ async fn create_session_then_message_then_approve_completes_the_turn() {
         json!(true),
         "fresh user has no tool_permissions rules, so list_tags must default to Ask/requires_approval: {detail:#}"
     );
-    let tool_call_id = tool_msg["content"]["tool_calls"][0]["id"]
-        .as_str()
-        .expect("tool_call id")
-        .to_string();
-
-    // 3. Approve it.
-    let (status, approved) = send(
-        &fx.app,
-        "POST",
-        &format!("/assistant/sessions/{session_id}/messages/0/approve"),
-        &fx.cookie,
-        Some(json!({ "decisions": [{ "tool_call_id": tool_call_id, "approve": true }] })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "approve: {approved}");
+    // 3. Approve every call as it comes up. A small model sometimes issues a
+    // second tool call after seeing the first result (real, observed
+    // non-determinism — see the module doc on `first_unresolved_call`), so
+    // this round-trips until nothing is left pending rather than assuming a
+    // single approve settles the turn.
+    const MAX_ROUNDS: u32 = 4;
+    let mut approved = detail.clone();
+    let mut rounds = 0;
+    while let Some(call_id) =
+        first_unresolved_call(approved["messages"].as_array().expect("messages array"))
+    {
+        rounds += 1;
+        assert!(
+            rounds <= MAX_ROUNDS,
+            "turn still has an unresolved approval after {MAX_ROUNDS} rounds: {approved:#}"
+        );
+        let (status, resp) = send(
+            &fx.app,
+            "POST",
+            &format!("/assistant/sessions/{session_id}/messages/0/approve"),
+            &fx.cookie,
+            Some(json!({ "decisions": [{ "tool_call_id": call_id, "approve": true }] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "approve round {rounds}: {resp}");
+        approved = resp;
+    }
+    assert!(
+        rounds > 0,
+        "no tool call ever required approval: {detail:#}"
+    );
 
     let messages = approved["messages"].as_array().expect("messages array");
     assert!(
         messages.iter().any(|m| m["role"] == "tool_result"),
         "no tool_result message after approval: {approved:#}"
-    );
-    assert!(
-        !messages
-            .iter()
-            .any(|m| m["content"]["requires_approval"] == json!(true)),
-        "turn still shows a pending approval after approving the only call: {approved:#}"
     );
     assert!(
         !messages.iter().any(|m| m["role"] == "error"),
