@@ -62,12 +62,18 @@ jobs:
       - name: Lint
         run: make lint
 
+      # Migrations run before *any* test step: DATABASE_URL is set job-wide
+      # (above), and some in-module `#[cfg(test)]` unit tests are DB-gated on
+      # it too (e.g. ai::engine::tool_registry's tests), not just tests/ — so
+      # `make test-unit` needs a migrated DB just as much as
+      # `make test-integration` does, or it sees DATABASE_URL pointing at an
+      # empty database and fails on a missing table instead of skipping.
+      - name: Run migrations
+        run: cargo run --bin site_migration
+
       # make test-unit = cargo test --lib --bins.
       - name: Unit tests
         run: make test-unit
-
-      - name: Run migrations
-        run: cargo run --bin site_migration
 
       # make test-integration = cargo test --test '*' — real Postgres above,
       # no local Ollama here so the base assistant-session test skips
