@@ -1,7 +1,6 @@
 //! `SiteEngine` — the single process-wide `Holly` (embedding.md §1: one
 //! engine for every tenant, sessions namespaced per user) wired into
-//! `state.rs` in place of the old `loop_driver`/`mcp_client` turn-driving
-//! stack.
+//! `state.rs` as the turn-driving stack.
 //!
 //! See [`session_tree`] for the `u{user_id}:{uuid}` session-id convention and
 //! how a sub-agent (#17) child session resolves back to its owning user, and

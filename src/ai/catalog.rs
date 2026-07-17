@@ -1,9 +1,7 @@
-//! `SiteCatalog` — the new engine's model catalog, mirroring today's
-//! `ai::llm::registry::ProviderRegistry` but building
-//! `entanglement_provider::LlmFactory`/`ModelResolver` closures instead of the
-//! old `LlmProvider` trait objects. Hydrated from the `llm_providers`/
-//! `llm_models` tables; `refresh()` re-reads them (call after provider/model
-//! CRUD in the next phase's handlers).
+//! `SiteCatalog` — the engine's model catalog, building
+//! `entanglement_provider::LlmFactory`/`ModelResolver` closures. Hydrated from
+//! the `llm_providers`/`llm_models` tables; `refresh()` re-reads them (call
+//! after provider/model CRUD in the handlers).
 //!
 //! **`ModelResolver` keying convention** (documented here for the follow-up
 //! phase that mints `InMsg::SetModel`): `provider` = `llm_providers.label`
@@ -178,8 +176,7 @@ impl SiteCatalog {
     }
 }
 
-/// Build the `LlmFactory` for one provider row, dispatching on `kind` the
-/// same way `ai::llm::registry::ProviderRegistry::build` does today.
+/// Build the `LlmFactory` for one provider row, dispatching on `kind`.
 fn build_factory(
     provider: &llm_provider::Model,
     default_model: &str,

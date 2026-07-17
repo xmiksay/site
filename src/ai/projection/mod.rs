@@ -1,10 +1,9 @@
 //! Fold a session's `assistant_events` rows (each a
 //! `entanglement_runtime::session_store::LogRecord`) into the JSON shape the
 //! Vue admin client already understands — `role` one of `user | assistant |
-//! tool_result | error`, with the exact `content` shapes the old
-//! `loop_driver.rs`-authored `assistant_messages` rows used (see the
-//! doc-comment on [`project`]). Pure logic, no DB access — the easiest piece
-//! in this batch to unit test, per the issue (see `tests.rs`).
+//! tool_result | error`, with the `content` shapes documented on [`project`].
+//! Pure logic, no DB access — the easiest piece in this batch to unit test
+//! (see `tests.rs`).
 //!
 //! **Scope note:** this returns `{"role", "content"}` pairs only, not a full
 //! `MessageView` (`id`/`seq`/`created_at`). An `assistant_events` row doesn't

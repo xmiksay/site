@@ -1,5 +1,4 @@
-//! `SiteMcp` — the new engine's per-user MCP tool provider, replacing today's
-//! `ai::mcp_client` (`UserMcpManager`/`McpClientPool`, built on `rmcp`) with
+//! `SiteMcp` — the engine's per-user MCP tool provider, built on
 //! `entanglement_runtime::mcp::HttpClient` (embedding.md §6). Same shape as
 //! before: discover a user's enabled `user_mcp_servers` rows, connect via
 //! streamable HTTP, and namespace each remote tool as `"{server}__{tool}"`.

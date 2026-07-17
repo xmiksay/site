@@ -13,12 +13,12 @@ Hybrid personal site: server-rendered public pages (MiniJinja) + Vue 3 admin SPA
 - **Markdown:** pulldown-cmark with HTML-tag directives (`<page>`, `<image>`, `<file>`, `<gallery>`, `<fen>`, `<pgn>`, `<mermaid>`, `<json>`); `<fen>`/`<pgn>`/`<mermaid>`/`<json>` also accept an inline body, e.g. `<pgn>…</pgn>`. The full directive set is one source of truth: `MARKDOWN_EXTENSIONS_DOC` (`src/markdown.rs`), shared verbatim by the MCP server instructions and the AI system prompt
 - **Auth:** Argon2 password hashing, session cookies (`site_session`, 24 h), legacy service tokens, OAuth2 (PKCE)
 - **MCP:** `rmcp` crate; server at `POST /mcp`
-- **AI:** local subsystem in `src/ai/` (LLM providers, tool registry, MCP client, tool permissions, agentic loop)
+- **AI:** `src/ai/` adapts a single process-wide `entanglement-core`/`-runtime`/`-provider` engine (`Holly`) into `AppState` — per-user sessions, DB-backed tool permissions, per-user MCP client, event-sourced history, sub-agent profiles, streamed over the WS hub
 - **Logging:** tracing + tracing-subscriber with env filter
 
 ## Architecture (overview)
 
-Three binaries (`site_server`, `site_migration`, `site_cli`) over one crate. `site_server` serves: server-rendered public pages (`/{*path}` catch-all → menu → page) via the `DesignStore`/`Templates` engine, the embedded Vue admin SPA at `/admin/*`, a session-cookie JSON API at `/api/*`, an OAuth2 server, and an `rmcp` MCP endpoint at `POST /mcp`. Content (pages, files, galleries) lives in PostgreSQL via SeaORM; page edits keep `diffy` revisions; files are content-addressed (SHA-256) with deduped `file_blobs`. The `src/ai/` subsystem runs a per-user agentic assistant over configurable LLM providers and MCP servers.
+Three binaries (`site_server`, `site_migration`, `site_cli`) over one crate. `site_server` serves: server-rendered public pages (`/{*path}` catch-all → menu → page) via the `DesignStore`/`Templates` engine, the embedded Vue admin SPA at `/admin/*`, a session-cookie JSON API at `/api/*` (including a global WebSocket hub at `GET /api/ws`), an OAuth2 server, and an `rmcp` MCP endpoint at `POST /mcp`. Content (pages, files, galleries) lives in PostgreSQL via SeaORM; page edits keep `diffy` revisions; files are content-addressed (SHA-256) with deduped `file_blobs`. The `src/ai/` subsystem wires a single `entanglement`-based engine into `AppState`, running a per-user agentic assistant over configurable LLM providers and per-user MCP servers, with turns streamed live over the WebSocket hub.
 
 Two embed seams: `client/dist` (the SPA — generated, must be built before the binary) and `design/` (the baked default design bundle, overridable at runtime via `DESIGN_DIR`).
 

@@ -75,10 +75,7 @@ pub struct UpdateMcpServer {
 /// Build the `discovered` list from `SiteMcp`'s per-user tool-spec cache
 /// (`"{server}__{tool}"`-prefixed) grouped back by owning server row.
 ///
-/// Behavior change from the old `UserMcpManager::discover_user_servers`: that
-/// path connected fresh on every request and reported `connected: false` with
-/// an empty `tools` list for a server that's disabled *or* whose connection
-/// failed. `SiteMcp::tool_specs_for_user` only queries enabled servers and
+/// Note: `SiteMcp::tool_specs_for_user` only queries enabled servers and
 /// silently drops ones it can't reach (see `mcp.rs`'s doc), and is cached for
 /// 60s — so here `connected` is inferred from "did any tool surface for this
 /// server's prefix", which can't distinguish "disabled" from "connection
