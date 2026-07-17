@@ -79,7 +79,9 @@ vi.mock('../api', async (importActual) => {
 beforeEach(() => setActivePinia(createPinia()))
 ```
 
-Component specs use `@vue/test-utils` `mount()` (already installed).
+`@vue/test-utils` `mount()` is installed for component specs, but none exist
+yet — only the three store specs above. Adding the first component/view specs
+is tracked as follow-up work.
 
 ## Integration tests (`tests/`)
 

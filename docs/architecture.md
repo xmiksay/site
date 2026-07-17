@@ -143,9 +143,10 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 ## MCP Server
 
 The site plays both MCP roles, in two different places: it *serves* MCP to
-external clients (this section — `POST /mcp`, via the `rmcp` crate), and it
-*consumes* per-user MCP servers on behalf of the AI assistant (`ai::mcp`'s
-`SiteMcp`, see the AI Assistant section below).
+external clients (this section — `POST /mcp`, a hand-rolled JSON-RPC 2.0
+handler in `src/routes/mcp.rs`, no framework crate), and it *consumes* per-user
+MCP servers on behalf of the AI assistant (`ai::mcp`'s `SiteMcp` over
+`entanglement_runtime::mcp::HttpClient`, see the AI Assistant section below).
 
 `POST /mcp` exposes JSON-RPC 2.0 with these tools (defined in `src/routes/mcp.rs`):
 
@@ -249,9 +250,11 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   correctly handles a refused spawn (no valid uuid in its refusal text, so it
   claims nothing) and concurrent siblings in one batch (each still names its
   own child, so log order between them doesn't matter).
-- `tools/` — the built-in (non-MCP) tool vocabulary (pages/tags/files/
-  galleries CRUD + `web_search`/`web_fetch`), ported to
-  `entanglement_runtime::tools::Tool`.
+- `tools/` — the built-in (non-MCP) tool vocabulary, ported to
+  `entanglement_runtime::tools::Tool`. A curated subset of the site API (not
+  full CRUD): pages `read`/`search`/`edit`/`delete`, tags `list`/`create`,
+  files `list`/`create`, galleries `list`/`create`/`update`, plus
+  `web_search`/`web_fetch`.
 - `tool_permissions.rs` — the allow/deny/prompt rule evaluator `policy.rs`
   wraps (unchanged: first match wins, ordered by `priority ASC, id ASC`,
   trailing `*` is a prefix wildcard).

@@ -264,10 +264,9 @@ const SERVER_INSTRUCTIONS_HEADER: &str = "\
 Server-rendered site. Pages are stored in PostgreSQL and served at their `path` \
 (e.g. path `notes/example` → URL `/notes/example`).
 
-The full site admin API is exposed as MCP tools — pages, tags, files, \
-galleries, menu items and service tokens can all be managed here. To override \
-these instructions for your installation, create a page with path `CLAUDE` and \
-its markdown will be served instead.
+Pages, tags, files and galleries can all be managed here as MCP tools. To \
+override these instructions for your installation, create a page with path \
+`CLAUDE` and its markdown will be served instead.
 
 ## Pages
 
