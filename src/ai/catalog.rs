@@ -11,13 +11,14 @@
 //! wire id string are both legal, so keying by kind/wire-id would collide.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use anyhow::Context;
 use entanglement_provider::{
     GEMINI_BASE, HttpClient, LlmFactory, ModelResolver, OLLAMA_BASE, ResolvedModel,
     anthropic_factory, gemini_factory, openai_factory,
 };
+use parking_lot::RwLock;
 use sea_orm::{DatabaseConnection, EntityTrait};
 
 use crate::entity::{llm_model, llm_provider};
@@ -44,6 +45,9 @@ struct CatalogInner {
 pub struct SiteCatalog {
     db: DatabaseConnection,
     http: HttpClient,
+    /// `parking_lot::RwLock`, not `std::sync`: a panic while this is locked
+    /// must not poison it and fail-closed every later `model_by_id`/
+    /// `default_llm_factory` lookup for every session (issue #28).
     inner: RwLock<CatalogInner>,
 }
 
@@ -111,7 +115,7 @@ impl SiteCatalog {
         if default_model_id.is_none() {
             default_model_id = models.first().map(|m| m.id);
         }
-        *self.inner.write().unwrap() = CatalogInner {
+        *self.inner.write() = CatalogInner {
             by_model_id,
             default_model_id,
         };
@@ -119,16 +123,11 @@ impl SiteCatalog {
     }
 
     pub fn model_by_id(&self, model_id: i32) -> Option<CatalogModel> {
-        self.inner
-            .read()
-            .unwrap()
-            .by_model_id
-            .get(&model_id)
-            .cloned()
+        self.inner.read().by_model_id.get(&model_id).cloned()
     }
 
     pub fn default_model(&self) -> Option<CatalogModel> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read();
         inner
             .default_model_id
             .and_then(|id| inner.by_model_id.get(&id).cloned())
@@ -223,5 +222,32 @@ fn build_factory(
             ))
         }
         other => anyhow::bail!("provider kind not supported: {other}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The exact lock type `SiteCatalog.inner` uses. A `std::sync::RwLock`
+    /// would poison here — this proves `parking_lot::RwLock` doesn't, so one
+    /// panicking `refresh()` call can't fail-closed every later
+    /// `model_by_id`/`default_model` lookup for every session (issue #28).
+    #[test]
+    fn panicking_while_holding_the_write_lock_does_not_poison_it() {
+        let lock = Arc::new(RwLock::new(CatalogInner::default()));
+        let panicking = lock.clone();
+
+        let result = std::thread::spawn(move || {
+            let _guard = panicking.write();
+            panic!("simulated panic mid-refresh");
+        })
+        .join();
+        assert!(result.is_err(), "the spawned thread should have panicked");
+
+        // A `std::sync::RwLock` would return `Err(Poisoned)` here instead.
+        let inner = lock.read();
+        assert!(inner.by_model_id.is_empty());
+        assert!(inner.default_model_id.is_none());
     }
 }

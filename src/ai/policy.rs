@@ -4,11 +4,12 @@
 //! instead of the CLI's file-backed defaults.
 
 use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use entanglement_core::{ApprovalScope, Permission, SessionId};
 use entanglement_runtime::policy::{GrantStore, PermissionResolver};
+use parking_lot::RwLock;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 
 use crate::ai::engine::{user_id_from_session, user_id_from_session_awaiting};
@@ -29,7 +30,9 @@ pub struct SitePolicy {
     /// the DB directly. Kept in sync with the DB write inside `record()`;
     /// `invalidate_user` lets the next phase's permissions CRUD handlers
     /// force a re-sync after an out-of-band change (e.g. a rule deleted via
-    /// the admin UI).
+    /// the admin UI). `parking_lot::RwLock`, not `std::sync`: a panic while
+    /// this is locked must not poison it and fail-closed every subsequent
+    /// permission check for every user (issue #28).
     always_grants: RwLock<HashSet<(i32, String)>>,
 }
 
@@ -49,7 +52,6 @@ impl SitePolicy {
     pub fn invalidate_user(&self, user_id: i32) {
         self.always_grants
             .write()
-            .unwrap()
             .retain(|(uid, _)| *uid != user_id);
     }
 }
@@ -90,7 +92,6 @@ impl GrantStore for SitePolicy {
         };
         self.always_grants
             .read()
-            .unwrap()
             .contains(&(user_id, tool.to_string()))
     }
 
@@ -124,7 +125,6 @@ impl GrantStore for SitePolicy {
         }
         self.always_grants
             .write()
-            .unwrap()
             .insert((user_id, tool.to_string()));
     }
 

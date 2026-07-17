@@ -16,11 +16,12 @@
 //! identity known across *all* users at `SiteEngine::spawn` time
 //! (`known_tool_names`); a server/tool a user adds afterward is advertised
 //! correctly per-session (the `tool_spec_resolver` cache is refreshed live),
-//! but calling it will report "not enabled for this user" until the *engine
-//! process itself* restarts and re-seeds. Acceptable for this phase (nothing
-//! is wired into live traffic yet); the follow-up phase should decide whether
-//! that's worth a periodic executor respawn or is fine as a documented
-//! restart-to-pick-up-new-servers limitation.
+//! but calling it reports "not enabled for this user" until the registry is
+//! re-seeded. As of issue #28, `SiteEngine::refresh_tool_registry` re-seeds
+//! it (and safely swaps the executor for a fresh one) on a periodic timer —
+//! see its doc for why the swap order is abort-then-respawn — so a newly
+//! added server becomes usable within one refresh interval rather than
+//! needing a full process restart.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -33,6 +34,7 @@ use entanglement_core::{SessionId, ToolSpec};
 use entanglement_provider::ContentPart;
 use entanglement_runtime::Tool;
 use entanglement_runtime::mcp::{HttpClient, McpClient};
+use futures_util::future::join_all;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde_json::Value;
 use std::borrow::Cow;
@@ -42,6 +44,33 @@ use crate::entity::user_mcp_server;
 use crate::repo::tokens;
 
 const CACHE_TTL: Duration = Duration::from_secs(60);
+
+/// Ceiling on one remote MCP server's `connect()` handshake (TCP connect +
+/// `initialize` + `notifications/initialized`). Without this, a single
+/// unresponsive server can stall `routes_for_user` for as long as the
+/// underlying HTTP client's own per-request timeout (up to ~2 minutes across
+/// the handshake's two round-trips) — and `known_tool_names` (`SiteEngine::
+/// spawn`'s boot path, plus the periodic tool-registry refresh) waits on
+/// every user's servers, so one hung server would delay both. See issue #28.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `HttpClient::connect`, bounded to `timeout_duration` — see [`CONNECT_TIMEOUT`]'s
+/// doc. A parameter (not just the constant baked in) so a test can prove the
+/// bound actually applies without waiting out the real production timeout.
+async fn connect_with_timeout(
+    server: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    timeout_duration: Duration,
+) -> anyhow::Result<HttpClient> {
+    match tokio::time::timeout(timeout_duration, HttpClient::connect(server, url, headers)).await {
+        Ok(result) => result,
+        Err(_) => anyhow::bail!(
+            "MCP server `{server}` timed out connecting after {}s",
+            timeout_duration.as_secs_f64()
+        ),
+    }
+}
 
 struct McpRoute {
     client: Arc<McpClient>,
@@ -99,7 +128,9 @@ impl SiteMcp {
             {
                 headers.insert("Authorization".to_string(), format!("Bearer {nonce}"));
             }
-            let client = match HttpClient::connect(&row.name, &row.url, &headers).await {
+            let client = match connect_with_timeout(&row.name, &row.url, &headers, CONNECT_TIMEOUT)
+                .await
+            {
                 Ok(c) => Arc::new(McpClient::Http(c)),
                 Err(e) => {
                     tracing::warn!(server = %row.name, error = %e, "failed to connect to user MCP server");
@@ -160,9 +191,14 @@ impl SiteMcp {
     }
 
     /// Every `"{server}__{tool}"` identity known across every user with at
-    /// least one enabled MCP server — seeded once into the static
-    /// `ToolRegistry` at `SiteEngine::spawn` time (see the module doc's
-    /// static-registry limitation).
+    /// least one enabled MCP server — seeded into the `ToolRegistry` at
+    /// `SiteEngine::spawn` time and re-seeded on every later
+    /// `SiteEngine::refresh_tool_registry` (see the module doc's
+    /// static-registry limitation). Every user's servers are connected in
+    /// parallel, each bounded by [`CONNECT_TIMEOUT`], so this stays bounded
+    /// by the slowest single server rather than the sum of all of them —
+    /// load-bearing since this sits on `SiteEngine::spawn`'s boot path
+    /// (issue #28).
     pub async fn known_tool_names(&self, db: &DatabaseConnection) -> Vec<String> {
         let user_ids: Vec<i32> = match user_mcp_server::Entity::find()
             .filter(user_mcp_server::Column::Enabled.eq(true))
@@ -180,11 +216,15 @@ impl SiteMcp {
                 return Vec::new();
             }
         };
+        let results = join_all(
+            user_ids
+                .iter()
+                .map(|&user_id| self.routes_for_user(user_id)),
+        )
+        .await;
         let mut names = std::collections::HashSet::new();
-        for user_id in user_ids {
-            if let Ok(routes) = self.routes_for_user(user_id).await {
-                names.extend(routes.keys().cloned());
-            }
+        for routes in results.into_iter().flatten() {
+            names.extend(routes.keys().cloned());
         }
         names.into_iter().collect()
     }
@@ -266,5 +306,54 @@ impl Tool for McpRoutedTool {
             other => other.to_string(),
         };
         Ok(vec![ContentPart::text(text)])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    /// A remote MCP server that accepts the TCP connection but never answers
+    /// — the boot-latency failure mode issue #28 calls out. Proves
+    /// `connect_with_timeout` returns in bounded time instead of hanging for
+    /// as long as the underlying HTTP client's own (much longer) per-request
+    /// timeout.
+    #[tokio::test]
+    async fn connect_with_timeout_bounds_a_server_that_never_answers() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let addr = listener.local_addr().expect("local_addr");
+        tokio::spawn(async move {
+            // Accept and hold every connection open without ever writing a
+            // response — a black hole, not a refusal.
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    break;
+                };
+                std::mem::forget(socket); // keep the fd open for the test's duration
+            }
+        });
+
+        let bound = Duration::from_millis(200);
+        let started = tokio::time::Instant::now();
+        let result = connect_with_timeout(
+            "black-hole",
+            &format!("http://{addr}/mcp"),
+            &HashMap::new(),
+            bound,
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a server that never answers must not connect"
+        );
+        assert!(
+            elapsed < bound * 5,
+            "connect_with_timeout took {elapsed:?}, expected roughly the {bound:?} bound"
+        );
     }
 }

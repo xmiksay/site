@@ -216,17 +216,33 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
 
 - `engine.rs` — `SiteEngine`: spawns `Holly`, the tool executor, the
   `assistant_events` persistence subscriber, the system-prompt refresh task,
-  and a session-lifecycle watcher task that evicts a session from the
-  in-process "live" cache when `Holly`'s own idle-TTL sweep
-  (`EngineConfig.idle_ttl`, 30 min) or a manual hibernate retires it —
-  otherwise the next message to that session would skip `resume` and get a
-  blank in-memory session despite intact history in `assistant_events` — and
-  (issue #17) records every sub-agent session's parent link from its
-  `SessionStarted` event. Two submodules (kept under the 400-line cap):
-  `engine/profiles.rs` (the `researcher`/`page-writer` profile roster, below)
-  and `engine/session_tree.rs` (`root_session_of`/`user_id_from_session`/
-  `user_id_from_session_awaiting`, re-exported from `engine.rs` so every
-  existing `crate::ai::engine::...` call site is unchanged).
+  the tool-registry refresh task (below), and a session-lifecycle watcher task
+  that evicts a session from the in-process "live" cache when `Holly`'s own
+  idle-TTL sweep (`EngineConfig.idle_ttl`, 30 min) or a manual hibernate
+  retires it — otherwise the next message to that session would skip `resume`
+  and get a blank in-memory session despite intact history in
+  `assistant_events` — and (issue #17) records every sub-agent session's
+  parent link from its `SessionStarted` event. Four submodules (kept under
+  the 400-line cap): `engine/profiles.rs` (the `researcher`/`page-writer`
+  profile roster, below), `engine/session_tree.rs`
+  (`root_session_of`/`user_id_from_session`/`user_id_from_session_awaiting`,
+  re-exported from `engine.rs` so every existing `crate::ai::engine::...` call
+  site is unchanged), `engine/prompt_cache.rs` (the system-prompt
+  read-and-refresh loop), and `engine/tool_registry.rs` (below).
+  - **Tool-registry refresh (issue #28):**
+    `entanglement_runtime::tool_runner::spawn_tool_executor_with_policy` takes
+    its `ToolRegistry` by value at spawn time — no live-reload seam for the
+    dispatch registry in entanglement-runtime 0.1.0 — so an MCP server a user
+    enables after boot was previously unusable until the whole process
+    restarted. `SiteEngine::refresh_tool_registry` (in
+    `engine/tool_registry.rs`) rebuilds the registry from the current DB state
+    and swaps it into a freshly spawned executor every
+    `TOOL_REGISTRY_REFRESH_INTERVAL` (5 min), aborting the old executor
+    *before* spawning the new one so the two are never both subscribed to
+    `Holly`'s broadcast at once (which would risk double-dispatching an
+    in-flight `ToolExec`) — the narrow gap that ordering can strand is
+    recovered by core's own re-offer timer once the new executor is
+    listening.
   - **Sub-agents (#17):** the profile registry (`EngineConfig.profiles`) holds
     the root `build` profile plus two spawnable leaves — `researcher`
     (read-only: `web_search`/`web_fetch`/`read_page`/`search_pages`/
@@ -259,10 +275,20 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   `entanglement_runtime::mcp::HttpClient` — this is the site *consuming* MCP
   servers a user has configured (`user_mcp_servers`), as opposed to the `POST
   /mcp` route below where the site itself *serves* MCP. Tools are named
-  `"{server}__{tool}"`.
+  `"{server}__{tool}"`. Connecting to a user's server is bounded by a 10s
+  `CONNECT_TIMEOUT` (issue #28) and every user's servers are connected in
+  parallel (`known_tool_names`), so one hung remote server can't stall
+  `SiteEngine::spawn`'s boot path or the periodic tool-registry refresh
+  (above) for longer than that bound.
 - `persistence.rs` — `DbSink`: the engine's `RecordSink`, appending every
-  `LogRecord` to `assistant_events`; also the lazy session-resume and
-  session-delete helpers.
+  `LogRecord` to `assistant_events` behind a bounded channel + writer task;
+  also the lazy session-resume and session-delete helpers. A record shed under
+  sink backlog (channel full) is tallied and turned into a `LogPayload::Gap`
+  tombstone by a periodic flush, same as `entanglement_runtime`'s own
+  broadcast-lag path — and `resume_session` (issue #28) no longer hard-refuses
+  a session with a detected gap; it resumes from the intact prefix strictly
+  before the gap (`truncate_at_gap`), so a session stays resumable forever
+  instead of every future `ensure_live` failing.
 - `projection/` — pure fold of a session's `assistant_events` rows into the
   `{role, content}` shape the admin client renders (`role` one of
   `user | assistant | tool_result | error`). Since #17, `assistant_events`
