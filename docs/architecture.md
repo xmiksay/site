@@ -41,7 +41,11 @@ src/
                           # galleries, menu, tokens, users, format (shared
                           # MCP/AI text formatters, #25)
   auth.rs config.rs design.rs files.rs
-  markdown.rs mcp_args.rs path_util.rs state.rs templates.rs
+  markdown/              # mod.rs (entry + MARKDOWN_EXTENSIONS_DOC), directives.rs
+                          # (tag parsing), renderer.rs (expansion pipeline),
+                          # lookup.rs (file/gallery/page resolution), highlight.rs
+                          # (syntect), links.rs, handlers/ (simple/media/json)
+  mcp_args.rs path_util.rs state.rs templates.rs
                           # mcp_args.rs: shared tool-argument JSON parsing for
                           # the MCP server and the AI assistant's tools (#25)
 
@@ -165,13 +169,13 @@ MCP servers on behalf of the AI assistant (`ai::mcp`'s `SiteMcp` over
 - **Files:** `list_files`, `create_file`, `read_file`, `update_file`, `delete_file`
 - **Galleries:** `list_galleries`, `read_gallery`, `create_gallery`, `update_gallery`, `delete_gallery`
 
-Server instructions are assembled by `server_instructions()` = `SERVER_INSTRUCTIONS_HEADER` + `MARKDOWN_EXTENSIONS_DOC` (`src/routes/mcp.rs`, `src/markdown.rs`). If a private `CLAUDE` page exists (editable via admin UI / MCP), its markdown replaces the assembled default entirely — so keep that page in sync with the code. Tool/parameter descriptions live in `handle_tools_list()`.
+Server instructions are assembled by `server_instructions()` = `SERVER_INSTRUCTIONS_HEADER` + `MARKDOWN_EXTENSIONS_DOC` (`src/routes/mcp.rs`, `src/markdown/mod.rs`). If a private `CLAUDE` page exists (editable via admin UI / MCP), its markdown replaces the assembled default entirely — so keep that page in sync with the code. Tool/parameter descriptions live in `handle_tools_list()`.
 
 Every mutating tool broadcasts the same `WsHub` event a REST API mutation would (`src/routes/broadcast.rs`), so a page/tag/file/gallery change made over MCP shows up live in an open admin tab. `read_page`/`search_pages`/`list_tags` render through `src/repo/format.rs`, and the pages/galleries/files/tags "empty required field" and pages "nothing to update" guards live on the `repo` mutation functions themselves (`PageSaveError`/`GallerySaveError`/`FileSaveError`/`TagSaveError`, `pages::validate_page_edit_fields`) — the same formatters, guards, and `crate::mcp_args` argument parsing are shared verbatim with the AI assistant's built-in tools (`src/ai/tools/*.rs`), so the two edges can't drift (#25).
 
 ### Markdown directives
 
-The renderer recognizes exactly 8 HTML-tag directives — the `DIRECTIVE_NAMES` allow-list in `src/markdown.rs`; any other `<tag>` passes through as raw HTML:
+The renderer recognizes exactly 8 HTML-tag directives — the `DIRECTIVE_NAMES` allow-list in `src/markdown/directives.rs`; any other `<tag>` passes through as raw HTML:
 
 | Directive | Lookup keys | Other attrs | Inline body |
 |---|---|---|---|
@@ -184,7 +188,7 @@ The renderer recognizes exactly 8 HTML-tag directives — the `DIRECTIVE_NAMES` 
 | `<mermaid>` | `path` \| `id` \| `hash` \| body | `theme`, `size` | yes |
 | `<json>` | `path` \| `id` \| `hash` \| body | `query` (jq, required), `type` (`table`) | yes |
 
-A fenced code block with info string `mermaid` also renders as a diagram. **Single source of truth:** the human/AI-facing description is the `MARKDOWN_EXTENSIONS_DOC` const (`src/markdown.rs`), reused verbatim by the MCP server instructions, the AI system prompt, and the local `site_tools` description — edit it there, not in each surface.
+A fenced code block with info string `mermaid` also renders as a diagram. **Single source of truth:** the human/AI-facing description is the `MARKDOWN_EXTENSIONS_DOC` const (`src/markdown/mod.rs`), reused verbatim by the MCP server instructions, the AI system prompt, and the local `site_tools` description — edit it there, not in each surface.
 
 Auth: `Authorization: Bearer <token>` — accepts both service tokens (legacy, no expiry) and OAuth2 access tokens (1 h, refreshable). Handler resolves to `user_id` for audit fields.
 

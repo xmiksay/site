@@ -27,7 +27,7 @@ Good targets are dependency-free functions; current examples:
 
 - `src/path_util.rs` — `normalize` / `normalize_prefix` (slug canonicalization).
 - `src/files.rs` — `hash_blob` (SHA-256 content addressing) against known vectors.
-- `src/markdown.rs` — the largest suite: directive parsing, tag allow-listing,
+- `src/markdown/tests.rs` — the largest suite: directive parsing, tag allow-listing,
   container collection.
 
 Pattern:
