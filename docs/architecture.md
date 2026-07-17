@@ -13,8 +13,9 @@ src/
   routes/
     public/               # catch-all, files, search, sitemap, tags
     api/                  # auth, users, pages, tags, files, galleries,
-                          # menu, tokens, markdown, paths, assistant, llm,
-                          # tool-permissions, ws
+                          # menu, tokens, markdown, paths — nests
+                          # ai::handlers::router() at /assistant and
+                          # routes/ws.rs at /ws
     mcp.rs                # MCP JSON-RPC endpoint
     oauth.rs              # OAuth2 server (register/authorize/token/well-known)
     revision.rs
@@ -30,11 +31,7 @@ src/
   ai/                     # config, handlers, tool_permissions, ws_bridge —
                           # plus the entanglement-core/-runtime engine
                           # adapters: engine, catalog, mcp, persistence,
-                          # policy, projection/, tools/. (llm, local_tools,
-                          # mcp_client, tool_registry are the pre-engine-swap
-                          # modules — unreachable from AppState, kept
-                          # compiling only until issue #15 Phase 4 deletes
-                          # them.)
+                          # policy, projection/, tools/
   auth.rs config.rs design.rs files.rs
   markdown.rs path_util.rs repo state.rs templates.rs
 
@@ -145,6 +142,11 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 
 ## MCP Server
 
+The site plays both MCP roles, in two different places: it *serves* MCP to
+external clients (this section — `POST /mcp`, via the `rmcp` crate), and it
+*consumes* per-user MCP servers on behalf of the AI assistant (`ai::mcp`'s
+`SiteMcp`, see the AI Assistant section below).
+
 `POST /mcp` exposes JSON-RPC 2.0 with these tools (defined in `src/routes/mcp.rs`):
 
 - **Pages:** `read_page`, `edit_page`, `search_pages` (prefix/tag/q + limit/offset), `delete_page`
@@ -224,8 +226,10 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   `GrantStore` over the existing `tool_permissions` table (same
   priority/wildcard rules as before, in `tool_permissions.rs`).
 - `mcp.rs` — `SiteMcp`: per-user MCP tool discovery/routing over
-  `entanglement_runtime::mcp::HttpClient`, replacing `mcp_client/`'s
-  `UserMcpManager`; tools are named `"{server}__{tool}"`.
+  `entanglement_runtime::mcp::HttpClient` — this is the site *consuming* MCP
+  servers a user has configured (`user_mcp_servers`), as opposed to the `POST
+  /mcp` route below where the site itself *serves* MCP. Tools are named
+  `"{server}__{tool}"`.
 - `persistence.rs` — `DbSink`: the engine's `RecordSink`, appending every
   `LogRecord` to `assistant_events`; also the lazy session-resume and
   session-delete helpers.
@@ -275,10 +279,6 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   envelope shape unchanged for any session that never spawns a sub-agent.
   This is genuine token-level streaming — see the WebSocket Hub section
   below.
-
-`llm/`, `local_tools/`, `mcp_client/`, and `tool_registry.rs` are the
-pre-engine-swap modules: no longer reachable from `AppState`, kept compiling
-standalone until issue #15 Phase 4 deletes them outright.
 
 Configured per user via the admin SPA: `/admin/{providers,models,assistant,mcp-servers,tool-permissions}`. Provider API keys live in `llm_providers.api_key` (set through the UI, never in `.env`).
 

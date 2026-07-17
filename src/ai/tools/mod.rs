@@ -1,17 +1,14 @@
-//! Port of `src/ai/local_tools` to `entanglement_runtime::tools::Tool` — the
-//! new engine's built-in (non-MCP) tool vocabulary. Each tool recovers the
-//! calling user from the session id (`crate::ai::engine::user_id_from_session`)
-//! instead of taking an explicit `ctx` struct the way the old `LocalTool`
-//! trait did; session-scoping replaces that. `Tool::run` is never invoked by
-//! the executor once `run_for_session` is overridden (only
+//! `entanglement_runtime::tools::Tool` implementations — the engine's
+//! built-in (non-MCP) tool vocabulary. Each tool recovers the calling user
+//! from the session id (`crate::ai::engine::user_id_from_session`);
+//! session-scoping replaces an explicit `ctx` struct. `Tool::run` is never
+//! invoked by the executor once `run_for_session` is overridden (only
 //! `ToolRegistry::execute` calls `run_for_session`, which defaults to calling
 //! `run_content`/`run` — see `entanglement_runtime::tools::Tool` docs), so
 //! every tool below just bails out of `run` with an explanatory message
 //! rather than silently no-op'ing.
 //!
-//! `ToolCall.input` arrives as a JSON **string** now (not a pre-parsed
-//! `serde_json::Value` the old `LocalTool::call` took) — see
-//! `common::parse_args`.
+//! `ToolCall.input` arrives as a JSON **string** — see `common::parse_args`.
 
 mod common;
 mod files;
