@@ -215,6 +215,10 @@ export interface LlmProvider {
   kind: 'anthropic' | 'ollama' | 'gemini' | string
   base_url: string | null
   has_api_key: boolean
+  /** Max concurrent in-flight requests for this provider; `null` uses the engine default (3). */
+  concurrency: number | null
+  /** Requests/minute cap for this provider; `null` uses the engine default (50). */
+  rpm: number | null
   created_at: string
 }
 
@@ -223,6 +227,10 @@ export interface LlmProviderInput {
   kind: string
   api_key?: string
   base_url?: string
+  /** `null` clears it back to the engine default; omit to leave untouched on a patch. */
+  concurrency?: number | null
+  /** `null` clears it back to the engine default; omit to leave untouched on a patch. */
+  rpm?: number | null
 }
 
 export interface LlmModel {

@@ -17,6 +17,16 @@ pub struct Model {
     /// Base URL for `ollama`.
     #[sea_orm(nullable)]
     pub base_url: Option<String>,
+    /// Max simultaneously in-flight requests to this provider's endpoint
+    /// (ADR-0111 per-endpoint concurrency permit, held across a whole
+    /// streamed turn). `None` falls back to `entanglement_provider`'s own
+    /// client default.
+    #[sea_orm(nullable)]
+    pub concurrency: Option<i32>,
+    /// Requests-per-minute budget for this provider's endpoint. `None` falls
+    /// back to `entanglement_provider`'s own client default.
+    #[sea_orm(nullable)]
+    pub rpm: Option<i32>,
     pub created_at: DateTimeWithTimeZone,
 }
 

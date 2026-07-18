@@ -102,7 +102,11 @@ oauth_codes         id, code unique, client_id, user_id, redirect_uri,
 oauth_tokens        id, access_token unique, refresh_token unique,
                     client_id, user_id, expires_at, revoked
 
-llm_providers       id, label, kind (anthropic|ollama|gemini), api_key?, base_url?
+llm_providers       id, label, kind (anthropic|ollama|gemini), api_key?, base_url?,
+                    concurrency? (m_026 — max in-flight requests to this
+                    endpoint), rpm? (m_026 — requests/minute budget); both
+                    `None` fall back to entanglement_provider's client
+                    defaults (ADR-0111)
 llm_models          id, provider_id, label, model wire-id, is_default,
                     context_window? (m_025 — tokens; fed to
                     ResolvedModel::context_window, #40)
@@ -280,6 +284,22 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   (#40), so a live `SetModel`/session resume budgets the turn loop's
   overflow handling against the model's real window instead of the engine's
   generic fallback (`entanglement_core::context::CONTEXT_LIMIT_TOKENS`).
+  `build_factory` also threads each row's `concurrency`/`rpm` (m_026) into the
+  `*_factory` calls (ADR-0111 in `entanglement_provider`, #41): every session
+  built from that row shares one per-endpoint `HttpClient` state keyed by
+  (base URL, api key), so `concurrency` caps simultaneously in-flight
+  requests (held across the whole streamed turn — the storm guard for many
+  spawned sub-agents) and `rpm` sets the adaptive pacing gate; a 429 backs
+  the gate off and a success relaxes it. Both are nullable — `None` falls
+  back to the library's own client defaults (3 concurrent / 50 rpm). The
+  values are also exposed on `CatalogModel.concurrency`/`.rpm` for
+  introspection, even though they're already baked into the `llm_factory`
+  closure. `refresh()` builds a **fresh** `HttpClient` every call rather than
+  reusing one long-lived instance — `entanglement_provider`'s `HttpClient`
+  locks in an endpoint's rpm/concurrency on that endpoint's *first* request
+  and ignores later values for the same key, so a stale client would make an
+  admin's `concurrency`/`rpm` edit silently have no effect once any turn had
+  already gone through that provider.
 - `policy.rs` — `SitePolicy`: implements the engine's `PermissionResolver` +
   `GrantStore` over the `tool_permissions` table, via `tool_permissions.rs`
   (#39). Extracts a call's scoping argument with its own `permission_arg`
