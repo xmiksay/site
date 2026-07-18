@@ -22,9 +22,13 @@
 //! this file with one process-wide lock instead of relying on data isolation
 //! that the code under test doesn't provide.
 
+use entanglement_provider::LlmRequest;
 use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use site::ai::catalog::SiteCatalog;
 use site::entity::{llm_model, llm_provider};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use tokio::sync::{Mutex, MutexGuard};
 
 // `tokio::sync::Mutex` (not `std::sync::Mutex`): each test's body holds the
@@ -53,6 +57,26 @@ async fn make_provider(db: &DatabaseConnection, tag: &str) -> llm_provider::Mode
         kind: Set("ollama".to_string()),
         api_key: Set(None),
         base_url: Set(None),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .expect("insert throwaway llm_provider")
+}
+
+async fn make_provider_with_limits(
+    db: &DatabaseConnection,
+    tag: &str,
+    concurrency: i32,
+    rpm: i32,
+) -> llm_provider::Model {
+    llm_provider::ActiveModel {
+        label: Set(format!("catalog-test-{tag}-{}", uuid::Uuid::new_v4())),
+        kind: Set("ollama".to_string()),
+        api_key: Set(None),
+        base_url: Set(None),
+        concurrency: Set(Some(concurrency)),
+        rpm: Set(Some(rpm)),
         ..Default::default()
     }
     .insert(db)
@@ -289,6 +313,201 @@ async fn model_resolver_rejects_a_non_numeric_model_string() {
         .err()
         .expect("a non-numeric model string must be rejected");
     assert!(err.contains("not a valid model id"));
+
+    cleanup_provider(&db, provider.id).await;
+}
+
+/// ADR-0111: `llm_providers.concurrency`/`.rpm` must reach `CatalogModel` —
+/// the values `build_factory` (`src/ai/catalog.rs`) bakes into the
+/// `LlmFactory` closure, so the per-endpoint permit + pacing gate are sized
+/// per provider row instead of the library's process-wide defaults.
+#[tokio::test]
+async fn catalog_carries_per_provider_concurrency_and_rpm_from_the_db() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let _guard = exclusive().await;
+    wipe_catalog_tables(&db).await;
+    let provider = make_provider_with_limits(&db, "limits", 2, 30).await;
+    let model = make_model(&db, provider.id, "model-a", true).await;
+
+    let catalog = SiteCatalog::load(db.clone()).await.expect("load catalog");
+    let resolved = catalog
+        .model_by_id(model.id)
+        .expect("expected the model to resolve");
+    assert_eq!(resolved.concurrency, Some(2));
+    assert_eq!(resolved.rpm, Some(30));
+
+    cleanup_provider(&db, provider.id).await;
+}
+
+/// The counterpart to the above: a provider row with no `concurrency`/`rpm`
+/// set must resolve to `None` on both — the library's own client default
+/// takes over from there, not some silently-invented value.
+#[tokio::test]
+async fn catalog_leaves_concurrency_and_rpm_none_when_unset() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let _guard = exclusive().await;
+    wipe_catalog_tables(&db).await;
+    let provider = make_provider(&db, "limits-unset").await;
+    let model = make_model(&db, provider.id, "model-a", true).await;
+
+    let catalog = SiteCatalog::load(db.clone()).await.expect("load catalog");
+    let resolved = catalog
+        .model_by_id(model.id)
+        .expect("expected the model to resolve");
+    assert_eq!(resolved.concurrency, None);
+    assert_eq!(resolved.rpm, None);
+
+    cleanup_provider(&db, provider.id).await;
+}
+
+/// A minimal OpenAI-compat SSE mock: accepts a connection, tracks how many
+/// are open at once (updating `max_seen`), holds the connection for `delay`
+/// before responding, then closes it. Mirrors the one in
+/// `src/ai/catalog/tests.rs` — duplicated rather than shared because an
+/// integration test binary can't reach that module's private helper.
+async fn spawn_concurrency_probe(delay: Duration) -> (String, Arc<AtomicUsize>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().expect("local_addr");
+    let in_flight = Arc::new(AtomicUsize::new(0));
+    let max_seen = Arc::new(AtomicUsize::new(0));
+    let (in_flight, max_seen_task) = (in_flight, max_seen.clone());
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let in_flight = in_flight.clone();
+            let max_seen = max_seen_task.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(500), socket.read(&mut buf)).await;
+
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                max_seen.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(delay).await;
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+
+                let body = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+                             data: [DONE]\n\n";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+
+    (format!("http://{addr}"), max_seen)
+}
+
+/// Drive one turn through `model_id`'s current `llm_factory` to completion.
+async fn fire_one_turn(catalog: &SiteCatalog, model_id: i32) {
+    let mut llm = (catalog
+        .model_by_id(model_id)
+        .expect("model should resolve")
+        .llm_factory)();
+    let mut stream = llm
+        .stream(LlmRequest {
+            system: "",
+            model: None,
+            messages: &[],
+            tools: &[],
+            generation: None,
+        })
+        .await
+        .expect("stream should start");
+    while futures_util::StreamExt::next(&mut stream).await.is_some() {}
+}
+
+/// Regression test for #41/ADR-0111: `SiteCatalog::refresh()` must rebuild
+/// its `HttpClient` fresh, not reuse one long-lived instance across every
+/// refresh. `entanglement_provider::HttpClient` locks in an endpoint's
+/// rpm/concurrency on that endpoint's *first* request and ignores later
+/// values passed for the same `(base_url, api_key)` key — see its own
+/// `endpoint()` doc ("Only the first caller for a key sets the bucket
+/// size"). Without rebuilding the `HttpClient` per `refresh()`, an admin's
+/// `concurrency` edit would silently have no effect once any turn had
+/// already gone through that provider.
+#[tokio::test]
+async fn refresh_applies_an_updated_concurrency_cap_even_after_the_endpoint_already_served_a_request()
+ {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let _guard = exclusive().await;
+    wipe_catalog_tables(&db).await;
+
+    let (base_url, max_seen) = spawn_concurrency_probe(Duration::from_millis(150)).await;
+    // `rpm` is pinned high from the start so the (separate) adaptive pacing
+    // gate can't itself space the 3 dispatches out — only the `concurrency`
+    // semaphore we set *after* the endpoint has already served a request
+    // should determine whether they overlap.
+    let provider = llm_provider::ActiveModel {
+        label: Set(format!(
+            "catalog-test-refresh-live-{}",
+            uuid::Uuid::new_v4()
+        )),
+        kind: Set("ollama".to_string()),
+        api_key: Set(None),
+        base_url: Set(Some(base_url)),
+        rpm: Set(Some(1_000_000)),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .expect("insert throwaway llm_provider");
+    let model = make_model(&db, provider.id, "model-a", true).await;
+
+    let catalog = SiteCatalog::load(db.clone()).await.expect("load catalog");
+
+    // Warm the endpoint with no concurrency cap set (library default: 3) —
+    // this is what locks in the endpoint's bucket size under the bug.
+    fire_one_turn(&catalog, model.id).await;
+
+    // Now cap concurrency to 1 and refresh, exactly as the admin handler does.
+    let mut active: llm_provider::ActiveModel = provider.clone().into();
+    active.concurrency = Set(Some(1));
+    active
+        .update(&db)
+        .await
+        .expect("update provider concurrency");
+    catalog.refresh().await.expect("refresh catalog");
+
+    // Fire 3 concurrent turns; if the cap took effect, at most 1 runs at once.
+    let mut handles = Vec::new();
+    for _ in 0..3 {
+        let catalog = catalog.clone();
+        let model_id = model.id;
+        handles.push(tokio::spawn(async move {
+            fire_one_turn(&catalog, model_id).await
+        }));
+    }
+    for h in handles {
+        h.await.expect("turn task should not panic");
+    }
+
+    assert_eq!(
+        max_seen.load(Ordering::SeqCst),
+        1,
+        "the concurrency cap set after refresh() must actually bound in-flight requests"
+    );
 
     cleanup_provider(&db, provider.id).await;
 }

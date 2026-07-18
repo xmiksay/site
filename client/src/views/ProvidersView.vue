@@ -11,6 +11,8 @@ const draft = ref<LlmProviderInput>({
   kind: 'anthropic',
   api_key: '',
   base_url: '',
+  concurrency: undefined,
+  rpm: undefined,
 })
 
 interface EditDraft {
@@ -18,6 +20,10 @@ interface EditDraft {
   api_key: string
   api_key_dirty: boolean
   base_url: string
+  concurrency?: number
+  concurrency_dirty: boolean
+  rpm?: number
+  rpm_dirty: boolean
 }
 const editingId = ref<number | null>(null)
 const editDraft = ref<EditDraft>({
@@ -25,7 +31,20 @@ const editDraft = ref<EditDraft>({
   api_key: '',
   api_key_dirty: false,
   base_url: '',
+  concurrency: undefined,
+  concurrency_dirty: false,
+  rpm: undefined,
+  rpm_dirty: false,
 })
+
+/** Round to a whole number, or `undefined` for anything non-positive (the
+ * "not set" sentinel `create`/`saveEdit` map to omit/clear). Guards against a
+ * `type="number"` input accepting a decimal that would 422 as an invalid i32
+ * on the wire instead of surfacing `validate_budget`'s friendly message. */
+function wholePositive(n: number | undefined): number | undefined {
+  if (n === undefined || !Number.isFinite(n) || n <= 0) return undefined
+  return Math.round(n)
+}
 
 onMounted(assistant.loadProviders)
 
@@ -50,8 +69,17 @@ async function create() {
     kind: draft.value.kind,
     api_key: draft.value.api_key?.trim() || undefined,
     base_url: draft.value.base_url?.trim() || undefined,
+    concurrency: wholePositive(draft.value.concurrency ?? undefined),
+    rpm: wholePositive(draft.value.rpm ?? undefined),
   })
-  draft.value = { label: '', kind: 'anthropic', api_key: '', base_url: '' }
+  draft.value = {
+    label: '',
+    kind: 'anthropic',
+    api_key: '',
+    base_url: '',
+    concurrency: undefined,
+    rpm: undefined,
+  }
   showCreate.value = false
 }
 
@@ -62,6 +90,10 @@ function startEdit(p: LlmProvider) {
     api_key: '',
     api_key_dirty: false,
     base_url: p.base_url ?? '',
+    concurrency: p.concurrency ?? undefined,
+    concurrency_dirty: false,
+    rpm: p.rpm ?? undefined,
+    rpm_dirty: false,
   }
 }
 
@@ -76,6 +108,16 @@ async function saveEdit(p: LlmProvider) {
     patch.base_url = editDraft.value.base_url.trim()
   } else if (editDraft.value.api_key_dirty) {
     patch.api_key = editDraft.value.api_key
+  }
+  // Only touched fields ride the patch; a blank/zeroed input while dirty
+  // sends `null` to clear it back to the engine default (see
+  // `LlmProviderInput.concurrency`'s doc and the backend's double-`Option`
+  // `UpdateProvider` handling) rather than being silently dropped.
+  if (editDraft.value.concurrency_dirty) {
+    patch.concurrency = wholePositive(editDraft.value.concurrency) ?? null
+  }
+  if (editDraft.value.rpm_dirty) {
+    patch.rpm = wholePositive(editDraft.value.rpm) ?? null
   }
   await assistant.updateProvider(p.id, patch)
   editingId.value = null
@@ -131,6 +173,30 @@ async function remove(id: number, label: string) {
         <label class="block text-sm font-medium mb-1">Base URL</label>
         <input v-model="draft.base_url" class="w-full border rounded p-2 text-sm font-mono" placeholder="http://localhost:11434" />
       </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium mb-1">Max concurrency</label>
+          <input
+            v-model.number="draft.concurrency"
+            type="number"
+            min="1"
+            step="1"
+            class="w-full border rounded p-2 text-sm"
+            placeholder="default (3)"
+          />
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Requests/min</label>
+          <input
+            v-model.number="draft.rpm"
+            type="number"
+            min="1"
+            step="1"
+            class="w-full border rounded p-2 text-sm"
+            placeholder="default (50)"
+          />
+        </div>
+      </div>
       <div class="flex justify-end">
         <button class="rounded bg-gray-800 text-white px-4 py-2 text-sm" @click="create">Save</button>
       </div>
@@ -143,6 +209,7 @@ async function remove(id: number, label: string) {
             <th class="text-left px-4 py-2">Label</th>
             <th class="text-left px-4 py-2">Kind</th>
             <th class="text-left px-4 py-2">Configured</th>
+            <th class="text-left px-4 py-2">Limits</th>
             <th class="px-4 py-2"></th>
           </tr>
         </thead>
@@ -155,6 +222,10 @@ async function remove(id: number, label: string) {
                 <span v-if="p.kind === 'ollama'">{{ p.base_url || '—' }}</span>
                 <span v-else-if="p.has_api_key">key set</span>
                 <span v-else class="text-red-600">no api key</span>
+              </td>
+              <td class="px-4 py-2 text-gray-600">
+                <span v-if="p.concurrency == null && p.rpm == null" class="text-gray-400">default</span>
+                <span v-else>{{ p.concurrency ?? 'default' }} conc / {{ p.rpm ?? 'default' }} rpm</span>
               </td>
               <td class="px-4 py-2 text-right space-x-3">
                 <button
@@ -177,7 +248,7 @@ async function remove(id: number, label: string) {
               </td>
             </tr>
             <tr v-if="editingId === p.id" class="border-t border-gray-100 bg-gray-50">
-              <td colspan="4" class="px-4 py-3">
+              <td colspan="5" class="px-4 py-3">
                 <div class="space-y-3">
                   <div>
                     <label class="block text-xs font-medium mb-1">Label</label>
@@ -200,6 +271,35 @@ async function remove(id: number, label: string) {
                       Submit empty to clear the stored key.
                     </p>
                   </div>
+                  <div class="grid grid-cols-2 gap-3">
+                    <div>
+                      <label class="block text-xs font-medium mb-1">Max concurrency</label>
+                      <input
+                        v-model.number="editDraft.concurrency"
+                        type="number"
+                        min="1"
+                        step="1"
+                        class="w-full border rounded p-2 text-sm"
+                        placeholder="default (3)"
+                        @input="editDraft.concurrency_dirty = true"
+                      />
+                    </div>
+                    <div>
+                      <label class="block text-xs font-medium mb-1">Requests/min</label>
+                      <input
+                        v-model.number="editDraft.rpm"
+                        type="number"
+                        min="1"
+                        step="1"
+                        class="w-full border rounded p-2 text-sm"
+                        placeholder="default (50)"
+                        @input="editDraft.rpm_dirty = true"
+                      />
+                    </div>
+                  </div>
+                  <p class="text-xs text-gray-500">
+                    Clear a limit and save to reset it back to the default.
+                  </p>
                   <div class="flex justify-end">
                     <button
                       class="rounded bg-gray-800 text-white px-4 py-2 text-sm"
@@ -213,7 +313,7 @@ async function remove(id: number, label: string) {
             </tr>
           </template>
           <tr v-if="assistant.providers.length === 0">
-            <td colspan="4" class="px-4 py-6 text-center text-gray-400">
+            <td colspan="5" class="px-4 py-6 text-center text-gray-400">
               No providers yet. Add one to start.
             </td>
           </tr>

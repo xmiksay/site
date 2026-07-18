@@ -35,6 +35,14 @@ pub struct CatalogModel {
     pub is_default: bool,
     /// The model's real context window in tokens (#40), from `llm_models`.
     pub context_window: Option<usize>,
+    /// Effective per-endpoint in-flight request cap threaded into
+    /// `llm_factory` (ADR-0111), from `llm_providers.concurrency`. `None` ⇒
+    /// `entanglement_provider`'s own client default. Exposed for
+    /// introspection/tests — the value is already baked into the closure.
+    pub concurrency: Option<usize>,
+    /// Effective per-endpoint requests-per-minute budget threaded into
+    /// `llm_factory`, from `llm_providers.rpm`. `None` ⇒ the client default.
+    pub rpm: Option<u32>,
     pub llm_factory: LlmFactory,
 }
 
@@ -46,7 +54,6 @@ struct CatalogInner {
 
 pub struct SiteCatalog {
     db: DatabaseConnection,
-    http: HttpClient,
     /// `parking_lot::RwLock`, not `std::sync`: a panic while this is locked
     /// must not poison it and fail-closed every later `model_by_id`/
     /// `default_llm_factory` lookup for every session (issue #28).
@@ -59,14 +66,28 @@ impl SiteCatalog {
     pub async fn load(db: DatabaseConnection) -> anyhow::Result<Arc<Self>> {
         let catalog = Arc::new(SiteCatalog {
             db,
-            http: HttpClient::new(),
             inner: RwLock::new(CatalogInner::default()),
         });
         catalog.refresh().await?;
         Ok(catalog)
     }
 
-    /// Re-read `llm_providers`/`llm_models` and rebuild every factory closure.
+    /// Re-read `llm_providers`/`llm_models` and rebuild every factory
+    /// closure, including a **fresh** `HttpClient` to build them against.
+    /// `entanglement_provider::HttpClient`'s per-endpoint rpm/concurrency
+    /// state is created lazily on an endpoint's *first* request and then
+    /// locked in for that `HttpClient`'s lifetime (see its own `endpoint()`
+    /// doc: "Only the first caller for a key sets the bucket size"). Reusing
+    /// one long-lived `HttpClient` across every `refresh()` would mean an
+    /// admin's `concurrency`/`rpm` edit (#41/ADR-0111) never takes effect
+    /// once *any* session had already hit that provider's endpoint —
+    /// rebuilding here costs nothing until first use (no eager connections)
+    /// and only affects *new* sessions/turns resolved after this refresh,
+    /// matching this method's existing "next new session" contract. Each
+    /// `LlmFactory` closure clones this `http` into itself (`build_factory`),
+    /// which is what keeps its `Arc`-shared pool alive — nothing here needs
+    /// to hold onto `http` past this function returning.
+    ///
     /// Call after provider/model CRUD so live sessions pick up the change on
     /// their next `SetModel`/new-session resolve.
     pub async fn refresh(&self) -> anyhow::Result<()> {
@@ -79,6 +100,7 @@ impl SiteCatalog {
             .await
             .context("loading llm_models")?;
 
+        let http = HttpClient::new();
         let mut by_model_id = HashMap::with_capacity(models.len());
         let mut default_model_id = None;
         for model in &models {
@@ -89,7 +111,7 @@ impl SiteCatalog {
                 );
                 continue;
             };
-            let llm_factory = match build_factory(provider, &model.model, &self.http) {
+            let llm_factory = match build_factory(provider, &model.model, &http) {
                 Ok(f) => f,
                 Err(e) => {
                     tracing::warn!(model_id = model.id, error = %e, "skipping unbuildable model");
@@ -109,6 +131,8 @@ impl SiteCatalog {
                     wire_model: model.model.clone(),
                     is_default: model.is_default,
                     context_window: model.context_window.and_then(|w| usize::try_from(w).ok()),
+                    concurrency: positive_usize(provider.concurrency),
+                    rpm: positive_u32(provider.rpm),
                     llm_factory,
                 },
             );
@@ -179,18 +203,26 @@ impl SiteCatalog {
 }
 
 /// Build the `LlmFactory` for one provider row, dispatching on `kind`.
+///
+/// `provider.rpm`/`.concurrency` (ADR-0111) are threaded straight into the
+/// factory so the client's per-endpoint pacing gate and in-flight permit are
+/// sized from the DB row instead of the library's process-wide defaults —
+/// this is what serializes many spawned sub-agents against one provider's
+/// real limits instead of 429-storming it.
 fn build_factory(
     provider: &llm_provider::Model,
     default_model: &str,
     http: &HttpClient,
 ) -> anyhow::Result<LlmFactory> {
+    let rpm = positive_u32(provider.rpm);
+    let concurrency = positive_usize(provider.concurrency);
     match provider.kind.as_str() {
         "ollama" => Ok(openai_factory(
             ollama_base_url(provider),
             None,
             default_model,
-            None,
-            None,
+            rpm,
+            concurrency,
             None,
             http.clone(),
         )),
@@ -201,8 +233,8 @@ fn build_factory(
             Ok(anthropic_factory(
                 api_key,
                 default_model,
-                None,
-                None,
+                rpm,
+                concurrency,
                 None,
                 http.clone(),
             ))
@@ -215,13 +247,25 @@ fn build_factory(
                 GEMINI_BASE,
                 api_key,
                 default_model,
-                None,
-                None,
+                rpm,
+                concurrency,
                 http.clone(),
             ))
         }
         other => anyhow::bail!("provider kind not supported: {other}"),
     }
+}
+
+/// A DB-stored budget clamped to the factories' expected type. A non-positive
+/// value is treated as "unset" (falls back to the client's own default)
+/// rather than panicking on the cast or silently passing a zero-sized budget.
+fn positive_u32(v: Option<i32>) -> Option<u32> {
+    v.and_then(|n| u32::try_from(n).ok()).filter(|n| *n > 0)
+}
+
+/// See [`positive_u32`]; same clamp for the `usize` concurrency cap.
+fn positive_usize(v: Option<i32>) -> Option<usize> {
+    v.and_then(|n| usize::try_from(n).ok()).filter(|n| *n > 0)
 }
 
 /// Effective Ollama base URL for `provider`'s row: its own `base_url` unless
@@ -238,97 +282,4 @@ fn ollama_base_url(provider: &llm_provider::Model) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The exact lock type `SiteCatalog.inner` uses. A `std::sync::RwLock`
-    /// would poison here — this proves `parking_lot::RwLock` doesn't, so one
-    /// panicking `refresh()` call can't fail-closed every later
-    /// `model_by_id`/`default_model` lookup for every session (issue #28).
-    #[test]
-    fn panicking_while_holding_the_write_lock_does_not_poison_it() {
-        let lock = Arc::new(RwLock::new(CatalogInner::default()));
-        let panicking = lock.clone();
-
-        let result = std::thread::spawn(move || {
-            let _guard = panicking.write();
-            panic!("simulated panic mid-refresh");
-        })
-        .join();
-        assert!(result.is_err(), "the spawned thread should have panicked");
-
-        // A `std::sync::RwLock` would return `Err(Poisoned)` here instead.
-        let inner = lock.read();
-        assert!(inner.by_model_id.is_empty());
-        assert!(inner.default_model_id.is_none());
-    }
-
-    fn provider(kind: &str, api_key: Option<&str>, base_url: Option<&str>) -> llm_provider::Model {
-        llm_provider::Model {
-            id: 1,
-            label: "test-provider".to_string(),
-            kind: kind.to_string(),
-            api_key: api_key.map(str::to_string),
-            base_url: base_url.map(str::to_string),
-            created_at: chrono::Utc::now().fixed_offset(),
-        }
-    }
-
-    #[test]
-    fn ollama_without_base_url_falls_back_to_default() {
-        let p = provider("ollama", None, None);
-        assert_eq!(ollama_base_url(&p), OLLAMA_BASE);
-        assert!(build_factory(&p, "model", &HttpClient::new()).is_ok());
-    }
-
-    #[test]
-    fn ollama_with_blank_base_url_falls_back_to_default() {
-        let p = provider("ollama", None, Some(""));
-        assert_eq!(ollama_base_url(&p), OLLAMA_BASE);
-    }
-
-    #[test]
-    fn ollama_with_base_url_uses_it() {
-        let p = provider("ollama", None, Some("http://example.internal:1234/v1"));
-        assert_eq!(ollama_base_url(&p), "http://example.internal:1234/v1");
-    }
-
-    #[test]
-    fn anthropic_without_api_key_errs() {
-        let p = provider("anthropic", None, None);
-        let err = build_factory(&p, "model", &HttpClient::new())
-            .err()
-            .expect("expected build_factory to fail");
-        assert!(err.to_string().contains("no api_key"));
-    }
-
-    #[test]
-    fn anthropic_with_api_key_builds_ok() {
-        let p = provider("anthropic", Some("key"), None);
-        assert!(build_factory(&p, "model", &HttpClient::new()).is_ok());
-    }
-
-    #[test]
-    fn gemini_without_api_key_errs() {
-        let p = provider("gemini", None, None);
-        let err = build_factory(&p, "model", &HttpClient::new())
-            .err()
-            .expect("expected build_factory to fail");
-        assert!(err.to_string().contains("no api_key"));
-    }
-
-    #[test]
-    fn gemini_with_api_key_builds_ok() {
-        let p = provider("gemini", Some("key"), None);
-        assert!(build_factory(&p, "model", &HttpClient::new()).is_ok());
-    }
-
-    #[test]
-    fn unsupported_kind_errs_naming_it() {
-        let p = provider("mystery", None, None);
-        let err = build_factory(&p, "model", &HttpClient::new())
-            .err()
-            .expect("expected build_factory to fail");
-        assert!(err.to_string().contains("mystery"));
-    }
-}
+mod tests;
