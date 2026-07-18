@@ -280,6 +280,7 @@ mod tests {
             !is_forwarded(&OutEvent::SessionStarted {
                 session: root.clone(),
                 parent: None,
+                predecessor: None,
                 profile: "build".into(),
                 model: None,
                 root: true,
@@ -291,6 +292,7 @@ mod tests {
             is_forwarded(&OutEvent::SessionStarted {
                 session: child,
                 parent: Some(root),
+                predecessor: None,
                 profile: "researcher".into(),
                 model: None,
                 root: false,

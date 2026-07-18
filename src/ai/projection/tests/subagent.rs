@@ -35,6 +35,7 @@ fn sub_agent_turn_nests_under_the_spawning_assistant_message() {
             out(OutEvent::SessionStarted {
                 session: child.clone(),
                 parent: Some(root.clone()),
+                predecessor: None,
                 profile: "researcher".into(),
                 model: None,
                 root: false,
@@ -161,6 +162,7 @@ fn a_refused_spawn_does_not_steal_a_later_calls_real_child() {
             out(OutEvent::SessionStarted {
                 session: child.clone(),
                 parent: Some(root.clone()),
+                predecessor: None,
                 profile: "researcher".into(),
                 model: None,
                 root: false,

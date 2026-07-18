@@ -156,9 +156,17 @@ async fn spawns_a_researcher_sub_agent_and_nests_its_progress() {
     let sub_agent_messages = sub_agent_messages.unwrap_or_else(|| {
         panic!("researcher sub-agent never produced a nested, settled turn: {detail:#}")
     });
+    // entanglement-runtime 0.3 (#421) now synthesizes the child's own
+    // spawn-initiating `InMsg::Prompt` into its persisted log (previously only
+    // the assistant's eventual reply was recorded), so replay — and this
+    // projection — surfaces the researcher's framing task as a leading user
+    // message alongside its answer.
     assert_eq!(
         sub_agent_messages,
-        json!([{ "role": "assistant", "content": { "text": "2 + 2 = 4.", "tool_calls": [] } }])
+        json!([
+            { "role": "user", "content": { "text": "what is 2+2" } },
+            { "role": "assistant", "content": { "text": "2 + 2 = 4.", "tool_calls": [] } },
+        ])
     );
 
     scripted_cleanup(&fx, db_session_id).await;

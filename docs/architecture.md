@@ -229,12 +229,12 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   re-exported from `engine.rs` so every existing `crate::ai::engine::...` call
   site is unchanged), `engine/prompt_cache.rs` (the system-prompt
   read-and-refresh loop), and `engine/tool_registry.rs` (below).
-  - **Tool-registry refresh (issue #28):**
-    `entanglement_runtime::tool_runner::spawn_tool_executor_with_policy` takes
-    its `ToolRegistry` by value at spawn time — no live-reload seam for the
-    dispatch registry in entanglement-runtime 0.1.0 — so an MCP server a user
-    enables after boot was previously unusable until the whole process
-    restarted. `SiteEngine::refresh_tool_registry` (in
+  - **Tool-registry refresh (issue #28):** this site respawns the tool
+    executor wholesale on every refresh rather than mutating
+    `entanglement_runtime::tool_runner::spawn_tool_executor_with_policy`'s
+    `SharedRegistry` handle in place — so an MCP server a user enables after
+    boot was previously unusable until the whole process restarted.
+    `SiteEngine::refresh_tool_registry` (in
     `engine/tool_registry.rs`) rebuilds the registry from the current DB state
     and swaps it into a freshly spawned executor every
     `TOOL_REGISTRY_REFRESH_INTERVAL` (5 min), aborting the old executor
