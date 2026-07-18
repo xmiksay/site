@@ -18,6 +18,7 @@ pub struct ModelView {
     pub label: String,
     pub model: String,
     pub is_default: bool,
+    pub context_window: Option<i32>,
     pub created_at: String,
 }
 
@@ -28,6 +29,8 @@ pub struct CreateModel {
     pub model: String,
     #[serde(default)]
     pub is_default: Option<bool>,
+    #[serde(default)]
+    pub context_window: Option<i32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -38,6 +41,8 @@ pub struct UpdateModel {
     pub model: Option<String>,
     #[serde(default)]
     pub is_default: Option<bool>,
+    #[serde(default)]
+    pub context_window: Option<i32>,
 }
 
 async fn enrich(state: &AppState, rows: Vec<llm_model::Model>) -> ApiResult<Vec<ModelView>> {
@@ -60,6 +65,7 @@ async fn enrich(state: &AppState, rows: Vec<llm_model::Model>) -> ApiResult<Vec<
                 label: m.label,
                 model: m.model,
                 is_default: m.is_default,
+                context_window: m.context_window,
                 created_at: m.created_at.to_string(),
             })
         })
@@ -101,6 +107,7 @@ pub async fn create(
         label: Set(input.label),
         model: Set(input.model),
         is_default: Set(want_default || none_yet),
+        context_window: Set(input.context_window),
         ..Default::default()
     }
     .insert(&state.db)
@@ -142,6 +149,9 @@ pub async fn update(
     }
     if let Some(d) = input.is_default {
         active.is_default = Set(d);
+    }
+    if let Some(w) = input.context_window {
+        active.context_window = Set(Some(w));
     }
     let updated = active.update(&state.db).await?;
     state

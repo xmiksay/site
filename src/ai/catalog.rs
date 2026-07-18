@@ -33,6 +33,8 @@ pub struct CatalogModel {
     pub kind: String,
     pub wire_model: String,
     pub is_default: bool,
+    /// The model's real context window in tokens (#40), from `llm_models`.
+    pub context_window: Option<usize>,
     pub llm_factory: LlmFactory,
 }
 
@@ -106,6 +108,7 @@ impl SiteCatalog {
                     kind: provider.kind.clone(),
                     wire_model: model.model.clone(),
                     is_default: model.is_default,
+                    context_window: model.context_window.and_then(|w| usize::try_from(w).ok()),
                     llm_factory,
                 },
             );
@@ -168,7 +171,7 @@ impl SiteCatalog {
                     model: found.wire_model,
                     llm_factory: found.llm_factory,
                     generation: None,
-                    context_window: None,
+                    context_window: found.context_window,
                 })
             },
         )

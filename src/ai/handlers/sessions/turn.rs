@@ -20,6 +20,8 @@
 
 mod collect;
 
+pub(in crate::ai::handlers::sessions) use collect::send_and_collect;
+
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use entanglement_core::{ApprovalScope, InMsg, OutEvent, SessionId};
@@ -229,7 +231,7 @@ fn session_for_call(records: &[LogRecord], call_id: &str) -> Option<SessionId> {
     })
 }
 
-fn engine_session_id(session: &assistant_session::Model) -> ApiResult<SessionId> {
+pub(super) fn engine_session_id(session: &assistant_session::Model) -> ApiResult<SessionId> {
     session
         .engine_session_id
         .clone()

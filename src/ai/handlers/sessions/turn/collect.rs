@@ -45,7 +45,7 @@ const TURN_TIMEOUT: Duration = Duration::from_secs(180);
 /// response. A still-running detached `agent_spawn`/`agent` child that
 /// *isn't* targeted by any `msgs` never blocks this response either way
 /// (ADR-0026).
-pub(super) async fn send_and_collect(
+pub(in crate::ai::handlers::sessions) async fn send_and_collect(
     engine: &SiteEngine,
     session: &SessionId,
     msgs: Vec<InMsg>,

@@ -103,12 +103,16 @@ oauth_tokens        id, access_token unique, refresh_token unique,
                     client_id, user_id, expires_at, revoked
 
 llm_providers       id, label, kind (anthropic|ollama|gemini), api_key?, base_url?
-llm_models          id, provider_id, label, model wire-id, is_default
+llm_models          id, provider_id, label, model wire-id, is_default,
+                    context_window? (m_025 — tokens; fed to
+                    ResolvedModel::context_window, #40)
 assistant_sessions  id, user_id, title, provider/model snapshots, model_id?,
                     enabled_mcp_server_ids JSONB (m_018),
                     engine_session_id? unique (m_023 — the engine's root
                     SessionId string, "u{user_id}:{uuid}"; nullable since
-                    pre-engine-swap rows never get one back), timestamps
+                    pre-engine-swap rows never get one back; repointed to a
+                    fresh successor session id by a manual /compact, #40),
+                    timestamps
 assistant_events    id, root_session_id (engine SessionId string, not a DB FK —
                     the engine has no notion of assistant_sessions.id),
                     payload JSONB (a serialized entanglement_runtime
@@ -148,7 +152,7 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 
 ### JSON API `/api/*` (session cookie required)
 
-`auth/{login,logout,me}`, `users` (`GET/POST /`, `DELETE /{id}`, `PUT /{id}/password`), `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve`, `mcp-servers` CRUD, `providers` CRUD, `models` CRUD, `permissions` CRUD (tool-permission rules).
+`auth/{login,logout,me}`, `users` (`GET/POST /`, `DELETE /{id}`, `PUT /{id}/password`), `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve` + `sessions/{id}/compact` (manual context compaction, #40), `mcp-servers` CRUD, `providers` CRUD, `models` CRUD (`context_window` field, #40), `permissions` CRUD (tool-permission rules).
 
 | Path | Method | Description |
 |---|---|---|
@@ -225,7 +229,13 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   otherwise the next message to that session would skip `resume` and get a
   blank in-memory session despite intact history in `assistant_events` — and
   (issue #17) records every sub-agent session's parent link from its
-  `SessionStarted` event. Three submodules (kept under the 400-line cap):
+  `SessionStarted` event. `EngineConfig.auto_compact = true` (#40, explicit —
+  matches the library default): on context overflow the turn loop
+  LLM-summarizes the oldest history in place (ADR-0103) instead of a lossy
+  placeholder-prune. `EngineConfig.context_window` is seeded from the
+  catalog's default model (`catalog.default_model()`) so a freshly-spawned
+  session budgets sensibly before any `SetModel` narrows it to the session's
+  actual pinned model. Three submodules (kept under the 400-line cap):
   `engine/profiles.rs` (the `researcher`/`page-writer` profile roster, below),
   `engine/session_tree.rs`
   (`root_session_of`/`user_id_from_session`/`user_id_from_session_awaiting`,
@@ -265,7 +275,11 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     `tool_permissions` rules instead of failing closed.
 - `catalog.rs` — `SiteCatalog`: builds `entanglement_provider::LlmFactory`/
   `ModelResolver` closures from `llm_providers`/`llm_models`; `refresh()` is
-  called after provider/model CRUD.
+  called after provider/model CRUD. `ModelResolver` populates
+  `ResolvedModel::context_window` from each model row's own `context_window`
+  (#40), so a live `SetModel`/session resume budgets the turn loop's
+  overflow handling against the model's real window instead of the engine's
+  generic fallback (`entanglement_core::context::CONTEXT_LIMIT_TOKENS`).
 - `policy.rs` — `SitePolicy`: implements the engine's `PermissionResolver` +
   `GrantStore` over the `tool_permissions` table, via `tool_permissions.rs`
   (#39). Extracts a call's scoping argument with its own `permission_arg`
@@ -336,7 +350,28 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   never fires (`SitePolicy` always passes `workdir = None`).
 - `handlers/` — `/api/assistant/*`: `sessions/` (CRUD + `messages`/`approve`,
   which drive a turn through `Holly` and project `assistant_events` on the
-  way out), `mcp_servers.rs`, `providers.rs`, `models.rs`, `permissions.rs`.
+  way out, plus `compact.rs`'s `sessions/{id}/compact`, #40 — see below),
+  `mcp_servers.rs`, `providers.rs`, `models.rs` (`context_window` field,
+  #40), `permissions.rs`.
+  - **Manual compaction (`handlers/sessions/compact.rs`, #40):** drives
+    `entanglement_core`'s copy-on-write `InMsg::Oneshot { op: "compact" }` on
+    the session's current (source) engine session, which reports an
+    LLM-generated summary via `OutEvent::Compacted { auto: false, .. }`
+    without mutating the source (ADR-0101). The handler then forks the
+    summary into a fresh successor session (`InMsg::Spawn` with
+    `predecessor: Some(source)`, a root — not a child — so closing the source
+    doesn't cascade onto it, ADR-0110), re-pins the successor's model
+    (`InMsg::SetModel`, best-effort — the successor's own seeded first turn
+    already ran under the engine default by the time this lands, since
+    `SetModel` is stashed behind a live turn), and retires the source
+    (`InMsg::CloseSession`). The `assistant_sessions` row keeps its id/title;
+    only `engine_session_id` repoints to the successor, so `GET
+    /sessions/{id}` (and every other DB-id-keyed handler) transparently
+    follows the fork. The source's own `assistant_events` log is left
+    intact but unreachable from the DB row (ADR-0101: "the original stays
+    idle, intact, independently resumable"). Broadcasts a `compacted` event
+    over the `assistant` WS topic (see below) so another open tab on the
+    session notices and refetches.
 - `ws_bridge.rs` — a single process-wide task subscribing to
   `agent_engine.holly.subscribe()` (issue #16): forwards the engine's
   content/lifecycle `OutEvent`s (`Status`, `TextDelta`, `ReasoningDelta`,
@@ -368,11 +403,11 @@ Configured per user via the admin SPA: `/admin/{providers,models,assistant,mcp-s
 Frames are JSON `Envelope { topic, event, payload }`, `topic` one of `assistant | pages | files | galleries | tags`:
 
 - **`pages` / `files` / `galleries` / `tags`** — `created`/`updated` (payload = the same summary shape the REST endpoint returns) / `deleted` (payload `{ id }`). Broadcast to **every** connected user via `WsHub::broadcast`/`broadcast_serialized` — these are shared site entities, not per-user. Published from the shared `src/routes/broadcast.rs` helpers, called after a successful create/update/delete from all three mutating edges — `src/routes/api/{pages,files,galleries,tags}.rs`, `src/routes/mcp/{pages,tags,files,galleries}.rs`, and `src/ai/tools/*.rs` — so a mutation over MCP or by the AI assistant broadcasts the same event a REST API mutation would (#25).
-- **`assistant`** — real, token-level streaming straight off `agent_engine.holly.subscribe()` (`src/ai/ws_bridge.rs`), published only to the owning user's own connections via `WsHub::publish`. `event` is the forwarded `OutEvent`'s own `"kind"` tag and `payload` is that event's JSON shape (`entanglement_core::OutEvent` already derives `Serialize`) plus a spliced-in `db_session_id` (the `assistant_sessions.id` the engine's root `SessionId` resolves to, cached per session): `status` (`AgentState`: idle/thinking/waiting_approval/waiting_answer/done/error), `text_delta`/`reasoning_delta` (incremental text), `tool_call_delta` (incremental tool-input fragment), `tool_call` (display-only, full call), `tool_request` (needs approval — approve/reject the same way as an existing message's tool call, `POST .../messages/{any}/approve`, since the engine no longer keys approvals by message id), `tool_output`, `done`, `error`, `session_hibernated`, and (#17) a sub-agent child's own `session_started` (`{session, profile, parent}`, `researcher`/`page-writer`). Any event belonging to a sub-agent child also carries `agent_session_id` (the child's own engine `SessionId`) so the client can render it nested under the spawning turn instead of the root's own top-level stream.
+- **`assistant`** — real, token-level streaming straight off `agent_engine.holly.subscribe()` (`src/ai/ws_bridge.rs`), published only to the owning user's own connections via `WsHub::publish`. `event` is the forwarded `OutEvent`'s own `"kind"` tag and `payload` is that event's JSON shape (`entanglement_core::OutEvent` already derives `Serialize`) plus a spliced-in `db_session_id` (the `assistant_sessions.id` the engine's root `SessionId` resolves to, cached per session): `status` (`AgentState`: idle/thinking/waiting_approval/waiting_answer/done/error), `text_delta`/`reasoning_delta` (incremental text), `tool_call_delta` (incremental tool-input fragment), `tool_call` (display-only, full call), `tool_request` (needs approval — approve/reject the same way as an existing message's tool call, `POST .../messages/{any}/approve`, since the engine no longer keys approvals by message id), `tool_output`, `done`, `error`, `session_hibernated`, and (#17) a sub-agent child's own `session_started` (`{session, profile, parent}`, `researcher`/`page-writer`). Any event belonging to a sub-agent child also carries `agent_session_id` (the child's own engine `SessionId`) so the client can render it nested under the spawning turn instead of the root's own top-level stream. `compacted` (#40) is the one `assistant.*` event *not* forwarded by `ws_bridge.rs` — `handlers/sessions/compact.rs` publishes it directly once a manual compaction's fork/retire completes, carrying the real `OutEvent::Compacted` shape (`summary`, `kept`, `auto: false`) plus `db_session_id` and `successor_session_id`, so another open tab on the session notices its `engine_session_id` moved and refetches.
 
 Server sends a WS ping every 30s; a failed send (or a client `Close` frame) drops that connection's sender from the registry. `WsHub::publish`/`broadcast` also prune any sender whose receiver has been dropped.
 
-Client side: `client/src/stores/ws.ts` owns the single connection (reconnect with exponential backoff) and topic→handler dispatch; `client/src/composables/useListSync.ts` wires `pages`/`files`/`galleries`/`tags` events into the matching Pinia store's `items` list; `client/src/stores/assistantLiveTurns.ts` (composed into `stores/assistant.ts`) accumulates `assistant.*` deltas into a `live: LiveTurn | null` (the root turn) and, since #17, `liveSubAgents: Record<string, LiveSubAgentTurn>` keyed by `agent_session_id` — a sub-agent's events carry that field instead of belonging to the root, and it is tracked independently of `live` since a detached child keeps streaming after the root's own turn has already settled. Both are rendered by `AssistantView.vue` as in-progress bubbles (`LiveSubAgentTurn.vue`/`LiveToolCallList.vue`), and on a turn's own `done`/`error`/`session_hibernated` the matching entry clears and the session refetches over REST for the authoritative message list — reusing `ai::projection::project`'s fold (including its `content.sub_agents` nesting, rendered by the self-recursive `AssistantMessageContent.vue`) rather than re-implementing it in TypeScript. `client/src/App.vue` connects after login, disconnects on logout.
+Client side: `client/src/stores/ws.ts` owns the single connection (reconnect with exponential backoff) and topic→handler dispatch; `client/src/composables/useListSync.ts` wires `pages`/`files`/`galleries`/`tags` events into the matching Pinia store's `items` list; `client/src/stores/assistantLiveTurns.ts` (composed into `stores/assistant.ts`) accumulates `assistant.*` deltas into a `live: LiveTurn | null` (the root turn) and, since #17, `liveSubAgents: Record<string, LiveSubAgentTurn>` keyed by `agent_session_id` — a sub-agent's events carry that field instead of belonging to the root, and it is tracked independently of `live` since a detached child keeps streaming after the root's own turn has already settled. Both are rendered by `AssistantView.vue` as in-progress bubbles (`LiveSubAgentTurn.vue`/`LiveToolCallList.vue`), and on a turn's own `done`/`error`/`session_hibernated`/`compacted` (#40) the matching entry clears and the session refetches over REST for the authoritative message list — reusing `ai::projection::project`'s fold (including its `content.sub_agents` nesting, rendered by the self-recursive `AssistantMessageContent.vue`) rather than re-implementing it in TypeScript. `client/src/App.vue` connects after login, disconnects on logout. `AssistantView.vue`'s header also has a "Compact" button (`assistant.compactSession`) that `POST`s `sessions/{id}/compact` and swaps in the returned successor-session detail directly.
 
 ## Docker
 

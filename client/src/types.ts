@@ -233,6 +233,8 @@ export interface LlmModel {
   label: string
   model: string
   is_default: boolean
+  /** Real context window in tokens (#40); `null` falls back to the engine's generic default. */
+  context_window: number | null
   created_at: string
 }
 
@@ -241,6 +243,7 @@ export interface LlmModelInput {
   label: string
   model: string
   is_default?: boolean
+  context_window?: number
 }
 
 export interface ToolPermission {

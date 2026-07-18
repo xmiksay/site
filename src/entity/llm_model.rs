@@ -15,6 +15,12 @@ pub struct Model {
     pub model: String,
     /// First-created model is auto-flagged as default for new sessions.
     pub is_default: bool,
+    /// The model's real context window in tokens (#40), fed to
+    /// `entanglement_provider::ResolvedModel::context_window` so the engine
+    /// compacts/refuses against the actual budget instead of a generic
+    /// fallback. `None` when unset (falls back to
+    /// `entanglement_core::context::CONTEXT_LIMIT_TOKENS`).
+    pub context_window: Option<i32>,
     pub created_at: DateTimeWithTimeZone,
 }
 
