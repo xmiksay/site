@@ -26,6 +26,7 @@ mod m_023_create_assistant_events;
 mod m_024_align_tool_permissions_with_capabilities;
 mod m_025_add_llm_models_context_window;
 mod m_026_add_llm_providers_concurrency_rpm;
+mod m_027_add_assistant_sessions_generation;
 
 pub struct Migrator;
 
@@ -59,6 +60,7 @@ impl MigratorTrait for Migrator {
             Box::new(m_024_align_tool_permissions_with_capabilities::Migration),
             Box::new(m_025_add_llm_models_context_window::Migration),
             Box::new(m_026_add_llm_providers_concurrency_rpm::Migration),
+            Box::new(m_027_add_assistant_sessions_generation::Migration),
         ]
     }
 }

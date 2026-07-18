@@ -24,6 +24,19 @@ pub struct Model {
     /// a DB session row owns exactly one engine session (m_023).
     #[sea_orm(nullable, unique)]
     pub engine_session_id: Option<String>,
+    /// Session-level generation overrides (#42, ADR-0094), mirrored onto the
+    /// live engine session via `InMsg::SetGeneration` — `None` leaves that knob
+    /// at the model's own default (m_027).
+    #[sea_orm(nullable)]
+    pub temperature: Option<f32>,
+    /// `"low" | "medium" | "high"` — `entanglement_provider::ReasoningEffort`'s
+    /// wire representation (m_027).
+    #[sea_orm(nullable)]
+    pub reasoning_effort: Option<String>,
+    /// The engine agent profile this session runs under (`build` |
+    /// `researcher` | `page-writer`, `src/ai/engine/profiles.rs`), mirrored via
+    /// `InMsg::SetAgent` (m_027).
+    pub agent_profile: String,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }

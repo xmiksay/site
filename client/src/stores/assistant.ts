@@ -35,6 +35,9 @@ export const useAssistantStore = defineStore('assistant', () => {
     title?: string
     model_id?: number
     enabled_mcp_server_ids?: number[]
+    temperature?: number | null
+    reasoning_effort?: string | null
+    agent_profile?: string
   } = {}) {
     const created = await api<AssistantSession>('/api/assistant/sessions', {
       method: 'POST',
@@ -51,7 +54,14 @@ export const useAssistantStore = defineStore('assistant', () => {
 
   async function updateSession(
     id: number,
-    input: { title?: string; model_id?: number; enabled_mcp_server_ids?: number[] },
+    input: {
+      title?: string
+      model_id?: number
+      enabled_mcp_server_ids?: number[]
+      temperature?: number | null
+      reasoning_effort?: string | null
+      agent_profile?: string
+    },
   ) {
     const updated = await api<AssistantSession>(`/api/assistant/sessions/${id}`, {
       method: 'PATCH',

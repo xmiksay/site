@@ -37,7 +37,7 @@ mod profiles;
 mod prompt_cache;
 mod session_tree;
 
-pub use profiles::{PAGE_WRITER_PROFILE, RESEARCHER_PROFILE};
+pub use profiles::{BUILD_PROFILE, PAGE_WRITER_PROFILE, RESEARCHER_PROFILE, SWITCHABLE_PROFILES};
 use prompt_cache::load_system_prompt;
 use session_tree::evict_on_hibernate_or_end;
 pub use session_tree::{
@@ -218,6 +218,7 @@ impl SiteEngine {
             tool_spec_resolver: Some(tool_spec_resolver),
             system_prompt_resolver: Some(system_prompt_resolver),
             model_resolver: Some(catalog.model_resolver()),
+            generation_resolver: Some(catalog.generation_resolver()),
             // The default model's own window, not `EngineConfig::default()`'s
             // generic fallback (#40) — a freshly-minted session's very first
             // turn (before any `SetModel` lands, e.g. a `/compact` fork's

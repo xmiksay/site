@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use entanglement_provider::{
-    GEMINI_BASE, HttpClient, LlmFactory, ModelResolver, OLLAMA_BASE, ResolvedModel,
-    anthropic_factory, gemini_factory, openai_factory,
+    GEMINI_BASE, GenerationResolver, HttpClient, LlmFactory, ModelResolver, OLLAMA_BASE,
+    ResolvedModel, anthropic_factory, gemini_factory, openai_factory,
 };
 use parking_lot::RwLock;
 use sea_orm::{DatabaseConnection, EntityTrait};
@@ -199,6 +199,20 @@ impl SiteCatalog {
                 })
             },
         )
+    }
+
+    /// Build the `GenerationResolver` closure for
+    /// `EngineConfig.generation_resolver` (per-*profile* persisted generation
+    /// overrides, ADR-0094 — the generation-parameter analogue of
+    /// `AgentProfile::model_pin`). This site has no per-profile generation
+    /// config store: unlike the model pin, which `engine/profiles.rs` bakes
+    /// straight into each `AgentProfile`, generation knobs (temperature,
+    /// reasoning effort) are set live per-*session* via `InMsg::SetGeneration`
+    /// (`handlers/sessions`, #42), not pinned per-profile. Always returns
+    /// `None`, wiring the seam for parity with [`model_resolver`][Self::
+    /// model_resolver] without inventing an admin surface nothing populates.
+    pub fn generation_resolver(self: &Arc<Self>) -> GenerationResolver {
+        Arc::new(|_profile: &str| None)
     }
 }
 

@@ -4,6 +4,13 @@
 
 use entanglement_core::{AgentMode, AgentProfile, Permission, PermissionProfile, ProfileRegistry};
 
+/// The engine's built-in root profile name (`entanglement_core::ProfileRegistry
+/// ::new`'s own constant) — every session starts under it. Re-exported here
+/// (rather than only living as a string literal) so `handlers/sessions` can
+/// validate/default a `SetAgent` target against the full roster in one place
+/// (#42).
+pub const BUILD_PROFILE: &str = "build";
+
 /// Sub-agent profile name: read-only research support (#17). Spawnable from
 /// the root profile only — `can_spawn: Some(false)` keeps it a leaf so a
 /// research task can't itself fan out further sub-agents.
@@ -12,6 +19,14 @@ pub const RESEARCHER_PROFILE: &str = "researcher";
 /// Sub-agent profile name: drafts/edits a single page (#17). Same leaf
 /// restriction as [`RESEARCHER_PROFILE`].
 pub const PAGE_WRITER_PROFILE: &str = "page-writer";
+
+/// Every profile name a session may directly switch to via `InMsg::SetAgent`
+/// (#42) — the root plus the two spawnable sub-agents. `entanglement_core`
+/// itself imposes no reachability gate on a direct `SetAgent` (only spawn
+/// targets are mode-checked), so this site enforces its own known-name
+/// allowlist at the API boundary instead of forwarding an arbitrary string to
+/// the engine.
+pub const SWITCHABLE_PROFILES: &[&str] = &[BUILD_PROFILE, RESEARCHER_PROFILE, PAGE_WRITER_PROFILE];
 
 const RESEARCHER_TOOLS: &[&str] = &[
     "web_search",
