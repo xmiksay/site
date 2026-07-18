@@ -191,6 +191,35 @@ describe('useLiveTurns', () => {
     expect(live.value).toMatchObject({ sessionId: 1, text: 'hi' })
   })
 
+  // ---- #42: model/generation/agent-profile change events ----
+
+  it.each(['model_changed', 'generation_changed', 'agent_changed'])(
+    '%s refetches when it is the current session, without touching live/sending',
+    async (event) => {
+      current.value = { id: 1 } as AssistantSessionDetail
+      sending.value = true
+      const { live } = setup()
+      wsHandler!(envelope('text_delta', { db_session_id: 1, text: 'hi' }))
+      wsHandler!(envelope(event, { db_session_id: 1 }))
+
+      // Unlike `done`/`compacted`, these aren't turn-lifecycle events — the
+      // in-progress turn and sending flag are left exactly as they were.
+      expect(live.value).toMatchObject({ sessionId: 1, text: 'hi' })
+      expect(sending.value).toBe(true)
+      expect(loadSession).toHaveBeenCalledWith(1)
+    },
+  )
+
+  it.each(['model_changed', 'generation_changed', 'agent_changed'])(
+    '%s does not refetch when it is not the current session',
+    (event) => {
+      current.value = { id: 2 } as AssistantSessionDetail
+      setup()
+      wsHandler!(envelope(event, { db_session_id: 1 }))
+      expect(loadSession).not.toHaveBeenCalled()
+    },
+  )
+
   // ---- sub-agent routing ----
 
   it('session_started with agent_session_id creates a liveSubAgents entry, not the root live turn', () => {

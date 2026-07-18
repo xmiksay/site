@@ -234,6 +234,19 @@ export function useLiveTurns(
           })
         }
         break
+      case 'model_changed':
+      case 'generation_changed':
+      case 'agent_changed':
+        // #42: confirmation-of-write events, not mid-turn lifecycle — a
+        // session's model/generation/profile changed (from any tab). Just
+        // refetch so an open tab picks up the new value; `live`/`sending`
+        // are untouched since there's no turn in flight.
+        if (current.value?.id === sessionId) {
+          loadSession(sessionId).catch(() => {
+            // best-effort — see the matching comment on the settle branch above
+          })
+        }
+        break
     }
   })
 

@@ -98,6 +98,12 @@ export interface AssistantSession {
   model: string
   model_id: number | null
   enabled_mcp_server_ids: number[]
+  /** Sampling temperature override for this session; `null` = model default. */
+  temperature: number | null
+  /** `"low" | "medium" | "high"`, or `null` = no override. */
+  reasoning_effort: string | null
+  /** `"build" | "researcher" | "page-writer"`; never null, defaults to `"build"`. */
+  agent_profile: string
   created_at: string
   updated_at: string
 }

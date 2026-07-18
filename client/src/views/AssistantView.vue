@@ -5,6 +5,7 @@ import { renderMarkdown } from '../composables/useMarkdown'
 import AssistantMessageContent from '../components/AssistantMessageContent.vue'
 import LiveToolCallList from '../components/LiveToolCallList.vue'
 import LiveSubAgentTurnCard from '../components/LiveSubAgentTurn.vue'
+import AssistantSessionToolbar from '../components/AssistantSessionToolbar.vue'
 
 const assistant = useAssistantStore()
 const draft = ref('')
@@ -29,39 +30,6 @@ async function newSession() {
   }
   const s = await assistant.createSession()
   await select(s.id)
-}
-
-async function changeModel(modelId: number) {
-  if (!assistant.current) return
-  await assistant.updateSession(assistant.current.id, { model_id: modelId })
-  await assistant.loadSession(assistant.current.id)
-}
-
-const showMcpPicker = ref(false)
-
-async function toggleMcpServer(serverId: number, on: boolean) {
-  if (!assistant.current) return
-  const current = assistant.current.enabled_mcp_server_ids ?? []
-  const next = on
-    ? Array.from(new Set([...current, serverId]))
-    : current.filter((id) => id !== serverId)
-  await assistant.updateSession(assistant.current.id, {
-    enabled_mcp_server_ids: next,
-  })
-  await assistant.loadSession(assistant.current.id)
-}
-
-async function compactSession() {
-  if (!assistant.current) return
-  if (
-    !confirm(
-      'Compact this chat? The history is summarized and the conversation continues in a fresh session.',
-    )
-  ) {
-    return
-  }
-  await assistant.compactSession(assistant.current.id)
-  scrollToBottom()
 }
 
 async function select(id: number) {
@@ -198,67 +166,7 @@ watch(
             {{ assistant.current.title }}
           </button>
         </div>
-        <div class="text-xs text-gray-500 flex items-center gap-2">
-          <select
-            class="border rounded px-2 py-1 text-xs"
-            :value="assistant.current.model_id ?? ''"
-            @change="changeModel(Number(($event.target as HTMLSelectElement).value))"
-          >
-            <option v-if="!assistant.current.model_id" :value="''" disabled>
-              {{ assistant.current.provider }} / {{ assistant.current.model }}
-            </option>
-            <option v-for="m in assistant.models" :key="m.id" :value="m.id">
-              {{ m.label }} ({{ m.provider_label }})
-            </option>
-          </select>
-          <button
-            type="button"
-            class="border rounded px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-50"
-            title="Summarize this chat's history into a fresh session"
-            :disabled="assistant.sending || messageList.length === 0"
-            @click="compactSession"
-          >
-            Compact
-          </button>
-          <div class="relative">
-            <button
-              type="button"
-              class="border rounded px-2 py-1 text-xs hover:bg-gray-50"
-              @click="showMcpPicker = !showMcpPicker"
-              :title="'MCP servers active in this chat'"
-            >
-              MCP
-              <span class="ml-1 inline-block min-w-[1rem] text-center rounded bg-gray-100 px-1">
-                {{ (assistant.current.enabled_mcp_server_ids ?? []).length }}/{{
-                  assistant.mcpServers.length
-                }}
-              </span>
-            </button>
-            <div
-              v-if="showMcpPicker"
-              class="absolute right-0 mt-1 w-64 bg-white border rounded shadow-lg z-10 p-2 space-y-1"
-            >
-              <div v-if="assistant.mcpServers.length === 0" class="text-xs text-gray-500 p-1">
-                No MCP servers registered.
-              </div>
-              <label
-                v-for="srv in assistant.mcpServers"
-                :key="srv.id"
-                class="flex items-center gap-2 text-xs p-1 hover:bg-gray-50 rounded cursor-pointer"
-                :class="srv.enabled ? '' : 'opacity-50'"
-              >
-                <input
-                  type="checkbox"
-                  :checked="(assistant.current.enabled_mcp_server_ids ?? []).includes(srv.id)"
-                  :disabled="!srv.enabled"
-                  @change="toggleMcpServer(srv.id, ($event.target as HTMLInputElement).checked)"
-                />
-                <span class="flex-1 truncate">{{ srv.name }}</span>
-                <span v-if="!srv.enabled" class="text-gray-400">(off)</span>
-              </label>
-            </div>
-          </div>
-        </div>
+        <AssistantSessionToolbar @compacted="scrollToBottom" />
       </header>
 
       <div ref="messageBox" class="flex-1 overflow-y-auto p-4 space-y-3">

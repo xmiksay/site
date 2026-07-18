@@ -86,8 +86,10 @@ pub fn spawn(engine: Arc<SiteEngine>, hub: Arc<WsHub>, db: DatabaseConnection) {
 /// (session state, deltas, approval prompts, tool display, done/error,
 /// hibernated) plus, for #17, a **child** session's own `SessionStarted` (a
 /// root's is never forwarded — nothing for the client to nest it under, and
-/// `AssistantView.vue` already knows about its own root session from REST).
-/// Everything else (`SessionList`, `History`, `AgentChanged`, `ModelChanged`,
+/// `AssistantView.vue` already knows about its own root session from REST),
+/// and, for #42, `ModelChanged`/`GenerationChanged`/`AgentChanged` — a live
+/// `/model`/generation/profile switch from *another* tab must be visible
+/// without a manual reload. Everything else (`SessionList`, `History`,
 /// `Plan`, `TaskList`, `Usage`, `Compacted`, `UserQuestion`, file-change
 /// records, `SessionEnded`) has no consumer in `AssistantView.vue` today; add
 /// a case here (and a client handler) when one needs it rather than
@@ -103,7 +105,10 @@ fn is_forwarded(ev: &OutEvent) -> bool {
         | OutEvent::ToolOutput { .. }
         | OutEvent::Done { .. }
         | OutEvent::Error { .. }
-        | OutEvent::SessionHibernated { .. } => true,
+        | OutEvent::SessionHibernated { .. }
+        | OutEvent::ModelChanged { .. }
+        | OutEvent::GenerationChanged { .. }
+        | OutEvent::AgentChanged { .. } => true,
         OutEvent::SessionStarted { parent, .. } => parent.is_some(),
         _ => false,
     }
@@ -252,6 +257,28 @@ mod tests {
             cached_input_tokens: 0,
             cache_write_tokens: 0,
             cost_usd: None,
+        }));
+    }
+
+    /// #42: a live `/model`/generation/profile switch from another tab must
+    /// reach the client, or `AssistantSessionToolbar.vue`'s picker goes stale.
+    #[test]
+    fn forwards_model_generation_and_agent_changes() {
+        let session = SiteEngine::session_id_for_user(1);
+        assert!(is_forwarded(&OutEvent::ModelChanged {
+            session: session.clone(),
+            provider: "anthropic".into(),
+            model: "claude".into(),
+            context_window: None,
+        }));
+        assert!(is_forwarded(&OutEvent::GenerationChanged {
+            session: session.clone(),
+            generation: entanglement_core::GenerationParams::default(),
+        }));
+        assert!(is_forwarded(&OutEvent::AgentChanged {
+            session,
+            agent: "researcher".into(),
+            profile_detail: None,
         }));
     }
 

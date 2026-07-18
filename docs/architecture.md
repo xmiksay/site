@@ -116,6 +116,11 @@ assistant_sessions  id, user_id, title, provider/model snapshots, model_id?,
                     SessionId string, "u{user_id}:{uuid}"; nullable since
                     pre-engine-swap rows never get one back; repointed to a
                     fresh successor session id by a manual /compact, #40),
+                    temperature?, reasoning_effort? (m_027 — session-level
+                    `GenerationParams` overrides, #42; `None` leaves that knob
+                    at the model's own default), agent_profile (m_027,
+                    default `"build"` — the engine profile the session runs
+                    under, `"build"`/`"researcher"`/`"page-writer"`),
                     timestamps
 assistant_events    id, root_session_id (engine SessionId string, not a DB FK —
                     the engine has no notion of assistant_sessions.id),
@@ -299,7 +304,15 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   locks in an endpoint's rpm/concurrency on that endpoint's *first* request
   and ignores later values for the same key, so a stale client would make an
   admin's `concurrency`/`rpm` edit silently have no effect once any turn had
-  already gone through that provider.
+  already gone through that provider. `generation_resolver()` builds the
+  `GenerationResolver` closure for `EngineConfig.generation_resolver` (#42) —
+  the generation-parameter analogue of `model_resolver`, resolving a named
+  agent profile's *persisted* generation override (ADR-0094). This site has
+  no such per-profile store (unlike the model pin, which `engine/profiles.rs`
+  bakes straight into `AgentProfile.provider`/`.model`): generation knobs are
+  set live per-*session* instead, via `InMsg::SetGeneration`
+  (`handlers/sessions`, below), so the closure always returns `None` — wired
+  for parity, not because anything populates it yet.
 - `policy.rs` — `SitePolicy`: implements the engine's `PermissionResolver` +
   `GrantStore` over the `tool_permissions` table, via `tool_permissions.rs`
   (#39). Extracts a call's scoping argument with its own `permission_arg`
@@ -373,6 +386,30 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   way out, plus `compact.rs`'s `sessions/{id}/compact`, #40 — see below),
   `mcp_servers.rs`, `providers.rs`, `models.rs` (`context_window` field,
   #40), `permissions.rs`.
+  - **Live model/generation/profile switching (`sessions/mod.rs`, #42):**
+    `POST /sessions` and `PATCH /sessions/{id}` accept optional
+    `temperature`/`reasoning_effort`/`agent_profile` alongside the existing
+    `model_id` — every one of them is a live, no-restart switch, not just a
+    row update. `create` sends `InMsg::SetModel` (as today), then, if given,
+    `InMsg::SetAgent` and `InMsg::SetGeneration` on the freshly-spawned
+    session. `update` diffs the incoming fields against the row, resumes the
+    session once (`ensure_live`, same guard the existing `model_id` path
+    already used) if *any* of `model_id`/`agent_profile`/
+    `temperature`/`reasoning_effort` changed, then sends `SetModel`/
+    `SetAgent`/`SetGeneration` for whichever actually did — in that order,
+    though it's not load-bearing here since neither built-in profile
+    (`engine/profiles.rs`) pins a model. `reasoning_effort` is validated
+    against `low|medium|high` and `agent_profile` against
+    `engine::SWITCHABLE_PROFILES` (`build`/`researcher`/`page-writer`) at the
+    API boundary — `entanglement_core` itself imposes no reachability gate on
+    a direct `SetAgent` — so an unknown value is rejected `400` before any DB
+    write. `temperature`/`reasoning_effort` persist onto the session row
+    verbatim as partial overrides (an omitted field leaves the column
+    untouched, SeaORM `NotSet`, mirroring `title`/`model_id`'s existing
+    convention) — the row is a display cache of the caller's intent, not the
+    engine's merged state; the engine's own `Session::generation` is the
+    source of truth `OutEvent::GenerationChanged` reports back over the WS
+    bridge.
   - **Manual compaction (`handlers/sessions/compact.rs`, #40):** drives
     `entanglement_core`'s copy-on-write `InMsg::Oneshot { op: "compact" }` on
     the session's current (source) engine session, which reports an
@@ -396,8 +433,11 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   `agent_engine.holly.subscribe()` (issue #16): forwards the engine's
   content/lifecycle `OutEvent`s (`Status`, `TextDelta`, `ReasoningDelta`,
   `ToolCallDelta`, `ToolCall`, `ToolRequest`, `ToolOutput`, `Done`, `Error`,
-  `SessionHibernated`, plus — #17 — a sub-agent child's own `SessionStarted`)
-  to `WsHub` as `assistant.*` envelopes, resolving each event's `SessionId` to
+  `SessionHibernated`, plus — #17 — a sub-agent child's own `SessionStarted`,
+  and — #42 — `ModelChanged`/`GenerationChanged`/`AgentChanged`, so a live
+  `/model`/generation/profile switch made from *another* tab is visible
+  without a manual reload) to `WsHub` as `assistant.*` envelopes, resolving
+  each event's `SessionId` to
   both the owning `user_id` and the DB `assistant_sessions.id` off its
   **root** ancestor (a lazily-populated cache keyed by `engine_session_id`,
   since the engine has no notion of the DB row, and a sub-agent child is never

@@ -23,10 +23,9 @@ use entanglement_core::{InMsg, OutEvent, SessionId};
 use entanglement_runtime::session_store::{LogPayload, LogRecord};
 use sea_orm::{ActiveModelTrait, Set};
 
+use super::mutate::{resolve_model_with_provider, session_mcp_specs};
 use super::turn::{engine_session_id, send_and_collect, to_detail};
-use super::{
-    SessionDetail, load_owned, parse_id_array, resolve_model_with_provider, session_mcp_specs,
-};
+use super::{SessionDetail, load_owned, parse_id_array};
 use crate::ai::engine::SiteEngine;
 use crate::ai::projection;
 use crate::entity::assistant_session;
