@@ -216,33 +216,28 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
 
 - `engine.rs` — `SiteEngine`: spawns `Holly`, the tool executor, the
   `assistant_events` persistence subscriber, the system-prompt refresh task,
-  the tool-registry refresh task (below), and a session-lifecycle watcher task
-  that evicts a session from the in-process "live" cache when `Holly`'s own
-  idle-TTL sweep (`EngineConfig.idle_ttl`, 30 min) or a manual hibernate
-  retires it — otherwise the next message to that session would skip `resume`
-  and get a blank in-memory session despite intact history in
-  `assistant_events` — and (issue #17) records every sub-agent session's
-  parent link from its `SessionStarted` event. Four submodules (kept under
-  the 400-line cap): `engine/profiles.rs` (the `researcher`/`page-writer`
-  profile roster, below), `engine/session_tree.rs`
+  and a session-lifecycle watcher task that evicts a session from the
+  in-process "live" cache when `Holly`'s own idle-TTL sweep
+  (`EngineConfig.idle_ttl`, 30 min) or a manual hibernate retires it —
+  otherwise the next message to that session would skip `resume` and get a
+  blank in-memory session despite intact history in `assistant_events` — and
+  (issue #17) records every sub-agent session's parent link from its
+  `SessionStarted` event. Three submodules (kept under the 400-line cap):
+  `engine/profiles.rs` (the `researcher`/`page-writer` profile roster, below),
+  `engine/session_tree.rs`
   (`root_session_of`/`user_id_from_session`/`user_id_from_session_awaiting`,
   re-exported from `engine.rs` so every existing `crate::ai::engine::...` call
-  site is unchanged), `engine/prompt_cache.rs` (the system-prompt
-  read-and-refresh loop), and `engine/tool_registry.rs` (below).
-  - **Tool-registry refresh (issue #28):** this site respawns the tool
-    executor wholesale on every refresh rather than mutating
-    `entanglement_runtime::tool_runner::spawn_tool_executor_with_policy`'s
-    `SharedRegistry` handle in place — so an MCP server a user enables after
-    boot was previously unusable until the whole process restarted.
-    `SiteEngine::refresh_tool_registry` (in
-    `engine/tool_registry.rs`) rebuilds the registry from the current DB state
-    and swaps it into a freshly spawned executor every
-    `TOOL_REGISTRY_REFRESH_INTERVAL` (5 min), aborting the old executor
-    *before* spawning the new one so the two are never both subscribed to
-    `Holly`'s broadcast at once (which would risk double-dispatching an
-    in-flight `ToolExec`) — the narrow gap that ordering can strand is
-    recovered by core's own re-offer timer once the new executor is
-    listening.
+  site is unchanged), and `engine/prompt_cache.rs` (the system-prompt
+  read-and-refresh loop).
+  - **Tool registry (issue #38):** `spawn` builds the local (built-in,
+    non-MCP) `ToolRegistry` once and wraps it in a `SharedRegistry`
+    (`entanglement_runtime::tools::SharedRegistry`, an
+    `Arc<RwLock<ToolRegistry>>` 0.3 added for exactly this) — the same handle
+    is handed to `tool_runner::spawn_tool_executor_with_policy` and to
+    `SiteMcp`. There is no seed-at-spawn step, no periodic rebuild, and no
+    executor swap: `SiteMcp` mutates the registry in place as users'
+    MCP servers connect/disconnect (see `mcp.rs` below), and the one executor
+    spawned at boot keeps running for the process lifetime.
   - **Sub-agents (#17):** the profile registry (`EngineConfig.profiles`) holds
     the root `build` profile plus two spawnable leaves — `researcher`
     (read-only: `web_search`/`web_fetch`/`read_page`/`search_pages`/
@@ -276,10 +271,18 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   servers a user has configured (`user_mcp_servers`), as opposed to the `POST
   /mcp` route below where the site itself *serves* MCP. Tools are named
   `"{server}__{tool}"`. Connecting to a user's server is bounded by a 10s
-  `CONNECT_TIMEOUT` (issue #28) and every user's servers are connected in
-  parallel (`known_tool_names`), so one hung remote server can't stall
-  `SiteEngine::spawn`'s boot path or the periodic tool-registry refresh
-  (above) for longer than that bound.
+  `CONNECT_TIMEOUT` (issue #28). Holds the same `SharedRegistry` handle
+  `engine.rs` wraps at spawn (issue #38): every time `routes_for_user`
+  (re)connects a user's servers — a cold cache or a 60s TTL expiry —
+  `register_routes` registers each newly discovered `"{server}__{tool}"`
+  identity into that registry, so it's dispatchable as soon as it's
+  discovered, with no seed-at-spawn step and no periodic rebuild.
+  `invalidate_user` (called by `ai::handlers::mcp_servers`' CRUD handlers
+  after a row changes) is the deregistering counterpart — it drops the user's
+  cached routes and unregisters any identity no other currently-cached user
+  still has. `SiteMcp` keeps a weak self-handle (`self_ref`, set right after
+  construction) so it can hand `McpRoutedTool` the `Arc<SiteMcp>` it needs
+  from a `&self` method.
 - `persistence.rs` — `DbSink`: the engine's `RecordSink`, appending every
   `LogRecord` to `assistant_events` behind a bounded channel + writer task;
   also the lazy session-resume and session-delete helpers. A record shed under

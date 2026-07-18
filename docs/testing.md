@@ -142,9 +142,11 @@ executes on every PR rather than self-skipping.
   `src/ai/` gaps: `SiteCatalog::load`/`refresh`/`model_resolver` against real
   `llm_providers`/`llm_models` rows; `DbSink` append/backpressure and
   `resume_session`'s integrity-gap refusal against `assistant_events`;
-  `SiteMcp`'s per-user route cache/TTL and `known_tool_names` against
-  `user_mcp_servers` (no live remote MCP server needed — failure-to-connect is
-  itself part of what's exercised).
+  `SiteMcp`'s per-user route cache/TTL against `user_mcp_servers` (no live
+  remote MCP server needed for most cases — failure-to-connect is itself part
+  of what's exercised) plus, against a real fake MCP server, that the shared
+  dispatch registry reflects an add/remove live and a tool becomes callable
+  mid-session once its server is discovered (issue #38, no executor restart).
 - The assistant-session flow — drives a session through the real HTTP API
   (`tower::ServiceExt::oneshot`, no socket) end to end: create, message, tool
   call, approve. Split by scenario across three top-level test files (each
