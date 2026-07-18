@@ -183,6 +183,8 @@ export interface McpServer {
   enabled: boolean
   forward_user_token: boolean
   headers: Record<string, string>
+  /** Raw remote tool name -> capability (`read`/`write`/`call`), for capability fan-out (#39). */
+  capabilities: Record<string, string>
   created_at: string
 }
 

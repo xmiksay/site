@@ -12,6 +12,7 @@ const draft = ref({
   forward_user_token: false,
   enabled: true,
   headersText: '',
+  capabilitiesText: '',
 })
 
 interface EditDraft {
@@ -20,6 +21,7 @@ interface EditDraft {
   forward_user_token: boolean
   enabled: boolean
   headersText: string
+  capabilitiesText: string
 }
 const editingId = ref<number | null>(null)
 const editDraft = ref<EditDraft>({
@@ -28,11 +30,12 @@ const editDraft = ref<EditDraft>({
   forward_user_token: false,
   enabled: true,
   headersText: '',
+  capabilitiesText: '',
 })
 
 onMounted(assistant.loadMcpServers)
 
-function parseHeaders(raw: string): Record<string, string> {
+function parseColonLines(raw: string): Record<string, string> {
   const out: Record<string, string> = {}
   raw
     .split('\n')
@@ -47,8 +50,8 @@ function parseHeaders(raw: string): Record<string, string> {
   return out
 }
 
-function headersToText(headers: Record<string, string>): string {
-  return Object.entries(headers)
+function mapToText(map: Record<string, string>): string {
+  return Object.entries(map)
     .map(([k, v]) => `${k}: ${v}`)
     .join('\n')
 }
@@ -60,9 +63,17 @@ async function create() {
     url: draft.value.url,
     enabled: draft.value.enabled,
     forward_user_token: draft.value.forward_user_token,
-    headers: parseHeaders(draft.value.headersText),
+    headers: parseColonLines(draft.value.headersText),
+    capabilities: parseColonLines(draft.value.capabilitiesText),
   })
-  draft.value = { name: '', url: '', forward_user_token: false, enabled: true, headersText: '' }
+  draft.value = {
+    name: '',
+    url: '',
+    forward_user_token: false,
+    enabled: true,
+    headersText: '',
+    capabilitiesText: '',
+  }
   showCreate.value = false
   await assistant.loadMcpServers()
 }
@@ -74,7 +85,8 @@ function startEdit(s: McpServer) {
     url: s.url,
     forward_user_token: s.forward_user_token,
     enabled: s.enabled,
-    headersText: headersToText(s.headers || {}),
+    headersText: mapToText(s.headers || {}),
+    capabilitiesText: mapToText(s.capabilities || {}),
   }
 }
 
@@ -89,7 +101,8 @@ async function saveEdit(id: number) {
     url: editDraft.value.url.trim(),
     enabled: editDraft.value.enabled,
     forward_user_token: editDraft.value.forward_user_token,
-    headers: parseHeaders(editDraft.value.headersText),
+    headers: parseColonLines(editDraft.value.headersText),
+    capabilities: parseColonLines(editDraft.value.capabilitiesText),
   })
   editingId.value = null
   await assistant.loadMcpServers()
@@ -145,6 +158,19 @@ async function remove(id: number, name: string) {
           placeholder="Authorization: Bearer xyz&#10;X-Custom: value"
         ></textarea>
         <p class="text-xs text-gray-500 mt-1">One header per line, in <code>Name: value</code> form.</p>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">Capabilities</label>
+        <textarea
+          v-model="draft.capabilitiesText"
+          rows="3"
+          class="w-full border rounded p-2 text-sm font-mono"
+          placeholder="search: read&#10;delete_item: write"
+        ></textarea>
+        <p class="text-xs text-gray-500 mt-1">
+          One remote tool per line, in <code>tool_name: read|write|call</code> form — lets a
+          <code>tool_permissions</code> capability rule fan out to this server's tools.
+        </p>
       </div>
       <div class="flex items-center gap-4">
         <label class="text-sm">
@@ -235,6 +261,18 @@ async function remove(id: number, name: string) {
                       placeholder="Authorization: Bearer xyz"
                     ></textarea>
                     <p class="text-xs text-gray-500 mt-1">One header per line, in <code>Name: value</code> form.</p>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-medium mb-1">Capabilities</label>
+                    <textarea
+                      v-model="editDraft.capabilitiesText"
+                      rows="3"
+                      class="w-full border rounded p-2 text-sm font-mono"
+                      placeholder="search: read"
+                    ></textarea>
+                    <p class="text-xs text-gray-500 mt-1">
+                      One remote tool per line, in <code>tool_name: read|write|call</code> form.
+                    </p>
                   </div>
                   <div class="flex items-center gap-4">
                     <label class="text-sm">

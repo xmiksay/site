@@ -23,6 +23,7 @@ mod m_020_add_galleries_path;
 mod m_021_normalize_paths;
 mod m_022_add_pages_fulltext;
 mod m_023_create_assistant_events;
+mod m_024_align_tool_permissions_with_capabilities;
 
 pub struct Migrator;
 
@@ -53,6 +54,7 @@ impl MigratorTrait for Migrator {
             Box::new(m_021_normalize_paths::Migration),
             Box::new(m_022_add_pages_fulltext::Migration),
             Box::new(m_023_create_assistant_events::Migration),
+            Box::new(m_024_align_tool_permissions_with_capabilities::Migration),
         ]
     }
 }

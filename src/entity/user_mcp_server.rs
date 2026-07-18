@@ -11,6 +11,13 @@ pub struct Model {
     pub enabled: bool,
     pub forward_user_token: bool,
     pub headers: Json,
+    /// Config-side MCP capability hint (#39, ADR-0117): raw (un-namespaced)
+    /// remote tool name → capability (`read`/`write`/`call`,
+    /// `crate::ai::tool_permissions::CAPABILITIES`), so a `tool_permissions`
+    /// bare capability rule fans out to this server's matching
+    /// `"{name}__{tool}"` identities alongside the built-in tools —
+    /// `crate::ai::tool_permissions::mcp_capability_index`.
+    pub capabilities: Json,
     pub created_at: DateTimeWithTimeZone,
 }
 
