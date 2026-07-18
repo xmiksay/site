@@ -59,6 +59,7 @@ use entanglement_core::{
 use entanglement_runtime::hooks::Hooks;
 use entanglement_runtime::persistence::spawn_persistence_subscriber_with_sink;
 use entanglement_runtime::policy::{GrantStore, PermissionResolver};
+use entanglement_runtime::skills::SkillRegistry;
 use entanglement_runtime::tool_runner;
 use parking_lot::{Mutex, RwLock};
 use sea_orm::DatabaseConnection;
@@ -262,13 +263,15 @@ impl SiteEngine {
         let grants: Arc<dyn GrantStore> = policy.clone();
         let tool_executor = Mutex::new(tool_runner::spawn_tool_executor_with_policy(
             &holly,
-            registry,
+            registry.shared(),
             Arc::new(StdRwLock::new(profiles.clone())),
+            Arc::new(StdRwLock::new(Arc::new(SkillRegistry::default()))),
             PermissionProfile::new(Permission::Allow),
             Arc::new(StdMutex::new(HashMap::new())),
             resolver,
             grants,
             Hooks::default(),
+            None,
         ));
 
         let sink: Arc<dyn entanglement_runtime::persistence::RecordSink> =

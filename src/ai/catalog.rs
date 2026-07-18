@@ -188,6 +188,7 @@ fn build_factory(
             default_model,
             None,
             None,
+            None,
             http.clone(),
         )),
         "anthropic" => {
@@ -197,6 +198,7 @@ fn build_factory(
             Ok(anthropic_factory(
                 api_key,
                 default_model,
+                None,
                 None,
                 None,
                 http.clone(),
@@ -210,6 +212,7 @@ fn build_factory(
                 GEMINI_BASE,
                 api_key,
                 default_model,
+                None,
                 None,
                 http.clone(),
             ))

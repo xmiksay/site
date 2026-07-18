@@ -53,9 +53,9 @@ syntect       = { version = "5", default-features = false, features = ["parsing"
 jaq-core      = "2"
 jaq-std       = "2"
 jaq-json      = { version = "1", features = ["serde_json"] }
-entanglement-core     = "0.1.0"
-entanglement-runtime  = { version = "0.1.0", default-features = false, features = ["mcp-http", "provider"] }
-entanglement-provider = "0.1.0"
+entanglement-core     = "0.3"
+entanglement-runtime  = { version = "0.3", default-features = false, features = ["mcp-http", "provider"] }
+entanglement-provider = "0.3"
 
 [dev-dependencies]
 tower           = { version = "0.5", features = ["util"] }

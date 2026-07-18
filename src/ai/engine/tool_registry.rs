@@ -1,9 +1,9 @@
 //! Building and periodically refreshing [`SiteEngine`]'s tool-dispatch
 //! registry — split out of `engine.rs` to keep that file under the 400-line
 //! cap. See `mcp.rs`'s static-registry limitation doc for *why* this needs a
-//! periodic rebuild at all: `entanglement_runtime::tool_runner::
-//! spawn_tool_executor_with_policy` takes its `ToolRegistry` by value at
-//! spawn time, with no live-reload seam for it (unlike `profiles`).
+//! periodic rebuild at all: this site respawns the executor wholesale on
+//! every refresh rather than mutating the `SharedRegistry` handle in place
+//! (unlike `profiles`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
@@ -22,9 +22,9 @@ use crate::ai::tools;
 use crate::routes::ws::WsHub;
 
 /// How often the tool executor's dispatch registry is rebuilt and swapped in
-/// — see [`SiteEngine::refresh_tool_registry`]. `entanglement-runtime` 0.1.0
-/// has no live-reload seam for `tool_runner`'s `ToolRegistry` (unlike
-/// `profiles`, already `Arc<RwLock<..>>`), so a server a user enables after
+/// — see [`SiteEngine::refresh_tool_registry`]. This site does not yet use
+/// `entanglement-runtime`'s `SharedRegistry` handle for live in-place swaps
+/// (unlike `profiles`, already `Arc<RwLock<..>>`), so a server a user enables after
 /// `spawn` is otherwise invisible to dispatch until process restart
 /// (`mcp.rs`'s static-registry limitation doc, issue #28). Minutes, not
 /// seconds: a full rebuild reconnects to every enabled remote MCP server, so
@@ -87,13 +87,17 @@ impl SiteEngine {
         current.abort();
         *current = tool_runner::spawn_tool_executor_with_policy(
             &self.holly,
-            registry,
+            registry.shared(),
             Arc::new(StdRwLock::new(self.profiles.clone())),
+            Arc::new(StdRwLock::new(Arc::new(
+                entanglement_runtime::skills::SkillRegistry::default(),
+            ))),
             entanglement_core::PermissionProfile::new(Permission::Allow),
             Arc::new(StdMutex::new(HashMap::new())),
             resolver,
             grants,
             Hooks::default(),
+            None,
         );
     }
 }
