@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
             "/sessions/{id}/messages/{message_id}/approve",
             post(sessions::approve),
         )
+        .route("/sessions/{id}/compact", post(sessions::compact))
         .route(
             "/mcp-servers",
             get(mcp_servers::list).post(mcp_servers::create),

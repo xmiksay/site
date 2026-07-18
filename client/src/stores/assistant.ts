@@ -84,6 +84,22 @@ export const useAssistantStore = defineStore('assistant', () => {
     return current.value
   }
 
+  async function compactSession(
+    id: number,
+    input: { instructions?: string; kept?: number } = {},
+  ) {
+    sending.value = true
+    try {
+      current.value = await api<AssistantSessionDetail>(
+        `/api/assistant/sessions/${id}/compact`,
+        { method: 'POST', body: JSON.stringify(input) },
+      )
+    } finally {
+      sending.value = false
+    }
+    return current.value
+  }
+
   async function approveToolCalls(
     sessionId: number,
     messageId: number,
@@ -254,6 +270,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     updateSession,
     deleteSession,
     sendMessage,
+    compactSession,
     approveToolCalls,
     mcpServers,
     discovered,

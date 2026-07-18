@@ -51,6 +51,19 @@ async function toggleMcpServer(serverId: number, on: boolean) {
   await assistant.loadSession(assistant.current.id)
 }
 
+async function compactSession() {
+  if (!assistant.current) return
+  if (
+    !confirm(
+      'Compact this chat? The history is summarized and the conversation continues in a fresh session.',
+    )
+  ) {
+    return
+  }
+  await assistant.compactSession(assistant.current.id)
+  scrollToBottom()
+}
+
 async function select(id: number) {
   await assistant.loadSession(id)
   scrollToBottom()
@@ -198,6 +211,15 @@ watch(
               {{ m.label }} ({{ m.provider_label }})
             </option>
           </select>
+          <button
+            type="button"
+            class="border rounded px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-50"
+            title="Summarize this chat's history into a fresh session"
+            :disabled="assistant.sending || messageList.length === 0"
+            @click="compactSession"
+          >
+            Compact
+          </button>
           <div class="relative">
             <button
               type="button"

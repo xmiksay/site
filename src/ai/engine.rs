@@ -218,7 +218,19 @@ impl SiteEngine {
             tool_spec_resolver: Some(tool_spec_resolver),
             system_prompt_resolver: Some(system_prompt_resolver),
             model_resolver: Some(catalog.model_resolver()),
+            // The default model's own window, not `EngineConfig::default()`'s
+            // generic fallback (#40) — a freshly-minted session's very first
+            // turn (before any `SetModel` lands, e.g. a `/compact` fork's
+            // seeded prompt, `handlers/sessions/compact.rs`) budgets against
+            // this until `SetModel`/replay narrows it to the actual pinned
+            // model via `ResolvedModel::context_window` (`catalog.rs`).
+            context_window: catalog.default_model().and_then(|m| m.context_window),
             idle_ttl: Some(IDLE_TTL),
+            // Explicit despite matching `EngineConfig::default()` (#40): on
+            // overflow the turn loop LLM-summarizes the oldest history in
+            // place (ADR-0103) instead of the lossy placeholder-prune this
+            // site ran with before `context_window` above was ever populated.
+            auto_compact: true,
             ..EngineConfig::default()
         };
         cfg.validate().map_err(|e| anyhow::anyhow!(e.to_string()))?;

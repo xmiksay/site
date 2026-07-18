@@ -6,8 +6,10 @@
 //! workspace's 400-line cap; both are re-exported here so the router
 //! (`handlers/mod.rs`) sees one flat `sessions::*` surface.
 
+mod compact;
 mod turn;
 
+pub use compact::compact;
 pub use turn::{approve, send_message};
 
 use axum::Json;

@@ -220,6 +220,20 @@ export function useLiveTurns(
           })
         }
         break
+      case 'compacted':
+        // #40: a `/compact` fork repoints this DB row's `engine_session_id`
+        // to a fresh successor session — any *other* open tab on it (the
+        // initiating tab already has the authoritative detail from its own
+        // REST response) needs to drop its stale live turn and refetch, or
+        // it keeps rendering/targeting a now-retired session.
+        if (live.value?.sessionId === sessionId) live.value = null
+        if (current.value?.id === sessionId) {
+          sending.value = false
+          loadSession(sessionId).catch(() => {
+            // best-effort — see the matching comment on the settle branch above
+          })
+        }
+        break
     }
   })
 

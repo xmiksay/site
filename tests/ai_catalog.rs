@@ -78,6 +78,26 @@ async fn make_model(
     .expect("insert throwaway llm_model")
 }
 
+async fn make_model_with_window(
+    db: &DatabaseConnection,
+    provider_id: i32,
+    wire: &str,
+    is_default: bool,
+    context_window: i32,
+) -> llm_model::Model {
+    llm_model::ActiveModel {
+        provider_id: Set(provider_id),
+        label: Set(format!("label-{wire}")),
+        model: Set(wire.to_string()),
+        is_default: Set(is_default),
+        context_window: Set(Some(context_window)),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .expect("insert throwaway llm_model")
+}
+
 async fn cleanup_provider(db: &DatabaseConnection, provider_id: i32) {
     llm_provider::Entity::delete_by_id(provider_id)
         .exec(db)
@@ -178,6 +198,55 @@ async fn model_resolver_resolves_a_correct_provider_model_pair() {
         .expect("expected the matching provider/model pair to resolve");
     assert_eq!(resolved.provider, provider.label);
     assert_eq!(resolved.model, "model-a");
+
+    cleanup_provider(&db, provider.id).await;
+}
+
+/// #40: `ResolvedModel::context_window` must carry the `llm_models.
+/// context_window` value through, not the hardcoded `None` the field used to
+/// be pinned to (`src/ai/catalog.rs`'s `model_resolver`) — that's what lets
+/// `entanglement_core`'s turn loop compact/refuse against the model's real
+/// budget instead of a generic fallback.
+#[tokio::test]
+async fn model_resolver_populates_context_window_from_the_row() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let _guard = exclusive().await;
+    wipe_catalog_tables(&db).await;
+    let provider = make_provider(&db, "resolve-window").await;
+    let model = make_model_with_window(&db, provider.id, "model-a", true, 128_000).await;
+
+    let catalog = SiteCatalog::load(db.clone()).await.expect("load catalog");
+    let resolver = catalog.model_resolver();
+    let resolved = resolver(&provider.label, &model.id.to_string())
+        .expect("expected the matching provider/model pair to resolve");
+    assert_eq!(resolved.context_window, Some(128_000));
+
+    cleanup_provider(&db, provider.id).await;
+}
+
+/// The counterpart to the above: an unset `context_window` row must resolve
+/// to `None`, not silently default to some magic number — the engine's own
+/// generic fallback (`entanglement_core::context::CONTEXT_LIMIT_TOKENS`)
+/// takes over from there.
+#[tokio::test]
+async fn model_resolver_leaves_context_window_none_when_unset() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let _guard = exclusive().await;
+    wipe_catalog_tables(&db).await;
+    let provider = make_provider(&db, "resolve-window-unset").await;
+    let model = make_model(&db, provider.id, "model-a", true).await;
+
+    let catalog = SiteCatalog::load(db.clone()).await.expect("load catalog");
+    let resolver = catalog.model_resolver();
+    let resolved = resolver(&provider.label, &model.id.to_string())
+        .expect("expected the matching provider/model pair to resolve");
+    assert_eq!(resolved.context_window, None);
 
     cleanup_provider(&db, provider.id).await;
 }

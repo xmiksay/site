@@ -11,14 +11,16 @@ const draft = ref<LlmModelInput>({
   label: '',
   model: '',
   is_default: false,
+  context_window: undefined,
 })
 
 interface EditDraft {
   label: string
   model: string
+  context_window: number | undefined
 }
 const editingId = ref<number | null>(null)
-const editDraft = ref<EditDraft>({ label: '', model: '' })
+const editDraft = ref<EditDraft>({ label: '', model: '', context_window: undefined })
 
 onMounted(async () => {
   await Promise.all([assistant.loadProviders(), assistant.loadModels()])
@@ -53,19 +55,21 @@ async function create() {
     label: draft.value.label.trim(),
     model: draft.value.model.trim(),
     is_default: draft.value.is_default,
+    context_window: draft.value.context_window,
   })
   draft.value = {
     provider_id: assistant.providers[0]?.id ?? 0,
     label: '',
     model: '',
     is_default: false,
+    context_window: undefined,
   }
   showCreate.value = false
 }
 
 function startEdit(m: LlmModel) {
   editingId.value = m.id
-  editDraft.value = { label: m.label, model: m.model }
+  editDraft.value = { label: m.label, model: m.model, context_window: m.context_window ?? undefined }
 }
 
 function cancelEdit() {
@@ -79,6 +83,12 @@ async function saveEdit(m: LlmModel) {
   }
   if (editDraft.value.model.trim() && editDraft.value.model !== m.model) {
     patch.model = editDraft.value.model.trim()
+  }
+  if (
+    editDraft.value.context_window !== undefined &&
+    editDraft.value.context_window !== m.context_window
+  ) {
+    patch.context_window = editDraft.value.context_window
   }
   if (Object.keys(patch).length > 0) {
     await assistant.updateModel(m.id, patch)
@@ -144,6 +154,16 @@ async function remove(id: number, label: string) {
           <option v-for="m in suggestionsFor(draft.provider_id)" :key="m" :value="m" />
         </datalist>
       </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">Context window (tokens)</label>
+        <input
+          v-model.number="draft.context_window"
+          type="number"
+          min="1"
+          class="w-full border rounded p-2 text-sm"
+          placeholder="e.g. 200000 — leave blank for the engine default"
+        />
+      </div>
       <label class="flex items-center gap-2 text-sm">
         <input v-model="draft.is_default" type="checkbox" /> default for new chats
       </label>
@@ -159,6 +179,7 @@ async function remove(id: number, label: string) {
             <th class="text-left px-4 py-2">Label</th>
             <th class="text-left px-4 py-2">Provider</th>
             <th class="text-left px-4 py-2">Model</th>
+            <th class="text-left px-4 py-2">Context window</th>
             <th class="text-left px-4 py-2">Default</th>
             <th class="px-4 py-2"></th>
           </tr>
@@ -169,6 +190,7 @@ async function remove(id: number, label: string) {
               <td class="px-4 py-2 font-medium">{{ m.label }}</td>
               <td class="px-4 py-2 text-gray-600">{{ m.provider_label }} ({{ m.provider_kind }})</td>
               <td class="px-4 py-2 font-mono text-xs">{{ m.model }}</td>
+              <td class="px-4 py-2 text-gray-600">{{ m.context_window ?? '—' }}</td>
               <td class="px-4 py-2">
                 <span v-if="m.is_default" class="text-xs text-emerald-700 font-semibold">default</span>
                 <button
@@ -200,7 +222,7 @@ async function remove(id: number, label: string) {
               </td>
             </tr>
             <tr v-if="editingId === m.id" class="border-t border-gray-100 bg-gray-50">
-              <td colspan="5" class="px-4 py-3">
+              <td colspan="6" class="px-4 py-3">
                 <div class="space-y-3">
                   <div class="grid grid-cols-2 gap-3">
                     <div>
@@ -223,6 +245,15 @@ async function remove(id: number, label: string) {
                       </datalist>
                     </div>
                   </div>
+                  <div>
+                    <label class="block text-xs font-medium mb-1">Context window (tokens)</label>
+                    <input
+                      v-model.number="editDraft.context_window"
+                      type="number"
+                      min="1"
+                      class="w-full border rounded p-2 text-sm"
+                    />
+                  </div>
                   <div class="flex justify-end">
                     <button
                       class="rounded bg-gray-800 text-white px-4 py-2 text-sm"
@@ -236,7 +267,7 @@ async function remove(id: number, label: string) {
             </tr>
           </template>
           <tr v-if="assistant.models.length === 0">
-            <td colspan="5" class="px-4 py-6 text-center text-gray-400">
+            <td colspan="6" class="px-4 py-6 text-center text-gray-400">
               No models yet.
             </td>
           </tr>
