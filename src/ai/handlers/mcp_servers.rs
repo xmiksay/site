@@ -8,6 +8,7 @@ use sea_orm::{
 };
 use serde_json::{Value, json};
 
+use crate::ai::tool_permissions;
 use crate::entity::user_mcp_server;
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -20,30 +21,57 @@ pub struct McpServerView {
     pub enabled: bool,
     pub forward_user_token: bool,
     pub headers: HashMap<String, String>,
+    /// Config-side capability hint (#39, ADR-0117): raw remote tool name →
+    /// capability (`read`/`write`/`call`) — see `tool_permissions::CAPABILITIES`.
+    pub capabilities: HashMap<String, String>,
     pub created_at: String,
+}
+
+fn string_map(v: &Value) -> HashMap<String, String> {
+    v.as_object()
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default()
 }
 
 impl From<&user_mcp_server::Model> for McpServerView {
     fn from(m: &user_mcp_server::Model) -> Self {
-        let headers = m
-            .headers
-            .as_object()
-            .map(|o| {
-                o.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                    .collect::<HashMap<_, _>>()
-            })
-            .unwrap_or_default();
         Self {
             id: m.id,
             name: m.name.clone(),
             url: m.url.clone(),
             enabled: m.enabled,
             forward_user_token: m.forward_user_token,
-            headers,
+            headers: string_map(&m.headers),
+            capabilities: string_map(&m.capabilities),
             created_at: m.created_at.to_string(),
         }
     }
+}
+
+fn json_map(m: HashMap<String, String>) -> Value {
+    Value::Object(m.into_iter().map(|(k, v)| (k, Value::String(v))).collect())
+}
+
+/// A capability annotation's values must be one of this site's own capability
+/// names (#39, `tool_permissions::CAPABILITIES`) — a typo'd value would
+/// otherwise silently fail to fan out at resolve time instead of erroring up
+/// front, matching how every other rule field here validates eagerly.
+fn validate_capabilities(capabilities: &HashMap<String, String>) -> Result<(), ApiError> {
+    for (tool, capability) in capabilities {
+        if !tool_permissions::CAPABILITIES
+            .iter()
+            .any(|(name, _)| name == capability)
+        {
+            return Err(ApiError::BadRequest(format!(
+                "capabilities.{tool}: unknown capability `{capability}` (expected `read`, `write`, or `call`)"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]
@@ -56,6 +84,8 @@ pub struct CreateMcpServer {
     pub forward_user_token: Option<bool>,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    #[serde(default)]
+    pub capabilities: HashMap<String, String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -70,6 +100,8 @@ pub struct UpdateMcpServer {
     pub url: Option<String>,
     #[serde(default)]
     pub headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub capabilities: Option<HashMap<String, String>>,
 }
 
 /// Build the `discovered` list from `SiteMcp`'s per-user tool-spec cache
@@ -144,14 +176,8 @@ pub async fn create(
     if name.is_empty() || url.is_empty() {
         return Err(ApiError::BadRequest("name and url required".into()));
     }
+    validate_capabilities(&input.capabilities)?;
 
-    let headers_json = serde_json::Value::Object(
-        input
-            .headers
-            .into_iter()
-            .map(|(k, v)| (k, serde_json::Value::String(v)))
-            .collect(),
-    );
     let now = chrono::Utc::now().fixed_offset();
     let saved = user_mcp_server::ActiveModel {
         user_id: Set(user_id),
@@ -159,7 +185,8 @@ pub async fn create(
         url: Set(url),
         enabled: Set(input.enabled.unwrap_or(true)),
         forward_user_token: Set(input.forward_user_token.unwrap_or(false)),
-        headers: Set(headers_json),
+        headers: Set(json_map(input.headers)),
+        capabilities: Set(json_map(input.capabilities)),
         created_at: Set(now),
         ..Default::default()
     }
@@ -207,12 +234,11 @@ pub async fn update(
         active.url = Set(trimmed.to_string());
     }
     if let Some(h) = input.headers {
-        let headers_json = serde_json::Value::Object(
-            h.into_iter()
-                .map(|(k, v)| (k, serde_json::Value::String(v)))
-                .collect(),
-        );
-        active.headers = Set(headers_json);
+        active.headers = Set(json_map(h));
+    }
+    if let Some(c) = input.capabilities {
+        validate_capabilities(&c)?;
+        active.capabilities = Set(json_map(c));
     }
     let updated = active.update(&state.db).await?;
     state.agent_engine.mcp.invalidate_user(user_id);

@@ -5,9 +5,10 @@
 //! live test DB, and runs for real against `site_test` locally/in CI.
 //!
 //! Each test creates its own throwaway `users` row (unique username) and
-//! deletes it when done — `tool_permissions` cascades on delete, so that one
-//! delete cleans up every rule the test inserted. `site_test` isn't reset
-//! between runs, so this isolation is load-bearing, not decorative.
+//! deletes it when done — `tool_permissions`/`user_mcp_servers` both cascade
+//! on delete, so that one delete cleans up every rule/server row the test
+//! inserted. `site_test` isn't reset between runs, so this isolation is
+//! load-bearing, not decorative.
 
 use entanglement_core::{ApprovalScope, Permission, SessionId};
 use entanglement_runtime::policy::{GrantStore, PermissionResolver};
@@ -15,7 +16,7 @@ use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use site::ai::engine::{self, SiteEngine};
 use site::ai::policy::SitePolicy;
 use site::ai::tool_permissions::Effect;
-use site::entity::{tool_permission, user};
+use site::entity::{tool_permission, user, user_mcp_server};
 
 /// `None` (with a printed skip notice) when `DATABASE_URL` isn't set, per the
 /// repo's DB-test convention — every test in this file starts with this.
@@ -110,29 +111,100 @@ async fn resolve_breaks_priority_ties_by_id_ascending() {
 }
 
 #[tokio::test]
-async fn resolve_matches_trailing_star_as_a_prefix_wildcard() {
+async fn resolve_expands_a_bare_capability_rule_to_its_member_tools() {
     let Some(db) = test_db().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    let user_id = make_user(&db, "wildcard").await;
+    let user_id = make_user(&db, "capability").await;
     let policy = SitePolicy::new(db.clone());
     let session = SiteEngine::session_id_for_user(user_id);
 
-    add_rule(&db, user_id, "bash*", Effect::Allow, 10).await;
+    add_rule(&db, user_id, "read", Effect::Allow, 10).await;
 
-    // Matches: name starts with the "bash" prefix.
+    // Every `read` member tool (#39) is graded identically...
     assert_eq!(
-        policy.resolve(&session, "bash_exec", "").await,
+        policy.resolve(&session, "read_page", "").await,
         Permission::Allow
     );
     assert_eq!(
-        policy.resolve(&session, "bash", "").await,
+        policy.resolve(&session, "search_pages", "").await,
         Permission::Allow
     );
-    // Doesn't match: no shared prefix, falls through to the default (Prompt/Ask).
+    // ...but a `write` tool is untouched, falling through to the Ask default.
     assert_eq!(
-        policy.resolve(&session, "web_search", "").await,
+        policy.resolve(&session, "edit_page", "").await,
+        Permission::Ask
+    );
+
+    cleanup_user(&db, user_id).await;
+}
+
+#[tokio::test]
+async fn resolve_honors_an_argument_scoped_rule_over_the_tool_call_input() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let user_id = make_user(&db, "scoped").await;
+    let policy = SitePolicy::new(db.clone());
+    let session = SiteEngine::session_id_for_user(user_id);
+
+    add_rule(&db, user_id, "edit_page(obsidian/*)", Effect::Deny, 10).await;
+
+    assert_eq!(
+        policy
+            .resolve(&session, "edit_page", r#"{"path":"obsidian/rust"}"#)
+            .await,
+        Permission::Deny
+    );
+    // Outside the scoped path, falls through to the Ask default.
+    assert_eq!(
+        policy
+            .resolve(&session, "edit_page", r#"{"path":"projects/x"}"#)
+            .await,
+        Permission::Ask
+    );
+
+    cleanup_user(&db, user_id).await;
+}
+
+#[tokio::test]
+async fn resolve_fans_a_bare_capability_rule_out_to_an_annotated_mcp_tool() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let user_id = make_user(&db, "mcp-capability").await;
+    let policy = SitePolicy::new(db.clone());
+    let session = SiteEngine::session_id_for_user(user_id);
+
+    // #39/ADR-0117: a server's config-side capability hint fans a bare
+    // capability rule out to its `"{server}__{tool}"` identity.
+    user_mcp_server::ActiveModel {
+        user_id: Set(user_id),
+        name: Set("docs".to_string()),
+        url: Set("https://example.invalid/mcp".to_string()),
+        enabled: Set(true),
+        forward_user_token: Set(false),
+        headers: Set(serde_json::json!({})),
+        capabilities: Set(serde_json::json!({"search": "read"})),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .expect("insert throwaway user_mcp_server");
+
+    add_rule(&db, user_id, "read", Effect::Allow, 10).await;
+
+    assert_eq!(
+        policy.resolve(&session, "docs__search", "").await,
+        Permission::Allow
+    );
+    // A different, unannotated tool on the same server is untouched.
+    assert_eq!(
+        policy.resolve(&session, "docs__unrelated", "").await,
         Permission::Ask
     );
 

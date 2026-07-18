@@ -117,6 +117,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     enabled?: boolean
     forward_user_token?: boolean
     headers?: Record<string, string>
+    capabilities?: Record<string, string>
   }) {
     const created = await api<McpServer>('/api/assistant/mcp-servers', {
       method: 'POST',
@@ -134,6 +135,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       forward_user_token?: boolean
       url?: string
       headers?: Record<string, string>
+      capabilities?: Record<string, string>
     },
   ) {
     const updated = await api<McpServer>(`/api/assistant/mcp-servers/${id}`, {

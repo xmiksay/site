@@ -54,7 +54,13 @@ async function remove(id: number, name: string) {
     <p class="text-sm text-gray-600">
       The assistant runs every tool call against these rules in priority order (lower runs first).
       Default for unmatched calls is <code>prompt</code> — you'll see approve / reject buttons in
-      the chat. Use trailing <code>*</code> as a prefix wildcard, e.g. <code>read_*</code>.
+      the chat. A rule name is a literal tool name (e.g. <code>edit_page</code>), the catch-all
+      <code>*</code>, a capability key <code>read</code> / <code>write</code> / <code>call</code>
+      (grades every tool of that kind at once, including annotated MCP tools — see MCP servers'
+      capability hints), or a scoped form: <code>tool(pattern)</code> matches a tool's scoping
+      argument (e.g. <code>edit_page(obsidian/*)</code>, <code>web_search(rust *)</code>) and
+      <code>tool{pattern}</code> matches its working directory (reserved — no built-in tool
+      exposes one yet). A capability key accepts scoping too, e.g. <code>write(obsidian/*)</code>.
     </p>
 
     <div v-if="showCreate" class="bg-white rounded-lg shadow p-4 space-y-3">
@@ -64,7 +70,7 @@ async function remove(id: number, name: string) {
           <input
             v-model="draft.name"
             class="w-full border rounded p-2 text-sm font-mono"
-            placeholder="e.g. read_page or read_*"
+            placeholder="e.g. read_page, read, or edit_page(obsidian/*)"
           />
         </div>
         <div>

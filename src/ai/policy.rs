@@ -16,6 +16,12 @@ use crate::ai::engine::{user_id_from_session, user_id_from_session_awaiting};
 use crate::ai::tool_permissions::{self, Effect};
 use crate::entity::tool_permission;
 
+/// No site tool currently exposes a working directory (there's no `bash`-like
+/// exec tool, #39) — `tool{pattern}` rules are still stored and matched by
+/// `PermissionProfile::resolve_scoped`, they just never fire yet. See
+/// `tool_permissions`'s module doc.
+const NO_WORKDIR: Option<&str> = None;
+
 /// Priority given to a grant recorded via `ApprovalScope::Always` — mirrors
 /// today's approve-endpoint "remember" behavior (see
 /// `src/ai/handlers/permissions.rs`'s equivalent insert, out of scope for
@@ -58,7 +64,7 @@ impl SitePolicy {
 
 #[async_trait]
 impl PermissionResolver for SitePolicy {
-    async fn resolve(&self, session: &SessionId, tool: &str, _input: &str) -> Permission {
+    async fn resolve(&self, session: &SessionId, tool: &str, input: &str) -> Permission {
         // `_awaiting` (not the bare sync lookup): this runs in a detached
         // per-call dispatch task with no ordering guarantee relative to
         // `engine.rs`'s session watcher, which is what actually links a
@@ -72,10 +78,13 @@ impl PermissionResolver for SitePolicy {
                 return Permission::Deny; // fail closed
             }
         };
-        match tool_permissions::resolve(&self.db, user_id, tool).await {
-            Ok(Effect::Allow) => Permission::Allow,
-            Ok(Effect::Deny) => Permission::Deny,
-            Ok(Effect::Prompt) => Permission::Ask,
+        // #39: extract the tool-specific scoping argument (a `tool(pattern)`
+        // rule) — `permission_arg` mirrors
+        // `entanglement_runtime::permission::permission_arg`'s design over
+        // this site's own tool vocabulary, see `tool_permissions`'s doc.
+        let arg = tool_permissions::permission_arg(tool, input);
+        match tool_permissions::resolve(&self.db, user_id, tool, arg.as_deref(), NO_WORKDIR).await {
+            Ok(perm) => perm,
             Err(e) => {
                 tracing::error!(error = %e, user_id, tool, "tool_permissions lookup failed");
                 Permission::Deny // fail closed
