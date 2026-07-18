@@ -14,8 +14,11 @@
 
 use axum::routing::post;
 use axum::{Json, Router};
+use entanglement_core::ToolCall;
+use entanglement_runtime::{SharedRegistry, ToolRegistry};
 use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use serde_json::{Value, json};
+use site::ai::engine::SiteEngine;
 use site::ai::mcp::SiteMcp;
 use site::entity::{user, user_mcp_server};
 
@@ -26,6 +29,10 @@ async fn test_db() -> Option<DatabaseConnection> {
             .await
             .expect("connect to DATABASE_URL"),
     )
+}
+
+fn shared_registry() -> SharedRegistry {
+    ToolRegistry::new().shared()
 }
 
 async fn make_user(db: &DatabaseConnection, tag: &str) -> i32 {
@@ -109,7 +116,7 @@ async fn zero_enabled_servers_yields_no_specs() {
         return;
     };
     let user_id = make_user(&db, "zero").await;
-    let mcp = SiteMcp::new(db.clone());
+    let mcp = SiteMcp::new(db.clone(), shared_registry());
 
     assert!(mcp.tool_specs_for_user(user_id).await.is_empty());
 
@@ -126,7 +133,7 @@ async fn unreachable_server_is_skipped_gracefully() {
     // Port 1 on loopback: nothing listens there, so this fails fast
     // (connection refused) rather than waiting out a connect timeout.
     add_server(&db, user_id, "bogus", "http://127.0.0.1:1/mcp", true).await;
-    let mcp = SiteMcp::new(db.clone());
+    let mcp = SiteMcp::new(db.clone(), shared_registry());
 
     let specs = mcp.tool_specs_for_user(user_id).await;
     assert!(
@@ -146,7 +153,7 @@ async fn cache_serves_stale_within_ttl_then_invalidate_reflects_new_row() {
     let user_id = make_user(&db, "cache").await;
     let url_a = spawn_fake_mcp_server("echoA").await;
     add_server(&db, user_id, "cacheA", &url_a, true).await;
-    let mcp = SiteMcp::new(db.clone());
+    let mcp = SiteMcp::new(db.clone(), shared_registry());
 
     let first = mcp.tool_specs_for_user(user_id).await;
     assert_eq!(first.len(), 1);
@@ -179,42 +186,96 @@ async fn cache_serves_stale_within_ttl_then_invalidate_reflects_new_row() {
     cleanup_user(&db, user_id).await;
 }
 
+/// Issue #38: the shared dispatch registry reflects an MCP server add/remove
+/// live, with no executor restart or periodic rebuild — `SiteMcp` registers a
+/// user's `"{server}__{tool}"` identities the moment `routes_for_user`
+/// (re)connects, and `invalidate_user` deregisters them once no other cached
+/// user still has them.
 #[tokio::test]
-async fn known_tool_names_only_considers_enabled_rows_and_dedupes_across_users() {
+async fn registry_reflects_mcp_server_add_and_remove_without_executor_restart() {
     let Some(db) = test_db().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    let tag = uuid::Uuid::new_v4();
-    let shared_name = format!("shared-{tag}");
-    let disabled_name = format!("solo-disabled-{tag}");
+    let user_id = make_user(&db, "registry-add-remove").await;
     let url = spawn_fake_mcp_server("echo").await;
+    add_server(&db, user_id, "srv", &url, true).await;
 
-    let user_disabled = make_user(&db, "disabled").await;
-    add_server(&db, user_disabled, &disabled_name, &url, false).await;
+    let registry = shared_registry();
+    let mcp = SiteMcp::new(db.clone(), registry.clone());
 
-    let user_a = make_user(&db, "a").await;
-    add_server(&db, user_a, &shared_name, &url, true).await;
-
-    let user_b = make_user(&db, "b").await;
-    add_server(&db, user_b, &shared_name, &url, true).await;
-
-    let mcp = SiteMcp::new(db.clone());
-    let names = mcp.known_tool_names(&db).await;
-
-    let shared_identity = format!("{shared_name}__echo");
-    let disabled_identity = format!("{disabled_name}__echo");
-    assert_eq!(
-        names.iter().filter(|n| **n == shared_identity).count(),
-        1,
-        "two users sharing the same server name/tool must dedupe to one identity"
-    );
     assert!(
-        !names.contains(&disabled_identity),
-        "a disabled row must never be considered, even though its server is reachable"
+        !registry.read().unwrap().contains("srv__echo"),
+        "must not be registered before any route discovery"
     );
 
-    cleanup_user(&db, user_disabled).await;
-    cleanup_user(&db, user_a).await;
-    cleanup_user(&db, user_b).await;
+    mcp.tool_specs_for_user(user_id).await;
+    assert!(
+        registry.read().unwrap().contains("srv__echo"),
+        "discovering the route must register it into the live dispatch registry"
+    );
+
+    mcp.invalidate_user(user_id);
+    assert!(
+        !registry.read().unwrap().contains("srv__echo"),
+        "invalidating the sole user with this identity must deregister it"
+    );
+
+    cleanup_user(&db, user_id).await;
+}
+
+/// Issue #38: a tool becomes genuinely callable — not just advertised — the
+/// moment its server is added, mid-session, with no seed-at-spawn step and no
+/// executor swap. Dispatches through a snapshot of the live registry exactly
+/// as `ToolRegistry::execute` would during a real turn; a stale/static
+/// registry would report "unknown tool" here instead of actually reaching
+/// the fake server.
+#[tokio::test]
+async fn tool_becomes_callable_mid_session_after_its_server_is_added() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let user_id = make_user(&db, "callable-mid-session").await;
+    let registry = shared_registry();
+    let mcp = SiteMcp::new(db.clone(), registry.clone());
+    let session = SiteEngine::session_id_for_user(user_id);
+    let call = ToolCall {
+        id: "1".into(),
+        name: "srv__echo".into(),
+        input: "{}".into(),
+        provider_meta: None,
+    };
+
+    // Before the server exists, the identity is unknown to dispatch. Snapshot
+    // the registry into an owned clone first so the read lock is dropped
+    // before the `.await` below, not held across it.
+    let snapshot = registry.read().unwrap().clone();
+    let before = snapshot.execute(&call, &session).await;
+    assert!(
+        before
+            .iter()
+            .any(|c| c.as_text().is_some_and(|t| t.contains("unknown tool"))),
+        "must be unknown before the server is added: {before:?}"
+    );
+
+    let url = spawn_fake_mcp_server("echo").await;
+    add_server(&db, user_id, "srv", &url, true).await;
+    // Mirrors what `ai::handlers::mcp_servers::create` does after inserting
+    // the row — the CRUD-driven invalidation the issue calls for.
+    mcp.invalidate_user(user_id);
+    // A session resolving its tool specs (e.g. at the start of a turn) is
+    // what actually triggers `routes_for_user` to reconnect and register.
+    mcp.tool_specs_for_user(user_id).await;
+
+    let snapshot = registry.read().unwrap().clone();
+    let after = snapshot.execute(&call, &session).await;
+    assert!(
+        !after
+            .iter()
+            .any(|c| c.as_text().is_some_and(|t| t.contains("unknown tool"))),
+        "must be dispatchable once the server is added and re-discovered: {after:?}"
+    );
+
+    cleanup_user(&db, user_id).await;
 }

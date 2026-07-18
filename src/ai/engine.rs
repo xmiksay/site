@@ -36,7 +36,6 @@
 mod profiles;
 mod prompt_cache;
 mod session_tree;
-mod tool_registry;
 
 pub use profiles::{PAGE_WRITER_PROFILE, RESEARCHER_PROFILE};
 use prompt_cache::load_system_prompt;
@@ -44,24 +43,23 @@ use session_tree::evict_on_hibernate_or_end;
 pub use session_tree::{
     record_session_started, root_session_of, user_id_from_session, user_id_from_session_awaiting,
 };
-use tool_registry::{TOOL_REGISTRY_REFRESH_INTERVAL, local_tool_registry, register_mcp_tools};
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock, Weak};
+use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use std::time::Duration;
 
 use anyhow::Context;
 use dashmap::DashSet;
 use entanglement_core::{
-    AgentProfile, EngineConfig, Holly, OutEvent, Permission, PermissionProfile, ProfileRegistry,
-    SessionId, SystemPromptResolver, ToolSpec, ToolSpecResolver,
+    AgentProfile, EngineConfig, Holly, OutEvent, Permission, PermissionProfile, SessionId,
+    SystemPromptResolver, ToolSpec, ToolSpecResolver,
 };
 use entanglement_runtime::hooks::Hooks;
 use entanglement_runtime::persistence::spawn_persistence_subscriber_with_sink;
 use entanglement_runtime::policy::{GrantStore, PermissionResolver};
 use entanglement_runtime::skills::SkillRegistry;
 use entanglement_runtime::tool_runner;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use sea_orm::DatabaseConnection;
 use tokio::sync::broadcast;
 
@@ -70,6 +68,7 @@ use crate::ai::config::AiConfig;
 use crate::ai::mcp::SiteMcp;
 use crate::ai::persistence::{self, DbSink};
 use crate::ai::policy::SitePolicy;
+use crate::ai::tools;
 use crate::routes::ws::WsHub;
 
 /// A session-scoped tool spec cache: local specs are always present (baked
@@ -109,26 +108,17 @@ pub struct SiteEngine {
     /// `hibernate` itself, so nothing else would otherwise tell this cache to
     /// drop the id — see the watcher's doc.
     live_sessions: Arc<DashSet<SessionId>>,
-    // Everything `refresh_tool_registry` needs to rebuild the registry from
-    // scratch, mirroring what `spawn` built it from the first time.
-    ws_hub: Arc<WsHub>,
-    serper_api_key: Option<String>,
-    profiles: ProfileRegistry,
-    /// The tool executor's currently-running task — swapped, not just read,
-    /// by [`Self::refresh_tool_registry`], so this needs a lock even though
-    /// `tool_executor` used to be a plain `JoinHandle` field.
-    tool_executor: Mutex<tokio::task::JoinHandle<()>>,
     // Kept alive for the process lifetime (a tokio task keeps running once
     // spawned regardless of whether its `JoinHandle` is dropped, but holding
     // these documents intent and leaves room for a future graceful shutdown).
+    #[allow(dead_code)]
+    tool_executor: tokio::task::JoinHandle<()>,
     #[allow(dead_code)]
     persistence_task: tokio::task::JoinHandle<()>,
     #[allow(dead_code)]
     refresh_task: tokio::task::JoinHandle<()>,
     #[allow(dead_code)]
     hibernate_watcher: tokio::task::JoinHandle<()>,
-    #[allow(dead_code)]
-    tool_registry_refresh_task: tokio::task::JoinHandle<()>,
 }
 
 impl SiteEngine {
@@ -150,11 +140,13 @@ impl SiteEngine {
         self.session_tool_specs.write().remove(session);
     }
 
-    /// Build and spawn the engine: the local tool registry (+ any MCP tool
-    /// identities already known across every user, see `mcp.rs`'s
-    /// static-registry limitation doc), the model catalog, the permission
-    /// policy, the tool executor, and the DB-backed persistence subscriber.
-    /// `llm_factory_override` is a test-only seam — see the module doc.
+    /// Build and spawn the engine: the local (built-in, non-MCP) tool
+    /// registry wrapped once in a `SharedRegistry`, the model catalog, the
+    /// permission policy, the tool executor, and the DB-backed persistence
+    /// subscriber. `SiteMcp` (below) registers/deregisters a user's MCP tools
+    /// into the same `SharedRegistry` live, on connect/change, so this never
+    /// needs to seed or rebuild it. `llm_factory_override` is a test-only
+    /// seam — see the module doc.
     pub async fn spawn(
         db: DatabaseConnection,
         ai_config: Arc<AiConfig>,
@@ -166,16 +158,15 @@ impl SiteEngine {
             .await
             .context("loading model catalog")?;
         let policy = SitePolicy::new(db.clone());
-        let mcp = SiteMcp::new(db.clone());
 
-        let mut registry = local_tool_registry(&db, &ws_hub, &serper_api_key);
-        // Captured *before* the MCP tools below are registered: this is the
-        // resolver's constant baseline (see `tool_spec_resolver` below), and
+        let registry = tools::registry(Arc::new(db.clone()), ws_hub.clone(), serper_api_key);
+        // The resolver's constant baseline (see `tool_spec_resolver` below):
         // it must never include another user's MCP tool identities, only the
         // per-session `SiteMcp::tool_specs_for_user` extra layered on top of
         // it does that (session-scoped, not process-global).
         let local_specs = registry.specs();
-        register_mcp_tools(&mut registry, &db, &mcp).await;
+        let shared_registry = registry.shared();
+        let mcp = SiteMcp::new(db.clone(), shared_registry.clone());
 
         let session_tool_specs: ToolSpecCache = Arc::new(RwLock::new(HashMap::new()));
         let initial_prompt = load_system_prompt(&db, &ai_config.system_prompt).await;
@@ -183,6 +174,7 @@ impl SiteEngine {
 
         let tool_spec_resolver: ToolSpecResolver = {
             let cache = session_tool_specs.clone();
+            let local_specs = local_specs.clone();
             Arc::new(move |session: &SessionId| {
                 let mut specs = local_specs.clone();
                 if let Some(extra) = cache.read().get(session) {
@@ -220,7 +212,7 @@ impl SiteEngine {
             .collect();
         let cfg = EngineConfig {
             llm_factory: llm_factory_override.unwrap_or_else(|| catalog.default_llm_factory()),
-            tool_specs: registry.specs(),
+            tool_specs: local_specs.clone(),
             profiles: profiles.clone(),
             profile_tool_specs,
             tool_spec_resolver: Some(tool_spec_resolver),
@@ -261,9 +253,9 @@ impl SiteEngine {
 
         let resolver: Arc<dyn PermissionResolver> = policy.clone();
         let grants: Arc<dyn GrantStore> = policy.clone();
-        let tool_executor = Mutex::new(tool_runner::spawn_tool_executor_with_policy(
+        let tool_executor = tool_runner::spawn_tool_executor_with_policy(
             &holly,
-            registry.shared(),
+            shared_registry,
             Arc::new(StdRwLock::new(profiles.clone())),
             Arc::new(StdRwLock::new(Arc::new(SkillRegistry::default()))),
             PermissionProfile::new(Permission::Allow),
@@ -272,7 +264,7 @@ impl SiteEngine {
             grants,
             Hooks::default(),
             None,
-        ));
+        );
 
         let sink: Arc<dyn entanglement_runtime::persistence::RecordSink> =
             Arc::new(DbSink::new(db.clone()));
@@ -284,44 +276,18 @@ impl SiteEngine {
             system_prompt_cache.clone(),
         );
 
-        // `Arc::new_cyclic` so the periodic refresh below can call back into
-        // `refresh_tool_registry` (a `&self` method, reused by the DB-gated
-        // test) without a chicken-and-egg dependency on the `Arc` it lives in.
-        Ok(Arc::new_cyclic(|weak: &Weak<SiteEngine>| {
-            let tool_registry_refresh_task = {
-                let weak = weak.clone();
-                let refresh_db = db.clone();
-                tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(TOOL_REGISTRY_REFRESH_INTERVAL);
-                    interval.tick().await; // freshly seeded above; skip the redundant rebuild
-                    loop {
-                        interval.tick().await;
-                        // `None` once the process is shutting down and this
-                        // `Arc` has no strong owners left — nothing left to
-                        // refresh, so let the loop (and the task) end.
-                        let Some(engine) = weak.upgrade() else { break };
-                        engine.refresh_tool_registry(&refresh_db).await;
-                    }
-                })
-            };
-
-            SiteEngine {
-                holly,
-                catalog,
-                policy,
-                mcp,
-                session_tool_specs,
-                system_prompt_cache,
-                live_sessions,
-                ws_hub,
-                serper_api_key,
-                profiles,
-                tool_executor,
-                persistence_task,
-                refresh_task,
-                hibernate_watcher,
-                tool_registry_refresh_task,
-            }
+        Ok(Arc::new(SiteEngine {
+            holly,
+            catalog,
+            policy,
+            mcp,
+            session_tool_specs,
+            system_prompt_cache,
+            live_sessions,
+            tool_executor,
+            persistence_task,
+            refresh_task,
+            hibernate_watcher,
         }))
     }
 
@@ -388,7 +354,4 @@ mod tests {
     // `evict_on_hibernate_or_end`'s own behavior (live-cache eviction, parent-
     // cache forgetting, and that it ignores unrelated events) is tested in
     // `session_tree.rs`, right next to the function itself.
-
-    // `refresh_tool_registry`'s DB-gated regression test lives in
-    // `tool_registry.rs`, right next to the method itself.
 }

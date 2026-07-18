@@ -6,25 +6,26 @@
 //! this one by user id directly, since the new engine's `SessionId` already
 //! encodes the user — see `crate::ai::engine::user_id_from_session`).
 //!
-//! ## The static-registry limitation (read before wiring live traffic)
+//! ## Live registration (issue #38)
 //!
-//! `entanglement_runtime::tool_runner::spawn_tool_executor_with_policy` takes
-//! its `ToolRegistry` **by value at spawn time** — unlike `profiles` (an
-//! `Arc<RwLock<..>>` a live watcher can swap), there is no live-reload seam
-//! for the dispatch registry in entanglement-runtime 0.1.0. So `engine.rs`
-//! seeds [`McpRoutedTool`] entries once, for every `"{server}__{tool}"`
-//! identity known across *all* users at `SiteEngine::spawn` time
-//! (`known_tool_names`); a server/tool a user adds afterward is advertised
-//! correctly per-session (the `tool_spec_resolver` cache is refreshed live),
-//! but calling it reports "not enabled for this user" until the registry is
-//! re-seeded. As of issue #28, `SiteEngine::refresh_tool_registry` re-seeds
-//! it (and safely swaps the executor for a fresh one) on a periodic timer —
-//! see its doc for why the swap order is abort-then-respawn — so a newly
-//! added server becomes usable within one refresh interval rather than
-//! needing a full process restart.
+//! 0.3's `entanglement_runtime::tool_runner::spawn_tool_executor_with_policy`
+//! takes its `ToolRegistry` wrapped in a `SharedRegistry`
+//! (`Arc<RwLock<ToolRegistry>>`) that can be mutated in place while the
+//! executor runs — `SiteEngine::spawn` wraps it once and hands `SiteMcp` the
+//! same handle. Every time [`routes_for_user`][SiteMcp::routes_for_user]
+//! (re)builds a user's routes — a fresh connect, whether from a cold cache or
+//! a TTL expiry — it registers each newly discovered `"{server}__{tool}"`
+//! identity into that registry (`register_routes`), so a server a user adds
+//! becomes dispatchable as soon as its routes are next resolved, with no
+//! executor restart or periodic rebuild needed.
+//! [`invalidate_user`][SiteMcp::invalidate_user] is the deregistering
+//! counterpart: it drops a user's cached routes and, for each identity no
+//! *other* currently-cached user still has, unregisters it too — call it
+//! after mcp-server CRUD (`ai::handlers::mcp_servers`) changes a row out from
+//! under the cache.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -32,9 +33,8 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use entanglement_core::{SessionId, ToolSpec};
 use entanglement_provider::ContentPart;
-use entanglement_runtime::Tool;
 use entanglement_runtime::mcp::{HttpClient, McpClient};
-use futures_util::future::join_all;
+use entanglement_runtime::{SharedRegistry, Tool};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde_json::Value;
 use std::borrow::Cow;
@@ -49,9 +49,7 @@ const CACHE_TTL: Duration = Duration::from_secs(60);
 /// `initialize` + `notifications/initialized`). Without this, a single
 /// unresponsive server can stall `routes_for_user` for as long as the
 /// underlying HTTP client's own per-request timeout (up to ~2 minutes across
-/// the handshake's two round-trips) — and `known_tool_names` (`SiteEngine::
-/// spawn`'s boot path, plus the periodic tool-registry refresh) waits on
-/// every user's servers, so one hung server would delay both. See issue #28.
+/// the handshake's two round-trips). See issue #28.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// `HttpClient::connect`, bounded to `timeout_duration` — see [`CONNECT_TIMEOUT`]'s
@@ -87,20 +85,63 @@ struct UserCacheEntry {
 pub struct SiteMcp {
     db: DatabaseConnection,
     cache: DashMap<i32, UserCacheEntry>,
+    registry: SharedRegistry,
+    /// Set to a weak handle on itself right after construction (the "weak
+    /// self" idiom) so [`register_routes`][Self::register_routes] can hand
+    /// `McpRoutedTool` the `Arc<SiteMcp>` it needs to route calls, from a
+    /// `&self` method — `routes_for_user` has no owned `Arc` of its own to
+    /// give it.
+    self_ref: OnceLock<Weak<SiteMcp>>,
 }
 
 impl SiteMcp {
-    pub fn new(db: DatabaseConnection) -> Arc<Self> {
-        Arc::new(SiteMcp {
+    pub fn new(db: DatabaseConnection, registry: SharedRegistry) -> Arc<Self> {
+        let mcp = Arc::new(SiteMcp {
             db,
             cache: DashMap::new(),
-        })
+            registry,
+            self_ref: OnceLock::new(),
+        });
+        let _ = mcp.self_ref.set(Arc::downgrade(&mcp));
+        mcp
     }
 
-    /// Drop `user_id`'s cached routes — call after the next phase's
-    /// user-MCP-server CRUD handlers change a row out from under this cache.
+    /// Drop `user_id`'s cached routes and deregister any of its
+    /// `"{server}__{tool}"` identities that no other currently-cached user
+    /// still has — the live-deregistration counterpart to
+    /// [`register_routes`][Self::register_routes]. Call after the mcp-server
+    /// CRUD handlers change a row out from under this cache.
     pub fn invalidate_user(&self, user_id: i32) {
-        self.cache.remove(&user_id);
+        let Some((_, removed)) = self.cache.remove(&user_id) else {
+            return;
+        };
+        let mut reg = self.registry.write().unwrap();
+        'names: for name in removed.routes.keys() {
+            for other in self.cache.iter() {
+                if other.routes.contains_key(name) {
+                    continue 'names;
+                }
+            }
+            reg.unregister(name);
+        }
+    }
+
+    /// Register `routes`' `"{server}__{tool}"` identities into the shared
+    /// dispatch registry (see the module doc) so each becomes callable the
+    /// moment it's discovered. Upsert-only — skips a name already registered
+    /// rather than replacing it, since multiple users can share an identity
+    /// string and dispatch always re-resolves the concrete route per calling
+    /// user anyway (`McpRoutedTool::run_for_session`).
+    fn register_routes(&self, routes: &HashMap<String, McpRoute>) {
+        let Some(mcp) = self.self_ref.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        let mut reg = self.registry.write().unwrap();
+        for name in routes.keys() {
+            if !reg.contains(name) {
+                reg.register(McpRoutedTool::new(name.clone(), mcp.clone()));
+            }
+        }
     }
 
     async fn routes_for_user(
@@ -158,6 +199,8 @@ impl SiteMcp {
             }
         }
 
+        self.register_routes(&routes);
+
         let routes = Arc::new(routes);
         self.cache.insert(
             user_id,
@@ -188,45 +231,6 @@ impl SiteMcp {
                 Vec::new()
             }
         }
-    }
-
-    /// Every `"{server}__{tool}"` identity known across every user with at
-    /// least one enabled MCP server — seeded into the `ToolRegistry` at
-    /// `SiteEngine::spawn` time and re-seeded on every later
-    /// `SiteEngine::refresh_tool_registry` (see the module doc's
-    /// static-registry limitation). Every user's servers are connected in
-    /// parallel, each bounded by [`CONNECT_TIMEOUT`], so this stays bounded
-    /// by the slowest single server rather than the sum of all of them —
-    /// load-bearing since this sits on `SiteEngine::spawn`'s boot path
-    /// (issue #28).
-    pub async fn known_tool_names(&self, db: &DatabaseConnection) -> Vec<String> {
-        let user_ids: Vec<i32> = match user_mcp_server::Entity::find()
-            .filter(user_mcp_server::Column::Enabled.eq(true))
-            .all(db)
-            .await
-        {
-            Ok(rows) => {
-                let mut ids: Vec<i32> = rows.iter().map(|r| r.user_id).collect();
-                ids.sort_unstable();
-                ids.dedup();
-                ids
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to list user_mcp_servers for tool seeding");
-                return Vec::new();
-            }
-        };
-        let results = join_all(
-            user_ids
-                .iter()
-                .map(|&user_id| self.routes_for_user(user_id)),
-        )
-        .await;
-        let mut names = std::collections::HashSet::new();
-        for routes in results.into_iter().flatten() {
-            names.extend(routes.keys().cloned());
-        }
-        names.into_iter().collect()
     }
 }
 
