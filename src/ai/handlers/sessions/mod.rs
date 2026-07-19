@@ -45,6 +45,8 @@ pub struct SessionSummary {
     /// default".
     pub temperature: Option<f32>,
     pub reasoning_effort: Option<String>,
+    pub max_output_tokens: Option<i32>,
+    pub thinking_budget_tokens: Option<i32>,
     pub agent_profile: String,
     pub created_at: String,
     pub updated_at: String,
@@ -75,6 +77,8 @@ impl From<&assistant_session::Model> for SessionSummary {
             enabled_mcp_server_ids: parse_id_array(&s.enabled_mcp_server_ids),
             temperature: s.temperature,
             reasoning_effort: s.reasoning_effort.clone(),
+            max_output_tokens: s.max_output_tokens,
+            thinking_budget_tokens: s.thinking_budget_tokens,
             agent_profile: s.agent_profile.clone(),
             created_at: s.created_at.to_string(),
             updated_at: s.updated_at.to_string(),

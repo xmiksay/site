@@ -9,12 +9,15 @@ pub struct Model {
     pub id: i32,
     /// Display name shown in the UI (unique).
     pub label: String,
-    /// `anthropic`, `ollama`, or `gemini`.
+    /// `anthropic`, `ollama`, `gemini`, or `openai` (the generic
+    /// OpenAI-compat kind — z.ai, OpenAI, any compatible proxy).
     pub kind: String,
-    /// API key for `anthropic` / `gemini`.
+    /// API key for `anthropic` / `gemini`; optional for `openai` (keyless
+    /// local proxies are valid — `None` sends no `Authorization` header).
     #[sea_orm(nullable)]
     pub api_key: Option<String>,
-    /// Base URL for `ollama`.
+    /// Base URL for `ollama` / `openai` (required for `openai`, no vendor
+    /// default).
     #[sea_orm(nullable)]
     pub base_url: Option<String>,
     /// Max simultaneously in-flight requests to this provider's endpoint

@@ -37,6 +37,8 @@ export const useAssistantStore = defineStore('assistant', () => {
     enabled_mcp_server_ids?: number[]
     temperature?: number | null
     reasoning_effort?: string | null
+    max_output_tokens?: number | null
+    thinking_budget_tokens?: number | null
     agent_profile?: string
   } = {}) {
     const created = await api<AssistantSession>('/api/assistant/sessions', {
@@ -60,6 +62,8 @@ export const useAssistantStore = defineStore('assistant', () => {
       enabled_mcp_server_ids?: number[]
       temperature?: number | null
       reasoning_effort?: string | null
+      max_output_tokens?: number | null
+      thinking_budget_tokens?: number | null
       agent_profile?: string
     },
   ) {

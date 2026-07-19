@@ -8,14 +8,18 @@
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
-use entanglement_core::{GenerationParams, InMsg, ReasoningEffort, SessionId};
+use entanglement_core::{GenerationParams, InMsg, SessionId};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+
+use generation::generation_overrides;
 
 use super::{SessionSummary, ids_to_json, load_owned, parse_id_array};
 use crate::ai::engine::{BUILD_PROFILE, SWITCHABLE_PROFILES, SiteEngine};
 use crate::entity::{assistant_session, llm_model, llm_provider, user_mcp_server};
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
+
+mod generation;
 
 #[derive(serde::Deserialize)]
 pub struct CreateSession {
@@ -33,6 +37,13 @@ pub struct CreateSession {
     /// `"low" | "medium" | "high"` (#42); omitted means "no override".
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Hard cap on tokens generated per turn (#42); omitted means "no
+    /// override, use the model's default".
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
+    /// Extended-thinking budget in tokens (#42); omitted means "no override".
+    #[serde(default)]
+    pub thinking_budget_tokens: Option<u32>,
     /// One of `SWITCHABLE_PROFILES` (#42); omitted defaults to `BUILD_PROFILE`.
     #[serde(default)]
     pub agent_profile: Option<String>,
@@ -51,24 +62,16 @@ pub struct UpdateSession {
     pub temperature: Option<f32>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Hard cap on tokens generated per turn (#42); omitted leaves the
+    /// session's current override untouched.
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
+    /// Extended-thinking budget in tokens (#42); omitted leaves the session's
+    /// current override untouched.
+    #[serde(default)]
+    pub thinking_budget_tokens: Option<u32>,
     #[serde(default)]
     pub agent_profile: Option<String>,
-}
-
-/// `raw` (`"low" | "medium" | "high"`) → `entanglement_provider::ReasoningEffort`
-/// — the API boundary's own validation, so an unrecognized string surfaces a
-/// `400` here rather than reaching the engine as an opaque `InMsg::SetGeneration`
-/// the wire-level `serde` deserialization would already have rejected anyway
-/// (kept explicit so the error message names the bad value).
-fn parse_reasoning_effort(raw: &str) -> ApiResult<ReasoningEffort> {
-    match raw {
-        "low" => Ok(ReasoningEffort::Low),
-        "medium" => Ok(ReasoningEffort::Medium),
-        "high" => Ok(ReasoningEffort::High),
-        other => Err(ApiError::BadRequest(format!(
-            "unknown reasoning_effort `{other}` (expected low|medium|high)"
-        ))),
-    }
 }
 
 /// `InMsg::SetAgent`'s target must be a profile this site actually registers
@@ -83,25 +86,6 @@ fn validate_agent_profile(name: &str) -> ApiResult<()> {
             "unknown agent profile `{name}` (expected one of {SWITCHABLE_PROFILES:?})"
         )))
     }
-}
-
-/// Build the partial `GenerationParams` for `InMsg::SetGeneration` from the
-/// two knobs this site's UI exposes — `None` when neither was given (nothing
-/// to send; a `create`/`update` with no generation input is not a generation
-/// change).
-fn generation_overrides(
-    temperature: Option<f32>,
-    reasoning_effort: Option<&str>,
-) -> ApiResult<Option<GenerationParams>> {
-    if temperature.is_none() && reasoning_effort.is_none() {
-        return Ok(None);
-    }
-    let reasoning_effort = reasoning_effort.map(parse_reasoning_effort).transpose()?;
-    Ok(Some(GenerationParams {
-        temperature,
-        reasoning_effort,
-        ..GenerationParams::default()
-    }))
 }
 
 /// Send whichever of `SetModel`/`SetAgent`/`SetGeneration` this call actually
@@ -166,7 +150,12 @@ pub async fn create(
         }
         None => BUILD_PROFILE.to_string(),
     };
-    let generation = generation_overrides(input.temperature, input.reasoning_effort.as_deref())?;
+    let generation = generation_overrides(
+        input.temperature,
+        input.reasoning_effort.as_deref(),
+        input.max_output_tokens,
+        input.thinking_budget_tokens,
+    )?;
 
     let mcp_ids = match input.enabled_mcp_server_ids {
         Some(ids) => filter_owned_mcp_ids(&state, user_id, &ids).await?,
@@ -187,6 +176,8 @@ pub async fn create(
         engine_session_id: Set(Some(session_id.0.clone())),
         temperature: Set(input.temperature),
         reasoning_effort: Set(input.reasoning_effort.clone()),
+        max_output_tokens: Set(input.max_output_tokens.map(|n| n as i32)),
+        thinking_budget_tokens: Set(input.thinking_budget_tokens.map(|n| n as i32)),
         agent_profile: Set(agent_profile.clone()),
         created_at: Set(now),
         updated_at: Set(now),
@@ -256,13 +247,23 @@ pub async fn update(
     // exactly the fields the caller sent (an omitted field keeps the row's
     // current value, same partial-update convention as `title`/`model_id`
     // above — SeaORM's `NotSet` leaves the column untouched).
-    let generation_changed =
-        generation_overrides(input.temperature, input.reasoning_effort.as_deref())?;
+    let generation_changed = generation_overrides(
+        input.temperature,
+        input.reasoning_effort.as_deref(),
+        input.max_output_tokens,
+        input.thinking_budget_tokens,
+    )?;
     if let Some(t) = input.temperature {
         active.temperature = Set(Some(t));
     }
     if let Some(r) = input.reasoning_effort {
         active.reasoning_effort = Set(Some(r));
+    }
+    if let Some(v) = input.max_output_tokens {
+        active.max_output_tokens = Set(Some(v as i32));
+    }
+    if let Some(v) = input.thinking_budget_tokens {
+        active.thinking_budget_tokens = Set(Some(v as i32));
     }
     active.updated_at = Set(chrono::Utc::now().fixed_offset());
     let updated = active.update(&state.db).await?;

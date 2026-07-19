@@ -99,6 +99,31 @@ fn gemini_with_api_key_builds_ok() {
 }
 
 #[test]
+fn openai_without_base_url_errs() {
+    let p = provider("openai", Some("key"), None);
+    let err = build_factory(&p, "model", &HttpClient::new())
+        .err()
+        .expect("expected build_factory to fail");
+    assert!(err.to_string().contains("no base_url"));
+}
+
+#[test]
+fn openai_with_base_url_and_no_key_builds_ok() {
+    let p = provider("openai", None, Some("http://example.internal:1234/v1"));
+    assert!(build_factory(&p, "model", &HttpClient::new()).is_ok());
+}
+
+#[test]
+fn openai_with_base_url_and_key_builds_ok() {
+    let p = provider(
+        "openai",
+        Some("key"),
+        Some("http://example.internal:1234/v1"),
+    );
+    assert!(build_factory(&p, "model", &HttpClient::new()).is_ok());
+}
+
+#[test]
 fn unsupported_kind_errs_naming_it() {
     let p = provider("mystery", None, None);
     let err = build_factory(&p, "model", &HttpClient::new())

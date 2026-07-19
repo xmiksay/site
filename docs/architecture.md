@@ -102,10 +102,13 @@ oauth_codes         id, code unique, client_id, user_id, redirect_uri,
 oauth_tokens        id, access_token unique, refresh_token unique,
                     client_id, user_id, expires_at, revoked
 
-llm_providers       id, label, kind (anthropic|ollama|gemini), api_key?, base_url?,
-                    concurrency? (m_026 — max in-flight requests to this
-                    endpoint), rpm? (m_026 — requests/minute budget); both
-                    `None` fall back to entanglement_provider's client
+llm_providers       id, label, kind (anthropic|ollama|gemini|openai), api_key?,
+                    base_url? (required for ollama/openai — openai is the
+                    generic OpenAI-compat kind covering z.ai/OpenAI/any
+                    compatible proxy, api_key optional for keyless local
+                    proxies), concurrency? (m_026 — max in-flight requests to
+                    this endpoint), rpm? (m_026 — requests/minute budget);
+                    both `None` fall back to entanglement_provider's client
                     defaults (ADR-0111)
 llm_models          id, provider_id, label, model wire-id, is_default,
                     context_window? (m_025 — tokens; fed to
@@ -116,7 +119,8 @@ assistant_sessions  id, user_id, title, provider/model snapshots, model_id?,
                     SessionId string, "u{user_id}:{uuid}"; nullable since
                     pre-engine-swap rows never get one back; repointed to a
                     fresh successor session id by a manual /compact, #40),
-                    temperature?, reasoning_effort? (m_027 — session-level
+                    temperature?, reasoning_effort? (m_027), max_output_tokens?,
+                    thinking_budget_tokens? (m_028) — session-level
                     `GenerationParams` overrides, #42; `None` leaves that knob
                     at the model's own default), agent_profile (m_027,
                     default `"build"` — the engine profile the session runs
@@ -413,30 +417,33 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   way out, plus `compact.rs`'s `sessions/{id}/compact`, #40 — see below),
   `mcp_servers.rs`, `providers.rs`, `models.rs` (`context_window` field,
   #40), `permissions.rs`.
-  - **Live model/generation/profile switching (`sessions/mod.rs`, #42):**
-    `POST /sessions` and `PATCH /sessions/{id}` accept optional
-    `temperature`/`reasoning_effort`/`agent_profile` alongside the existing
-    `model_id` — every one of them is a live, no-restart switch, not just a
-    row update. `create` sends `InMsg::SetModel` (as today), then, if given,
-    `InMsg::SetAgent` and `InMsg::SetGeneration` on the freshly-spawned
-    session. `update` diffs the incoming fields against the row, resumes the
-    session once (`ensure_live`, same guard the existing `model_id` path
-    already used) if *any* of `model_id`/`agent_profile`/
-    `temperature`/`reasoning_effort` changed, then sends `SetModel`/
-    `SetAgent`/`SetGeneration` for whichever actually did — in that order,
-    though it's not load-bearing here since neither built-in profile
+  - **Live model/generation/profile switching (`sessions/mod.rs`,
+    `sessions/mutate/generation.rs`, #42):** `POST /sessions` and
+    `PATCH /sessions/{id}` accept optional `temperature`/`reasoning_effort`/
+    `max_output_tokens`/`thinking_budget_tokens` (m_028) /`agent_profile`
+    alongside the existing `model_id` — every one of them is a live,
+    no-restart switch, not just a row update. `create` sends `InMsg::SetModel`
+    (as today), then, if given, `InMsg::SetAgent` and `InMsg::SetGeneration`
+    on the freshly-spawned session. `update` diffs the incoming fields
+    against the row, resumes the session once (`ensure_live`, same guard the
+    existing `model_id` path already used) if *any* of `model_id`/
+    `agent_profile`/`temperature`/`reasoning_effort`/`max_output_tokens`/
+    `thinking_budget_tokens` changed, then sends `SetModel`/`SetAgent`/
+    `SetGeneration` for whichever actually did — in that order, though it's
+    not load-bearing here since neither built-in profile
     (`engine/profiles.rs`) pins a model. `reasoning_effort` is validated
-    against `low|medium|high` and `agent_profile` against
-    `engine::SWITCHABLE_PROFILES` (`build`/`researcher`/`page-writer`) at the
-    API boundary — `entanglement_core` itself imposes no reachability gate on
-    a direct `SetAgent` — so an unknown value is rejected `400` before any DB
-    write. `temperature`/`reasoning_effort` persist onto the session row
-    verbatim as partial overrides (an omitted field leaves the column
-    untouched, SeaORM `NotSet`, mirroring `title`/`model_id`'s existing
-    convention) — the row is a display cache of the caller's intent, not the
-    engine's merged state; the engine's own `Session::generation` is the
-    source of truth `OutEvent::GenerationChanged` reports back over the WS
-    bridge.
+    against `low|medium|high`, `max_output_tokens`/`thinking_budget_tokens`
+    against `Some(0)` being rejected as meaningless, and `agent_profile`
+    against `engine::SWITCHABLE_PROFILES` (`build`/`researcher`/
+    `page-writer`) at the API boundary — `entanglement_core` itself imposes
+    no reachability gate on a direct `SetAgent` — so an unknown/invalid value
+    is rejected `400` before any DB write. All four generation knobs persist
+    onto the session row verbatim as partial overrides (an omitted field
+    leaves the column untouched, SeaORM `NotSet`, mirroring `title`/
+    `model_id`'s existing convention) — the row is a display cache of the
+    caller's intent, not the engine's merged state; the engine's own
+    `Session::generation` is the source of truth `OutEvent::GenerationChanged`
+    reports back over the WS bridge.
   - **Manual compaction (`handlers/sessions/compact.rs`, #40):** drives
     `entanglement_core`'s copy-on-write `InMsg::Oneshot { op: "compact" }` on
     the session's current (source) engine session, which reports an

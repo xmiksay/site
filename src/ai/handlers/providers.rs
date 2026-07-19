@@ -87,11 +87,25 @@ where
 
 fn validate_kind(kind: &str) -> Result<(), ApiError> {
     match kind {
-        "anthropic" | "ollama" | "gemini" => Ok(()),
+        "anthropic" | "ollama" | "gemini" | "openai" => Ok(()),
         other => Err(ApiError::BadRequest(format!(
-            "unsupported provider kind: {other} (expected anthropic/ollama/gemini)"
+            "unsupported provider kind: {other} (expected anthropic/ollama/gemini/openai)"
         ))),
     }
+}
+
+/// `ollama`/`openai` both require an explicit `base_url` — `ollama` because
+/// `build_factory` otherwise falls back to the local default endpoint (still
+/// requiring the field here keeps admin input explicit), `openai` because it's
+/// a generic OpenAI-compat kind with no vendor-specific default to fall back
+/// to (`src/ai/catalog.rs`'s `"openai"` arm has none on purpose).
+fn requires_base_url(kind: &str, base_url: Option<&str>) -> Result<(), ApiError> {
+    if matches!(kind, "ollama" | "openai") && base_url.map(str::is_empty).unwrap_or(true) {
+        return Err(ApiError::BadRequest(format!(
+            "{kind} provider requires base_url"
+        )));
+    }
+    Ok(())
 }
 
 /// A provided `concurrency`/`rpm` budget must be a positive integer — `0` or
@@ -147,17 +161,7 @@ pub async fn create(
             input.kind
         )));
     }
-    if input.kind == "ollama"
-        && input
-            .base_url
-            .as_deref()
-            .map(|s| s.is_empty())
-            .unwrap_or(true)
-    {
-        return Err(ApiError::BadRequest(
-            "ollama provider requires base_url".into(),
-        ));
-    }
+    requires_base_url(&input.kind, input.base_url.as_deref())?;
     validate_budget("concurrency", input.concurrency)?;
     validate_budget("rpm", input.rpm)?;
 
@@ -246,6 +250,28 @@ pub async fn delete_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_kind_accepts_openai() {
+        assert!(validate_kind("openai").is_ok());
+    }
+
+    #[test]
+    fn requires_base_url_rejects_openai_with_missing_or_empty_base_url() {
+        assert!(requires_base_url("openai", None).is_err());
+        assert!(requires_base_url("openai", Some("")).is_err());
+    }
+
+    #[test]
+    fn requires_base_url_accepts_openai_with_base_url() {
+        assert!(requires_base_url("openai", Some("http://example.internal:1234/v1")).is_ok());
+    }
+
+    #[test]
+    fn requires_base_url_ignores_other_kinds() {
+        assert!(requires_base_url("anthropic", None).is_ok());
+        assert!(requires_base_url("gemini", None).is_ok());
+    }
 
     #[test]
     fn validate_budget_rejects_zero_and_negative() {

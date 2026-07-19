@@ -59,12 +59,22 @@ async function toggleMcpServer(serverId: number, on: boolean) {
 const showGenPicker = ref(false)
 const tempDraft = ref('')
 const reasoningDraft = ref('')
+const maxOutputTokensDraft = ref('')
+const thinkingBudgetDraft = ref('')
 
 watch(showGenPicker, (open) => {
   if (open && assistant.current) {
     tempDraft.value =
       assistant.current.temperature != null ? String(assistant.current.temperature) : ''
     reasoningDraft.value = assistant.current.reasoning_effort ?? ''
+    maxOutputTokensDraft.value =
+      assistant.current.max_output_tokens != null
+        ? String(assistant.current.max_output_tokens)
+        : ''
+    thinkingBudgetDraft.value =
+      assistant.current.thinking_budget_tokens != null
+        ? String(assistant.current.thinking_budget_tokens)
+        : ''
   }
 })
 
@@ -83,6 +93,26 @@ async function applyReasoningEffort() {
   const effort = reasoningDraft.value
   if (effort === '' || effort === assistant.current.reasoning_effort) return
   await assistant.updateSession(assistant.current.id, { reasoning_effort: effort })
+  await assistant.loadSession(assistant.current.id)
+}
+
+async function applyMaxOutputTokens() {
+  if (!assistant.current) return
+  const trimmed = maxOutputTokensDraft.value.trim()
+  if (trimmed === '') return
+  const value = Number(trimmed)
+  if (Number.isNaN(value) || value === assistant.current.max_output_tokens) return
+  await assistant.updateSession(assistant.current.id, { max_output_tokens: value })
+  await assistant.loadSession(assistant.current.id)
+}
+
+async function applyThinkingBudget() {
+  if (!assistant.current) return
+  const trimmed = thinkingBudgetDraft.value.trim()
+  if (trimmed === '') return
+  const value = Number(trimmed)
+  if (Number.isNaN(value) || value === assistant.current.thinking_budget_tokens) return
+  await assistant.updateSession(assistant.current.id, { thinking_budget_tokens: value })
   await assistant.loadSession(assistant.current.id)
 }
 </script>
@@ -163,7 +193,7 @@ async function applyReasoningEffort() {
         type="button"
         class="border rounded px-2 py-1 text-xs hover:bg-gray-50"
         @click="showGenPicker = !showGenPicker"
-        title="Generation settings (temperature, reasoning effort)"
+        title="Generation settings (temperature, reasoning effort, max output tokens, thinking budget)"
       >
         Gen
       </button>
@@ -196,6 +226,30 @@ async function applyReasoningEffort() {
             <option value="medium">Medium</option>
             <option value="high">High</option>
           </select>
+        </label>
+        <label class="block text-xs">
+          <span class="block text-gray-500 mb-1">Max output tokens</span>
+          <input
+            type="number"
+            step="1"
+            min="1"
+            class="w-full border rounded px-2 py-1 text-xs"
+            v-model="maxOutputTokensDraft"
+            placeholder="default"
+            @blur="applyMaxOutputTokens"
+          />
+        </label>
+        <label class="block text-xs">
+          <span class="block text-gray-500 mb-1">Thinking budget (tokens)</span>
+          <input
+            type="number"
+            step="1"
+            min="1"
+            class="w-full border rounded px-2 py-1 text-xs"
+            v-model="thinkingBudgetDraft"
+            placeholder="default"
+            @blur="applyThinkingBudget"
+          />
         </label>
       </div>
     </div>

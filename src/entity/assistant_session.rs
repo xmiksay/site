@@ -33,6 +33,16 @@ pub struct Model {
     /// wire representation (m_027).
     #[sea_orm(nullable)]
     pub reasoning_effort: Option<String>,
+    /// Session-level override of `entanglement_provider::GenerationParams`'s
+    /// `max_output_tokens` — `None` leaves that knob at the model's own
+    /// default (m_028).
+    #[sea_orm(nullable)]
+    pub max_output_tokens: Option<i32>,
+    /// Session-level override of `entanglement_provider::GenerationParams`'s
+    /// `thinking_budget_tokens` — `None` leaves that knob at the model's own
+    /// default (m_028).
+    #[sea_orm(nullable)]
+    pub thinking_budget_tokens: Option<i32>,
     /// The engine agent profile this session runs under (`build` |
     /// `researcher` | `page-writer`, `src/ai/engine/profiles.rs`), mirrored via
     /// `InMsg::SetAgent` (m_027).
