@@ -3,76 +3,24 @@
 //! `SetAgent`/`SetGeneration`, #42). Split out of `mod.rs` to keep that file
 //! under the workspace's 400-line cap, mirroring how `turn.rs`/`compact.rs`
 //! already carry the other engine-talking handlers; `list`/`read`/
-//! `delete_one` stay in `mod.rs` since they never send an `InMsg`.
+//! `delete_one` stay in `mod.rs` since they never send an `InMsg`. `create`/
+//! `update` themselves are further split into their own files (this file's
+//! own 400-line cap) — this file keeps only what both share.
 
-use axum::Json;
-use axum::extract::{Extension, Path, State};
-use axum::http::StatusCode;
 use entanglement_core::{GenerationParams, InMsg, SessionId};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-use generation::generation_overrides;
-
-use super::{SessionSummary, ids_to_json, load_owned, parse_id_array};
-use crate::ai::engine::{BUILD_PROFILE, SWITCHABLE_PROFILES, SiteEngine};
-use crate::entity::{assistant_session, llm_model, llm_provider, user_mcp_server};
+use crate::ai::engine::{SWITCHABLE_PROFILES, SiteEngine};
+use crate::entity::{llm_model, llm_provider, user_mcp_server};
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
+mod create;
 mod generation;
+mod update;
 
-#[derive(serde::Deserialize)]
-pub struct CreateSession {
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub model_id: Option<i32>,
-    /// Optional explicit selection. When omitted, defaults to the user's
-    /// currently-enabled MCP servers.
-    #[serde(default)]
-    pub enabled_mcp_server_ids: Option<Vec<i32>>,
-    /// `#42` — omitted means "no override, use the model's default".
-    #[serde(default)]
-    pub temperature: Option<f32>,
-    /// `"low" | "medium" | "high"` (#42); omitted means "no override".
-    #[serde(default)]
-    pub reasoning_effort: Option<String>,
-    /// Hard cap on tokens generated per turn (#42); omitted means "no
-    /// override, use the model's default".
-    #[serde(default)]
-    pub max_output_tokens: Option<u32>,
-    /// Extended-thinking budget in tokens (#42); omitted means "no override".
-    #[serde(default)]
-    pub thinking_budget_tokens: Option<u32>,
-    /// One of `SWITCHABLE_PROFILES` (#42); omitted defaults to `BUILD_PROFILE`.
-    #[serde(default)]
-    pub agent_profile: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-pub struct UpdateSession {
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub model_id: Option<i32>,
-    #[serde(default)]
-    pub enabled_mcp_server_ids: Option<Vec<i32>>,
-    /// `#42` — omitted leaves the session's current override untouched.
-    #[serde(default)]
-    pub temperature: Option<f32>,
-    #[serde(default)]
-    pub reasoning_effort: Option<String>,
-    /// Hard cap on tokens generated per turn (#42); omitted leaves the
-    /// session's current override untouched.
-    #[serde(default)]
-    pub max_output_tokens: Option<u32>,
-    /// Extended-thinking budget in tokens (#42); omitted leaves the session's
-    /// current override untouched.
-    #[serde(default)]
-    pub thinking_budget_tokens: Option<u32>,
-    #[serde(default)]
-    pub agent_profile: Option<String>,
-}
+pub use create::create;
+pub use update::update;
 
 /// `InMsg::SetAgent`'s target must be a profile this site actually registers
 /// (`SWITCHABLE_PROFILES`) — `entanglement_core` itself imposes no reachability
@@ -132,186 +80,6 @@ async fn apply_live_changes(
             .map_err(|_| ApiError::Internal("engine inbox closed".into()))?;
     }
     Ok(())
-}
-
-pub async fn create(
-    State(state): State<AppState>,
-    Extension(user_id): Extension<i32>,
-    Json(input): Json<CreateSession>,
-) -> ApiResult<(StatusCode, Json<SessionSummary>)> {
-    let (model_row, provider_row) = resolve_model_with_provider(&state, input.model_id).await?;
-
-    // Validate before writing anything — an unknown profile/reasoning-effort
-    // string must not leave a half-configured session row behind.
-    let agent_profile = match &input.agent_profile {
-        Some(name) => {
-            validate_agent_profile(name)?;
-            name.clone()
-        }
-        None => BUILD_PROFILE.to_string(),
-    };
-    let generation = generation_overrides(
-        Some(&model_row),
-        input.temperature,
-        input.reasoning_effort.as_deref(),
-        input.max_output_tokens,
-        input.thinking_budget_tokens,
-    )?;
-
-    let mcp_ids = match input.enabled_mcp_server_ids {
-        Some(ids) => filter_owned_mcp_ids(&state, user_id, &ids).await?,
-        None => default_user_mcp_ids(&state, user_id).await?,
-    };
-
-    let session_id = SiteEngine::session_id_for_user(user_id);
-    let now = chrono::Utc::now().fixed_offset();
-    let title = input.title.unwrap_or_else(|| "New chat".into());
-
-    let saved = assistant_session::ActiveModel {
-        user_id: Set(user_id),
-        title: Set(title),
-        provider: Set(provider_row.kind.clone()),
-        model: Set(model_row.model.clone()),
-        model_id: Set(Some(model_row.id)),
-        enabled_mcp_server_ids: Set(ids_to_json(&mcp_ids)),
-        engine_session_id: Set(Some(session_id.0.clone())),
-        temperature: Set(input.temperature),
-        reasoning_effort: Set(input.reasoning_effort.clone()),
-        max_output_tokens: Set(input.max_output_tokens.map(|n| n as i32)),
-        thinking_budget_tokens: Set(input.thinking_budget_tokens.map(|n| n as i32)),
-        agent_profile: Set(agent_profile.clone()),
-        created_at: Set(now),
-        updated_at: Set(now),
-        ..Default::default()
-    }
-    .insert(&state.db)
-    .await?;
-
-    // A brand-new session id has no history to resume — sending its first
-    // `InMsg` lazily spawns it blank, which is exactly right here. Mark it
-    // live immediately so a later handler call in this process doesn't try
-    // (and fail) to `resume` an id the engine already has live.
-    let engine = &state.agent_engine;
-    apply_live_changes(
-        engine,
-        &session_id,
-        Some((provider_row.label.clone(), model_row.id.to_string())),
-        (agent_profile != BUILD_PROFILE).then_some(agent_profile),
-        generation,
-    )
-    .await?;
-    engine.mark_live(session_id.clone());
-
-    let specs = session_mcp_specs(&state, user_id, &mcp_ids).await;
-    engine.set_session_mcp_specs(session_id, specs);
-
-    Ok((StatusCode::CREATED, Json(SessionSummary::from(&saved))))
-}
-
-pub async fn update(
-    State(state): State<AppState>,
-    Extension(user_id): Extension<i32>,
-    Path(id): Path<i32>,
-    Json(input): Json<UpdateSession>,
-) -> ApiResult<Json<SessionSummary>> {
-    let session = load_owned(&state, user_id, id).await?;
-    let session_id = session.engine_session_id.clone().map(SessionId::new);
-    let existing_model_id = session.model_id;
-
-    let mut mcp_changed = false;
-    let mut new_mcp_ids: Vec<i32> = parse_id_array(&session.enabled_mcp_server_ids);
-    let mut model_changed: Option<(llm_model::Model, llm_provider::Model)> = None;
-    let mut agent_changed: Option<String> = None;
-    let mut active: assistant_session::ActiveModel = session.into();
-
-    if let Some(t) = input.title {
-        active.title = Set(t);
-    }
-    if let Some(mid) = input.model_id {
-        let (model_row, provider_row) = resolve_model_with_provider(&state, Some(mid)).await?;
-        active.model_id = Set(Some(mid));
-        active.provider = Set(provider_row.kind.clone());
-        active.model = Set(model_row.model.clone());
-        model_changed = Some((model_row, provider_row));
-    }
-    if let Some(ids) = input.enabled_mcp_server_ids {
-        let owned = filter_owned_mcp_ids(&state, user_id, &ids).await?;
-        active.enabled_mcp_server_ids = Set(ids_to_json(&owned));
-        new_mcp_ids = owned;
-        mcp_changed = true;
-    }
-    if let Some(name) = input.agent_profile {
-        validate_agent_profile(&name)?;
-        active.agent_profile = Set(name.clone());
-        agent_changed = Some(name);
-    }
-    // `generation_overrides` validates `reasoning_effort` up front; persist
-    // exactly the fields the caller sent (an omitted field keeps the row's
-    // current value, same partial-update convention as `title`/`model_id`
-    // above — SeaORM's `NotSet` leaves the column untouched).
-    //
-    // Gate against the model this update actually leaves the session on: a
-    // newly-selected `model_id` if this call changed it, otherwise the
-    // session's existing model — a `PATCH` may set generation knobs without
-    // touching `model_id` at all, so the *current* model still governs which
-    // knobs are legal (#53).
-    let generation_target = match &model_changed {
-        Some((m, _)) => Some(m.clone()),
-        None => match existing_model_id {
-            Some(mid) => llm_model::Entity::find_by_id(mid).one(&state.db).await?,
-            None => None,
-        },
-    };
-    let generation_changed = generation_overrides(
-        generation_target.as_ref(),
-        input.temperature,
-        input.reasoning_effort.as_deref(),
-        input.max_output_tokens,
-        input.thinking_budget_tokens,
-    )?;
-    if let Some(t) = input.temperature {
-        active.temperature = Set(Some(t));
-    }
-    if let Some(r) = input.reasoning_effort {
-        active.reasoning_effort = Set(Some(r));
-    }
-    if let Some(v) = input.max_output_tokens {
-        active.max_output_tokens = Set(Some(v as i32));
-    }
-    if let Some(v) = input.thinking_budget_tokens {
-        active.thinking_budget_tokens = Set(Some(v as i32));
-    }
-    active.updated_at = Set(chrono::Utc::now().fixed_offset());
-    let updated = active.update(&state.db).await?;
-
-    if let Some(session_id) = session_id {
-        let engine = &state.agent_engine;
-        if model_changed.is_some() || agent_changed.is_some() || generation_changed.is_some() {
-            // The session may have existing history this process hasn't
-            // resumed yet — resume first, or a live `SetModel`/`SetAgent`/
-            // `SetGeneration` would lazily spawn a blank in-memory session and
-            // permanently desync it from `assistant_events` (see
-            // `SiteEngine::ensure_live`'s doc).
-            engine
-                .ensure_live(&state.db, session_id.clone())
-                .await
-                .map_err(|e| ApiError::Internal(format!("failed to resume engine session: {e}")))?;
-            apply_live_changes(
-                engine,
-                &session_id,
-                model_changed.map(|(m, p)| (p.label, m.id.to_string())),
-                agent_changed,
-                generation_changed,
-            )
-            .await?;
-        }
-        if mcp_changed {
-            let specs = session_mcp_specs(&state, user_id, &new_mcp_ids).await;
-            engine.set_session_mcp_specs(session_id, specs);
-        }
-    }
-
-    Ok(Json(SessionSummary::from(&updated)))
 }
 
 async fn default_user_mcp_ids(state: &AppState, user_id: i32) -> ApiResult<Vec<i32>> {
