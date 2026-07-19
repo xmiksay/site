@@ -77,6 +77,28 @@ pub async fn compact(
         op: "compact".into(),
         args: serde_json::Value::Object(args),
     };
+
+    // Pin the source to the session's selected model *before* the summarize
+    // oneshot so the summary runs under that model, not the engine default. A
+    // resumed source (`ensure_live` above) carries no `SetModel` pin — the pin
+    // is never persisted/replayed (`persistence::resume_session`) — so without
+    // this the oneshot falls back to the engine default. Sent directly (not
+    // via `send_and_collect`'s `msgs`): `SetModel` emits no `Done`/`Error`, so
+    // folding it in would make `send_and_collect` wait on an obligation that
+    // never settles. With no live turn after a resume it applies immediately,
+    // before the oneshot turn. Resolved once and reused for the successor
+    // re-pin below.
+    let (model_row, provider_row) = resolve_model_with_provider(&state, session.model_id).await?;
+    engine
+        .holly
+        .send(InMsg::SetModel {
+            session: source.clone(),
+            provider: provider_row.label.clone(),
+            model: model_row.id.to_string(),
+        })
+        .await
+        .map_err(|_| ApiError::Internal("engine inbox closed".into()))?;
+
     let report = send_and_collect(engine, &source, vec![oneshot], Vec::new()).await?;
     if let Some(message) = turn_error(&report) {
         return Err(ApiError::BadRequest(message));
@@ -127,8 +149,8 @@ pub async fn compact(
     // settles — `entanglement_core::protocol::InMsg::SetModel`'s doc) since
     // `InMsg::Spawn` queues that turn immediately and there is no way to
     // land `SetModel` any earlier for an id that doesn't exist yet. Every
-    // turn from here on uses the session's actual pinned model.
-    let (model_row, provider_row) = resolve_model_with_provider(&state, session.model_id).await?;
+    // turn from here on uses the session's actual pinned model. Reuses the
+    // `(model_row, provider_row)` resolved for the source pre-pin above.
     engine
         .holly
         .send(InMsg::SetModel {

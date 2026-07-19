@@ -171,6 +171,19 @@ impl SiteCatalog {
         }
     }
 
+    /// A default factory that defers to the *current* default at call time,
+    /// so `refresh()` (provider/model CRUD) takes effect for un-pinned/resumed
+    /// sessions without a server restart. Unlike [`default_llm_factory`][Self::
+    /// default_llm_factory] — whose result the engine would otherwise freeze
+    /// into `EngineConfig.llm_factory` at spawn — this closure re-reads the
+    /// catalog every time the engine builds an LLM for a session that has no
+    /// `SetModel` pin yet (a fresh session's first turn, a `/compact` fork's
+    /// seed, a resumed session before replay re-pins it).
+    pub fn dynamic_default_factory(self: &Arc<Self>) -> LlmFactory {
+        let catalog = self.clone();
+        Arc::new(move || (catalog.default_llm_factory())())
+    }
+
     /// Build the `ModelResolver` closure for `EngineConfig.model_resolver`
     /// (live `InMsg::SetModel` support). See the module doc for the
     /// `provider`/`model` keying convention.
@@ -311,6 +324,24 @@ fn ollama_base_url(provider: &llm_provider::Model) -> String {
         .clone()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| OLLAMA_BASE.to_string())
+}
+
+#[cfg(test)]
+impl SiteCatalog {
+    /// Build a catalog with a pre-seeded `inner` and a disconnected DB — for
+    /// unit tests that exercise the in-memory lookup/factory paths (which never
+    /// touch `db`) without a live Postgres.
+    fn new_for_test(inner: CatalogInner) -> Self {
+        SiteCatalog {
+            db: DatabaseConnection::default(),
+            inner: RwLock::new(inner),
+        }
+    }
+
+    /// Rewrite the default model id the way `refresh()` would on an admin edit.
+    fn set_default_for_test(&self, id: Option<i32>) {
+        self.inner.write().default_model_id = id;
+    }
 }
 
 #[cfg(test)]
