@@ -11,7 +11,8 @@ src/
     site_migration.rs     # Migration CLI (up/down/fresh/status)
     site_cli.rs           # create-user, change-password
   routes/
-    public/               # catch-all, files, search, sitemap, tags
+    public/               # catch-all, images.rs (file serving), search,
+                          # sitemap, tags
     api/                  # auth, users, pages, tags, files, galleries,
                           # menu, tokens, markdown, paths — nests
                           # ai::handlers::router() at /assistant and
@@ -38,7 +39,7 @@ src/
     llm_{provider,model},
     assistant_{session,event},
     user_mcp_server, tool_permission
-  migration/              # m_001 … m_024
+  migration/              # m_001 … m_029
   ai/                     # config, handlers, tool_permissions, ws_bridge —
                           # plus the entanglement-core/-runtime engine
                           # adapters: engine, catalog, mcp, persistence,
@@ -221,8 +222,8 @@ The renderer recognizes exactly 8 HTML-tag directives — the `DIRECTIVE_NAMES` 
 | `<image>` | `path` \| `id` \| `hash` | `alt` | no |
 | `<gallery>` | `path` \| `id` | — | no |
 | `<fen>` | `path` \| `id` \| `hash` \| body | `size` (`small`/`large`, `sm`/`lg`) | yes |
-| `<pgn>` | `path` \| `id` \| `hash` \| body | `size`, `move` | yes |
-| `<mermaid>` | `path` \| `id` \| `hash` \| body | `theme`, `size` | yes |
+| `<pgn>` | `path` \| `id` \| `hash` \| body | `size` (`small`/`large`, `sm`/`lg`), `move` | yes |
+| `<mermaid>` | `path` \| `id` \| `hash` \| body | `theme`, `size` (`small`/`large`, `sm`/`lg`) | yes |
 | `<json>` | `path` \| `id` \| `hash` \| body | `query` (jq, required), `type` (`table`) | yes |
 
 A fenced code block with info string `mermaid` also renders as a diagram. **Single source of truth:** the human/AI-facing description is the `MARKDOWN_EXTENSIONS_DOC` const (`src/markdown/mod.rs`), reused verbatim by the MCP server instructions, the AI system prompt, and the local `site_tools` description — edit it there, not in each surface.
@@ -370,7 +371,7 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   entanglement 0.3.0's `resume` cascades over the *whole* spawn sub-tree
   itself (ADR-0112), re-materializing a child that was still live as of where
   the log stopped, so no per-child loop is needed here.
-  `handlers/sessions/turn.rs`'s `send_and_collect` builds its own response
+  `handlers/sessions/turn/collect.rs`'s `send_and_collect` builds its own response
   from the `LogRecord`s it just observed rather than re-reading
   `assistant_events` after a turn settles — reassessed for #43 and unrelated
   to `entanglement_runtime`'s own guarantees either way: it exists solely
