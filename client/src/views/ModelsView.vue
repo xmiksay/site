@@ -37,6 +37,7 @@ const presets: Record<string, string[]> = {
   ],
   gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
   ollama: ['llama3.1', 'qwen2.5-coder', 'mistral'],
+  openai: ['glm-5.2', 'glm-4.6', 'gpt-4o', 'gpt-4o-mini'],
 }
 
 function suggestionsFor(providerId: number): string[] {

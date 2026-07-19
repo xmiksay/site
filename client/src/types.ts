@@ -102,6 +102,10 @@ export interface AssistantSession {
   temperature: number | null
   /** `"low" | "medium" | "high"`, or `null` = no override. */
   reasoning_effort: string | null
+  /** Hard cap on tokens generated this turn; `null` = model default. */
+  max_output_tokens: number | null
+  /** Extended-thinking budget in tokens (Anthropic/Gemini only — silently ignored by OpenAI-wire models); `null` = model default. */
+  thinking_budget_tokens: number | null
   /** `"build" | "researcher" | "page-writer"`; never null, defaults to `"build"`. */
   agent_profile: string
   created_at: string
@@ -218,7 +222,7 @@ export interface McpServerListResponse {
 export interface LlmProvider {
   id: number
   label: string
-  kind: 'anthropic' | 'ollama' | 'gemini' | string
+  kind: 'anthropic' | 'ollama' | 'gemini' | 'openai' | string
   base_url: string | null
   has_api_key: boolean
   /** Max concurrent in-flight requests for this provider; `null` uses the engine default (3). */

@@ -306,6 +306,66 @@ async fn update_session_generation_merges_partial_overrides() {
         other => panic!("expected GenerationChanged, got {other:?}"),
     }
 
+    // Third partial override: max_output_tokens/thinking_budget_tokens only.
+    // Same merge contract as above — temperature/reasoning_effort from the
+    // earlier calls must survive.
+    let (status, updated) = send(
+        &fx.app,
+        "PATCH",
+        &format!("/assistant/sessions/{session_db_id}"),
+        &fx.cookie,
+        Some(json!({ "max_output_tokens": 512, "thinking_budget_tokens": 1024 })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "update max_output_tokens/thinking_budget_tokens: {updated}"
+    );
+    assert_eq!(
+        updated["temperature"],
+        json!(0.3),
+        "temperature must survive a max_output_tokens/thinking_budget_tokens-only patch"
+    );
+    assert_eq!(updated["reasoning_effort"], json!("high"));
+    assert_eq!(updated["max_output_tokens"], json!(512));
+    assert_eq!(updated["thinking_budget_tokens"], json!(1024));
+
+    let ev = wait_for(&mut sub, &session_id, |ev| {
+        matches!(ev, OutEvent::GenerationChanged { .. })
+    })
+    .await;
+    match ev {
+        OutEvent::GenerationChanged { generation, .. } => {
+            assert_eq!(
+                generation.temperature,
+                Some(0.3),
+                "GenerationChanged must report the merged, full params, not just this call's override"
+            );
+            assert_eq!(generation.reasoning_effort, Some(ReasoningEffort::High));
+            assert_eq!(generation.max_output_tokens, Some(512));
+            assert_eq!(generation.thinking_budget_tokens, Some(1024));
+        }
+        other => panic!("expected GenerationChanged, got {other:?}"),
+    }
+
+    // A zero value for either new field must be rejected with 400 before
+    // anything is written (mirrors the unknown reasoning_effort/agent_profile
+    // 400s already covered elsewhere in this file).
+    let (status, rejected) = send(
+        &fx.app,
+        "PATCH",
+        &format!("/assistant/sessions/{session_db_id}"),
+        &fx.cookie,
+        Some(json!({ "max_output_tokens": 0 })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::BAD_REQUEST,
+        "max_output_tokens: 0 must be rejected: {rejected}"
+    );
+
     cleanup(&fx, session_db_id).await;
 }
 

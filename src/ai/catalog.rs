@@ -266,6 +266,24 @@ fn build_factory(
                 http.clone(),
             ))
         }
+        "openai" => {
+            let base_url = provider
+                .base_url
+                .clone()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("openai provider '{}' has no base_url", provider.label)
+                })?;
+            Ok(openai_factory(
+                base_url,
+                provider.api_key.clone().filter(|s| !s.is_empty()),
+                default_model,
+                rpm,
+                concurrency,
+                None,
+                http.clone(),
+            ))
+        }
         other => anyhow::bail!("provider kind not supported: {other}"),
     }
 }

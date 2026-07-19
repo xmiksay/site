@@ -52,12 +52,31 @@ const presets: Record<string, { needsKey: boolean; needsUrl: boolean; defaultUrl
   anthropic: { needsKey: true, needsUrl: false },
   gemini: { needsKey: true, needsUrl: false },
   ollama: { needsKey: false, needsUrl: true, defaultUrl: 'http://localhost:11434' },
+  // `needsKey: false` here means "optional", not "must be empty" — unlike ollama, an
+  // openai-kind endpoint may still require a key (z.ai, hosted OpenAI, ...), so
+  // `onKindChange` must not auto-clear it the way it does for ollama.
+  openai: { needsKey: false, needsUrl: true },
+}
+
+// Quick-fill options for the openai kind's base_url — it covers several vendors,
+// so there's no single `presets.defaultUrl` the way ollama has.
+const openaiPresets = [
+  { label: 'z.ai (Coding Plan)', url: 'https://api.z.ai/api/coding/paas/v4' },
+  { label: 'z.ai (General / pay-as-you-go)', url: 'https://api.z.ai/api/paas/v4' },
+  { label: 'OpenAI', url: 'https://api.openai.com/v1' },
+  { label: 'Custom', url: 'custom' },
+]
+
+function applyOpenaiPreset(url: string) {
+  draft.value.base_url = url === 'custom' ? '' : url
 }
 
 function onKindChange() {
   const p = presets[draft.value.kind]
   if (!p) return
-  if (!p.needsKey) draft.value.api_key = ''
+  // Only ollama is structurally keyless; openai's `needsKey: false` just means
+  // "not required", so switching into it must not wipe a key the user already typed.
+  if (draft.value.kind === 'ollama') draft.value.api_key = ''
   if (!p.needsUrl) draft.value.base_url = ''
   if (p.needsUrl && !draft.value.base_url) draft.value.base_url = p.defaultUrl ?? ''
 }
@@ -104,9 +123,12 @@ function cancelEdit() {
 async function saveEdit(p: LlmProvider) {
   if (!editDraft.value.label.trim()) return
   const patch: Partial<LlmProviderInput> = { label: editDraft.value.label.trim() }
-  if (p.kind === 'ollama') {
+  // openai carries both a base_url and an optional api_key, so unlike the old
+  // ollama-vs-everyone-else split these can't be mutually exclusive branches.
+  if (p.kind === 'ollama' || p.kind === 'openai') {
     patch.base_url = editDraft.value.base_url.trim()
-  } else if (editDraft.value.api_key_dirty) {
+  }
+  if (editDraft.value.api_key_dirty) {
     patch.api_key = editDraft.value.api_key
   }
   // Only touched fields ride the patch; a blank/zeroed input while dirty
@@ -162,14 +184,27 @@ async function remove(id: number, label: string) {
             <option value="anthropic">Anthropic (Claude)</option>
             <option value="gemini">Google Gemini</option>
             <option value="ollama">Ollama (local)</option>
+            <option value="openai">OpenAI-compatible (incl. z.ai)</option>
           </select>
         </div>
       </div>
+      <div v-if="draft.kind === 'openai'">
+        <label class="block text-sm font-medium mb-1">Preset</label>
+        <select
+          class="w-full border rounded p-2 text-sm"
+          @change="applyOpenaiPreset(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">Choose a preset…</option>
+          <option v-for="opt in openaiPresets" :key="opt.url" :value="opt.url">{{ opt.label }}</option>
+        </select>
+      </div>
       <div v-if="draft.kind !== 'ollama'">
-        <label class="block text-sm font-medium mb-1">API key</label>
+        <label class="block text-sm font-medium mb-1">
+          API key<span v-if="!presets[draft.kind]?.needsKey"> (optional)</span>
+        </label>
         <input v-model="draft.api_key" type="password" class="w-full border rounded p-2 text-sm font-mono" placeholder="sk-..." />
       </div>
-      <div v-if="draft.kind === 'ollama'">
+      <div v-if="draft.kind === 'ollama' || draft.kind === 'openai'">
         <label class="block text-sm font-medium mb-1">Base URL</label>
         <input v-model="draft.base_url" class="w-full border rounded p-2 text-sm font-mono" placeholder="http://localhost:11434" />
       </div>
@@ -220,6 +255,11 @@ async function remove(id: number, label: string) {
               <td class="px-4 py-2 text-gray-600">{{ p.kind }}</td>
               <td class="px-4 py-2 text-gray-600">
                 <span v-if="p.kind === 'ollama'">{{ p.base_url || '—' }}</span>
+                <span v-else-if="p.kind === 'openai'">
+                  {{ p.base_url || '—' }} ·
+                  <span v-if="p.has_api_key">key set</span>
+                  <span v-else class="text-amber-600">no key</span>
+                </span>
                 <span v-else-if="p.has_api_key">key set</span>
                 <span v-else class="text-red-600">no api key</span>
               </td>
@@ -254,11 +294,11 @@ async function remove(id: number, label: string) {
                     <label class="block text-xs font-medium mb-1">Label</label>
                     <input v-model="editDraft.label" class="w-full border rounded p-2 text-sm" />
                   </div>
-                  <div v-if="p.kind === 'ollama'">
+                  <div v-if="p.kind === 'ollama' || p.kind === 'openai'">
                     <label class="block text-xs font-medium mb-1">Base URL</label>
                     <input v-model="editDraft.base_url" class="w-full border rounded p-2 text-sm font-mono" />
                   </div>
-                  <div v-else>
+                  <div v-if="p.kind !== 'ollama'">
                     <label class="block text-xs font-medium mb-1">API key</label>
                     <input
                       v-model="editDraft.api_key"
