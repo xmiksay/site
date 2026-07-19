@@ -82,8 +82,11 @@ impl Tool for CreateFileTool {
         "Upload a file at the given path. Provide either base64-encoded `data_base64` (binary, \
          e.g. images) or raw `data` (text, e.g. PGN/FEN/SVG). Optional `mimetype` (defaults to \
          application/octet-stream) and `description`. The display title is derived from the \
-         basename of the path. Returns the new file id — reference it in markdown via \
-         `<image id=\"ID\">` for images or `<gallery id=\"ID\">` for galleries."
+         basename of the path. Returns the new file id plus an `embed` hint for the matching \
+         markdown directive: `<image id=\"ID\">` for images, `<pgn id=\"ID\">` for `.pgn`, \
+         `<mermaid id=\"ID\">` for `.mmd`, `<fen id=\"ID\">` for `.fen`, `<json id=\"ID\" \
+         query=\"...\">` for `.json`, `<file id=\"ID\">` otherwise (or `<gallery id=\"ID\">` \
+         to group several files)."
     }
     fn schema(&self) -> Value {
         json!({
@@ -142,6 +145,11 @@ impl Tool for CreateFileTool {
             Err(e) => return Err(anyhow::anyhow!(e).context("creating file")),
         };
         let summary = broadcast::file_created(&self.ws_hub, &created.model, created.has_thumbnail);
+        let embed = files_repo::embed_hint(
+            &created.model.path,
+            &created.model.mimetype,
+            created.model.id,
+        );
 
         Ok(ok_json(json!({
             "id": created.model.id,
@@ -150,7 +158,7 @@ impl Tool for CreateFileTool {
             "mimetype": created.model.mimetype,
             "size_bytes": created.model.size_bytes,
             "has_thumbnail": created.has_thumbnail,
-            "embed": format!("<image id=\"{}\">", created.model.id),
+            "embed": embed,
         })))
     }
 }

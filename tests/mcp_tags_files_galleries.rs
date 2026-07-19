@@ -86,6 +86,10 @@ async fn list_files_create_file_and_read_file_round_trip() {
     let created_json = tool_json(&created);
     assert_eq!(created_json["path"], json!(path));
     assert_eq!(created_json["mimetype"], json!("text/plain"));
+    assert_eq!(
+        created_json["embed"],
+        json!(format!("<file id=\"{}\">", created_json["id"]))
+    );
     let file_id = created_json["id"].as_i64().expect("created file id");
 
     let read = call_tool(&fx.app, &fx.token, "read_file", json!({ "id": file_id })).await;
@@ -96,6 +100,38 @@ async fn list_files_create_file_and_read_file_round_trip() {
 
     let deleted = call_tool(&fx.app, &fx.token, "delete_file", json!({ "id": file_id })).await;
     assert!(!is_tool_error(&deleted), "delete_file failed: {deleted:?}");
+
+    cleanup_user(&fx.db, fx.user_id).await;
+}
+
+#[tokio::test]
+async fn create_file_hints_the_type_specific_embed_directive() {
+    let Some(db_url) = test_db_url().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let fx = setup(&db_url, "files-embed-hint").await;
+    let path = format!("mcp-test-game-{}.pgn", uuid::Uuid::new_v4());
+    let payload = base64::engine::general_purpose::STANDARD.encode(b"1. e4 e5 2. Nf3 Nc6");
+
+    let created = call_tool(
+        &fx.app,
+        &fx.token,
+        "create_file",
+        json!({ "path": path, "data_base64": payload }),
+    )
+    .await;
+    assert!(!is_tool_error(&created), "create_file failed: {created:?}");
+    let created_json = tool_json(&created);
+    let file_id = created_json["id"].as_i64().expect("created file id");
+    assert_eq!(
+        created_json["embed"],
+        json!(format!("<pgn id=\"{file_id}\">")),
+        "a .pgn upload must hint <pgn>, not <image> (issue #55)"
+    );
+
+    let deleted = call_tool(&fx.app, &fx.token, "delete_file", json!({ "id": file_id })).await;
+    assert!(!is_tool_error(&deleted));
 
     cleanup_user(&fx.db, fx.user_id).await;
 }
