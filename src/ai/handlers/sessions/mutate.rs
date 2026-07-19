@@ -151,6 +151,7 @@ pub async fn create(
         None => BUILD_PROFILE.to_string(),
     };
     let generation = generation_overrides(
+        Some(&model_row),
         input.temperature,
         input.reasoning_effort.as_deref(),
         input.max_output_tokens,
@@ -215,6 +216,7 @@ pub async fn update(
 ) -> ApiResult<Json<SessionSummary>> {
     let session = load_owned(&state, user_id, id).await?;
     let session_id = session.engine_session_id.clone().map(SessionId::new);
+    let existing_model_id = session.model_id;
 
     let mut mcp_changed = false;
     let mut new_mcp_ids: Vec<i32> = parse_id_array(&session.enabled_mcp_server_ids);
@@ -247,7 +249,21 @@ pub async fn update(
     // exactly the fields the caller sent (an omitted field keeps the row's
     // current value, same partial-update convention as `title`/`model_id`
     // above — SeaORM's `NotSet` leaves the column untouched).
+    //
+    // Gate against the model this update actually leaves the session on: a
+    // newly-selected `model_id` if this call changed it, otherwise the
+    // session's existing model — a `PATCH` may set generation knobs without
+    // touching `model_id` at all, so the *current* model still governs which
+    // knobs are legal (#53).
+    let generation_target = match &model_changed {
+        Some((m, _)) => Some(m.clone()),
+        None => match existing_model_id {
+            Some(mid) => llm_model::Entity::find_by_id(mid).one(&state.db).await?,
+            None => None,
+        },
+    };
     let generation_changed = generation_overrides(
+        generation_target.as_ref(),
         input.temperature,
         input.reasoning_effort.as_deref(),
         input.max_output_tokens,

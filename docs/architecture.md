@@ -112,7 +112,11 @@ llm_providers       id, label, kind (anthropic|ollama|gemini|openai), api_key?,
                     defaults (ADR-0111)
 llm_models          id, provider_id, label, model wire-id, is_default,
                     context_window? (m_025 — tokens; fed to
-                    ResolvedModel::context_window, #40)
+                    ResolvedModel::context_window, #40), supports_temperature
+                    (default true), supports_reasoning_effort, supports_thinking
+                    (both default false; m_029) — gate the matching
+                    GenerationParams knob per model so an unsupported one is
+                    rejected with 400 instead of reaching the provider, #53
 assistant_sessions  id, user_id, title, provider/model snapshots, model_id?,
                     enabled_mcp_server_ids JSONB (m_018),
                     engine_session_id? unique (m_023 — the engine's root

@@ -5,12 +5,21 @@
 // the project's line cap — reads `assistant.current` straight from the store
 // like the other assistant components (`LiveToolCallList`, etc.) do, rather
 // than threading it through props.
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAssistantStore } from '../stores/assistant'
 
 const assistant = useAssistantStore()
 
 const emit = defineEmits<{ compacted: [] }>()
+
+// Resolves the row for the session's selected model so the Gen popover can
+// hide knobs the model doesn't accept (#53) — the backend now rejects PATCHes
+// setting e.g. reasoning_effort on a model without that capability. Falls
+// back to showing everything when the model can't be resolved yet, since
+// gating without capability data is worse than not gating.
+const currentModel = computed(() =>
+  assistant.models.find((m) => m.id === assistant.current?.model_id),
+)
 
 async function changeModel(modelId: number) {
   if (!assistant.current) return
@@ -201,7 +210,7 @@ async function applyThinkingBudget() {
         v-if="showGenPicker"
         class="absolute right-0 mt-1 w-56 bg-white border rounded shadow-lg z-10 p-2 space-y-2"
       >
-        <label class="block text-xs">
+        <label v-if="currentModel?.supports_temperature ?? true" class="block text-xs">
           <span class="block text-gray-500 mb-1">Temperature</span>
           <input
             type="number"
@@ -214,7 +223,7 @@ async function applyThinkingBudget() {
             @blur="applyTemperature"
           />
         </label>
-        <label class="block text-xs">
+        <label v-if="currentModel?.supports_reasoning_effort ?? true" class="block text-xs">
           <span class="block text-gray-500 mb-1">Reasoning effort</span>
           <select
             class="w-full border rounded px-2 py-1 text-xs"
@@ -239,7 +248,7 @@ async function applyThinkingBudget() {
             @blur="applyMaxOutputTokens"
           />
         </label>
-        <label class="block text-xs">
+        <label v-if="currentModel?.supports_thinking ?? true" class="block text-xs">
           <span class="block text-gray-500 mb-1">Thinking budget (tokens)</span>
           <input
             type="number"
@@ -251,6 +260,16 @@ async function applyThinkingBudget() {
             @blur="applyThinkingBudget"
           />
         </label>
+        <p
+          v-if="
+            !(currentModel?.supports_temperature ?? true) &&
+            !(currentModel?.supports_reasoning_effort ?? true) &&
+            !(currentModel?.supports_thinking ?? true)
+          "
+          class="text-xs text-gray-400"
+        >
+          This model has no adjustable generation knobs besides max output tokens.
+        </p>
       </div>
     </div>
   </div>
