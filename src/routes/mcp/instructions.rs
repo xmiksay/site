@@ -162,7 +162,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                         "properties": {
                             "path": { "type": "string", "description": "Filename or path used as the file's identifier (must be unique)." },
                             "description": { "type": "string" },
-                            "mimetype": { "type": "string", "description": "e.g. image/png. Defaults to application/octet-stream." },
+                            "mimetype": { "type": "string", "description": "e.g. image/png. Inferred from the path's extension when omitted." },
                             "data_base64": { "type": "string", "description": "Base64-encoded binary contents." },
                             "data": { "type": "string", "description": "Raw text contents (alternative to data_base64)." }
                         },

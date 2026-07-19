@@ -95,7 +95,7 @@ pub(super) async fn tool_create_file(
     let mimetype = args
         .mimetype
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "application/octet-stream".to_string());
+        .unwrap_or_else(|| files_repo::infer_mimetype(&args.path));
 
     match files_repo::create_file(
         &state.db,

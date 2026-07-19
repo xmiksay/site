@@ -80,13 +80,13 @@ impl Tool for CreateFileTool {
     }
     fn description(&self) -> &str {
         "Upload a file at the given path. Provide either base64-encoded `data_base64` (binary, \
-         e.g. images) or raw `data` (text, e.g. PGN/FEN/SVG). Optional `mimetype` (defaults to \
-         application/octet-stream) and `description`. The display title is derived from the \
-         basename of the path. Returns the new file id plus an `embed` hint for the matching \
-         markdown directive: `<image id=\"ID\">` for images, `<pgn id=\"ID\">` for `.pgn`, \
-         `<mermaid id=\"ID\">` for `.mmd`, `<fen id=\"ID\">` for `.fen`, `<json id=\"ID\" \
-         query=\"...\">` for `.json`, `<file id=\"ID\">` otherwise (or `<gallery id=\"ID\">` \
-         to group several files)."
+         e.g. images) or raw `data` (text, e.g. PGN/FEN/SVG). Optional `mimetype` (inferred \
+         from the path's extension when omitted) and `description`. The display title is \
+         derived from the basename of the path. Returns the new file id plus an `embed` hint \
+         for the matching markdown directive: `<image id=\"ID\">` for images, `<pgn id=\"ID\">` \
+         for `.pgn`, `<mermaid id=\"ID\">` for `.mmd`, `<fen id=\"ID\">` for `.fen`, `<json \
+         id=\"ID\" query=\"...\">` for `.json`, `<file id=\"ID\">` otherwise (or `<gallery \
+         id=\"ID\">` to group several files)."
     }
     fn schema(&self) -> Value {
         json!({
@@ -116,7 +116,7 @@ impl Tool for CreateFileTool {
         let mimetype = arg_str(&args, "mimetype")
             .map(String::from)
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "application/octet-stream".to_string());
+            .unwrap_or_else(|| files_repo::infer_mimetype(&path));
 
         let data = match (arg_str(&args, "data_base64"), arg_str(&args, "data")) {
             (Some(b64), _) if !b64.is_empty() => base64::engine::general_purpose::STANDARD
