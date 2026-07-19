@@ -242,13 +242,19 @@ async fn dispatch_directive(d: &Directive, ctx: &mut RenderCtx<'_>) -> String {
 /// markdown parser runs. The surrounding blank lines keep markdown from
 /// re-parsing the HTML.
 ///
-/// Constraint: the rendered HTML must contain no whitespace-only lines, since
-/// CommonMark closes a raw-HTML block at the first blank line — any content
-/// after would be re-parsed and `<` chars would be escaped. Template authors
-/// must use whitespace-stripping markers (`{%- ... %}`) around control tags
-/// inside loops.
+/// CommonMark closes a raw-HTML block at the first whitespace-only line —
+/// content after would be re-parsed and `<` chars escaped, silently truncating
+/// the directive's output (e.g. a mermaid SVG that happens to emit a blank
+/// line between elements). Rather than rely on every template author
+/// remembering whitespace-stripping markers (`{%- ... %}`), strip
+/// whitespace-only lines here so the invariant always holds.
 pub(super) fn block(html: String) -> String {
-    format!("\n\n{html}\n\n")
+    let stripped: String = html
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("\n\n{stripped}\n\n")
 }
 
 /// Render a `markdown/<name>.html` template; on failure, log and emit a

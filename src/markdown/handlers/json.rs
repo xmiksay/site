@@ -7,7 +7,7 @@ use super::super::RenderCtx;
 use super::super::directives::Directive;
 use super::super::lookup::{fetch_file, lookup_label, parse_file_lookup};
 use super::super::renderer::{block, render_md_template};
-use super::{inline_body, read_text_blob};
+use super::{TextBlob, inline_body, read_text_blob};
 
 // ---------------------------------------------------------------------------
 // <json path|id|hash=... query=".rows[]" type="table">  — file-backed, or
@@ -38,10 +38,18 @@ pub(in crate::markdown) async fn directive_json(d: &Directive, ctx: &mut RenderC
                     lookup_label(&lookup)
                 );
             };
-            let Some(src) = read_text_blob(ctx.db, &file.hash).await else {
-                return format!("\n\n*[json: blob for \"{}\" missing]*\n\n", file.path);
-            };
-            src
+            match read_text_blob(ctx.db, &file.hash).await {
+                TextBlob::Found(src) => src,
+                TextBlob::NotFound => {
+                    return format!("\n\n*[json: file \"{}\" not found]*\n\n", file.path);
+                }
+                TextBlob::InvalidUtf8 => {
+                    return format!(
+                        "\n\n*[json: \"{}\": stored file is not valid UTF-8 text]*\n\n",
+                        file.path
+                    );
+                }
+            }
         }
     };
 

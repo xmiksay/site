@@ -37,7 +37,27 @@ pub(super) fn parse_size_class(d: &Directive) -> &'static str {
     }
 }
 
-pub(super) async fn read_text_blob(db: &DatabaseConnection, hash: &str) -> Option<String> {
-    let bytes = files::read_blob(db, hash).await.ok().flatten()?;
-    String::from_utf8(bytes).ok()
+/// Result of loading a stored file's bytes as text, distinguishing "the blob
+/// row is gone" from "the blob exists but isn't valid UTF-8" — the two used to
+/// collapse into the same `[... missing]` message, making a corrupt/binary
+/// upload indistinguishable from a deleted one.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum TextBlob {
+    Found(String),
+    NotFound,
+    InvalidUtf8,
+}
+
+pub(super) async fn read_text_blob(db: &DatabaseConnection, hash: &str) -> TextBlob {
+    decode_text_blob(files::read_blob(db, hash).await.ok().flatten())
+}
+
+pub(super) fn decode_text_blob(bytes: Option<Vec<u8>>) -> TextBlob {
+    match bytes {
+        Some(bytes) => match String::from_utf8(bytes) {
+            Ok(s) => TextBlob::Found(s),
+            Err(_) => TextBlob::InvalidUtf8,
+        },
+        None => TextBlob::NotFound,
+    }
 }
