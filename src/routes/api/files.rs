@@ -87,16 +87,7 @@ pub async fn upload(
                 description = if v.is_empty() { None } else { Some(v) };
             }
             "file" => {
-                let ct = field
-                    .content_type()
-                    .map(|s| s.to_string())
-                    .or_else(|| {
-                        field
-                            .file_name()
-                            .and_then(|n| mime_guess::from_path(n).first().map(|m| m.to_string()))
-                    })
-                    .unwrap_or_else(|| "application/octet-stream".to_string());
-                mimetype = Some(ct);
+                mimetype = field.content_type().map(|s| s.to_string());
                 let bytes = field
                     .bytes()
                     .await
@@ -109,7 +100,9 @@ pub async fn upload(
 
     let data = data.ok_or_else(|| ApiError::BadRequest("missing file field".into()))?;
     let path = path.ok_or_else(|| ApiError::BadRequest("missing path field".into()))?;
-    let mimetype = mimetype.unwrap_or_else(|| "application/octet-stream".to_string());
+    let mimetype = mimetype
+        .filter(|m| !m.is_empty() && m != "application/octet-stream")
+        .unwrap_or_else(|| files_repo::infer_mimetype(&path));
 
     let created = files_repo::create_file(
         &state.db,

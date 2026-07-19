@@ -111,6 +111,23 @@ pub fn title_from_path(path: &str) -> String {
         .to_string()
 }
 
+/// Infer a mimetype from a path's extension when none was supplied by the
+/// caller. The site's own directive formats (`.pgn`/`.mmd`/`.fen`) get
+/// explicit mimetypes since `mime_guess` doesn't know them; everything else
+/// falls back to `mime_guess`, then `application/octet-stream`.
+pub fn infer_mimetype(path: &str) -> String {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "pgn" => "application/x-chess-pgn".to_string(),
+        "mmd" | "mermaid" => "text/vnd.mermaid".to_string(),
+        "fen" => "text/plain".to_string(),
+        _ => mime_guess::from_path(path)
+            .first()
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string()),
+    }
+}
+
 /// Suggest the markdown directive to embed a newly created file, based on its
 /// extension/mimetype — `<image>` only makes sense for `image/*` blobs; a
 /// `.pgn`/`.mmd`/`.fen`/`.json` file needs its own type-specific directive to
@@ -273,7 +290,7 @@ pub async fn delete_by_id(db: &DatabaseConnection, id: i32) -> Result<bool, DbEr
 
 #[cfg(test)]
 mod tests {
-    use super::embed_hint;
+    use super::{embed_hint, infer_mimetype};
 
     #[test]
     fn pgn_hints_pgn_directive() {
@@ -326,5 +343,30 @@ mod tests {
             embed_hint("game.pgn", "application/octet-stream", 7),
             r#"<pgn id="7">"#
         );
+    }
+
+    #[test]
+    fn infers_pgn_mimetype() {
+        assert_eq!(infer_mimetype("game.pgn"), "application/x-chess-pgn");
+    }
+
+    #[test]
+    fn infers_mermaid_mimetype() {
+        assert_eq!(infer_mimetype("diagrams/flow.mmd"), "text/vnd.mermaid");
+    }
+
+    #[test]
+    fn infers_fen_mimetype() {
+        assert_eq!(infer_mimetype("opening.fen"), "text/plain");
+    }
+
+    #[test]
+    fn infers_known_extension_via_mime_guess() {
+        assert_eq!(infer_mimetype("photo.jpg"), "image/jpeg");
+    }
+
+    #[test]
+    fn falls_back_to_octet_stream_for_unknown_extension() {
+        assert_eq!(infer_mimetype("blob.bin"), "application/octet-stream");
     }
 }

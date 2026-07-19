@@ -137,6 +137,38 @@ async fn create_file_hints_the_type_specific_embed_directive() {
 }
 
 #[tokio::test]
+async fn create_file_without_mimetype_infers_it_from_the_extension() {
+    let Some(db_url) = test_db_url().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let fx = setup(&db_url, "files-infer-mimetype").await;
+    let path = format!("mcp-test-game-{}.pgn", uuid::Uuid::new_v4());
+    let payload = base64::engine::general_purpose::STANDARD.encode(b"1. e4 e5 2. Nf3 Nc6");
+
+    let created = call_tool(
+        &fx.app,
+        &fx.token,
+        "create_file",
+        json!({ "path": path, "data_base64": payload }),
+    )
+    .await;
+    assert!(!is_tool_error(&created), "create_file failed: {created:?}");
+    let created_json = tool_json(&created);
+    assert_eq!(
+        created_json["mimetype"],
+        json!("application/x-chess-pgn"),
+        "a .pgn upload without an explicit mimetype must not land as octet-stream (issue #57)"
+    );
+    let file_id = created_json["id"].as_i64().expect("created file id");
+
+    let deleted = call_tool(&fx.app, &fx.token, "delete_file", json!({ "id": file_id })).await;
+    assert!(!is_tool_error(&deleted));
+
+    cleanup_user(&fx.db, fx.user_id).await;
+}
+
+#[tokio::test]
 async fn list_galleries_and_create_gallery_round_trip() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
