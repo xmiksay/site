@@ -171,22 +171,28 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                 },
                 {
                     "name": "read_file",
-                    "description": "Read file metadata by ID (does not return binary contents).",
+                    "description": "Read file metadata by ID. Set `include_content` to also return the file's contents — only populated for text-ish mimetypes (plain text, JSON, PGN, mermaid, FEN); other mimetypes get `content: null` with a `content_error` note instead of binary data.",
                     "inputSchema": {
                         "type": "object",
-                        "properties": { "id": { "type": "integer" } },
+                        "properties": {
+                            "id": { "type": "integer" },
+                            "include_content": { "type": "boolean", "description": "Also return the file's text contents when the mimetype is text-ish (default false)." }
+                        },
                         "required": ["id"]
                     }
                 },
                 {
                     "name": "update_file",
-                    "description": "Update file metadata (path, description). The display title is always derived from the path basename.",
+                    "description": "Update a file's metadata (path, description) and/or replace its contents. Provide either `data_base64` (binary, e.g. images) or `data` (raw text, e.g. PGN/FEN/SVG) to replace the stored bytes, with an optional `mimetype` to match; a thumbnail is regenerated automatically when content changes and the file is an image. The display title is always derived from the path basename.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "id": { "type": "integer" },
                             "path": { "type": "string" },
-                            "description": { "type": "string" }
+                            "description": { "type": "string" },
+                            "mimetype": { "type": "string", "description": "New mimetype, e.g. image/png. Only applied when provided." },
+                            "data_base64": { "type": "string", "description": "Base64-encoded binary contents to replace the file with." },
+                            "data": { "type": "string", "description": "Raw text contents to replace the file with (alternative to data_base64)." }
                         },
                         "required": ["id", "path"]
                     }

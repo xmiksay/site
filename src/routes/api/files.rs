@@ -130,6 +130,8 @@ pub async fn update(
         FileMetaUpdate {
             path: input.path,
             description: input.description,
+            mimetype: None,
+            data: None,
         },
     )
     .await?

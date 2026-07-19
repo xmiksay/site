@@ -199,7 +199,7 @@ section below).
 
 - **Pages:** `read_page`, `edit_page`, `search_pages` (prefix/tag/q + limit/offset), `delete_page`
 - **Tags:** `list_tags`, `read_tag`, `create_tag`, `update_tag`, `delete_tag`
-- **Files:** `list_files`, `create_file`, `read_file`, `update_file`, `delete_file`
+- **Files:** `list_files`, `create_file`, `read_file` (`include_content` returns the file's text for text-ish mimetypes — plain text, JSON, PGN, mermaid, FEN, per `files_repo::is_text_content`), `update_file` (path/description, plus optional `mimetype`/`data`/`data_base64` to replace the stored bytes in place — issue #56, so a bad upload is repairable instead of unrecoverable), `delete_file`
 - **Galleries:** `list_galleries`, `read_gallery`, `create_gallery`, `update_gallery`, `delete_gallery`
 
 Server instructions are assembled by `server_instructions()` = `SERVER_INSTRUCTIONS_HEADER` + `MARKDOWN_EXTENSIONS_DOC` (`src/routes/mcp/instructions.rs`, `src/markdown/mod.rs`). If a private `CLAUDE` page exists (editable via admin UI / MCP), its markdown replaces the assembled default entirely — so keep that page in sync with the code. Tool/parameter descriptions live in `handle_tools_list()` (`src/routes/mcp/instructions.rs`).
@@ -394,8 +394,10 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
 - `tools/` — the built-in (non-MCP) tool vocabulary, ported to
   `entanglement_runtime::tools::Tool`. A curated subset of the site API (not
   full CRUD): pages `read`/`search`/`edit`/`delete`, tags `list`/`create`,
-  files `list`/`create`, galleries `list`/`create`/`update`, plus
-  `web_search`/`web_fetch`.
+  files `list`/`create`/`read`/`update`/`delete` (issue #56 — `update_file`
+  can replace a file's stored bytes/mimetype in place, and `read_file` can
+  return its text content, so a bad upload is repairable instead of orphaned),
+  galleries `list`/`create`/`update`, plus `web_search`/`web_fetch`.
 - `tool_permissions.rs` — the allow/deny/prompt rule evaluator `policy.rs`
   wraps (#39): a user's rows (ordered `priority DESC, id DESC` — ascending
   precedence, so `PermissionProfile::resolve_scoped`'s last-match-wins
