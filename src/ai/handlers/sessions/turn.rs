@@ -17,6 +17,13 @@
 //! onto the *previously persisted* prefix read before sending — `DbSink`
 //! will persist this same tail independently, so the next request's DB read
 //! sees it with this handler never having written anything itself.
+//!
+//! Reassessed for #43: this is purely a site-side artifact of `DbSink`'s own
+//! async-writer design (`src/ai/persistence.rs`), not something
+//! `entanglement_runtime`'s own persistence tap or resume guarantees (ADR-
+//! 0112/0113) have any bearing on — those govern what a *replayed* log looks
+//! like, not when this site's DB writer catches up to a broadcast it already
+//! tapped. The local fold stays.
 
 mod collect;
 

@@ -19,7 +19,9 @@
 //! directly). `entanglement_runtime::tool_runner`'s own reply text for every
 //! failure path (`Deny`, reject, spawn-mask, unknown tool, or the executor's
 //! `tool `{name}` failed: {e}` wrap) always starts with `"tool `"` or
-//! `"unknown tool:"` — [`looks_like_tool_error`] keys off that. It's a
+//! `"unknown tool:"` — [`looks_like_tool_error`] keys off that. Re-checked
+//! against entanglement-core 0.3.0 (issue #43): `ToolOutput` still carries
+//! only `output`/`content`, no error flag, so the heuristic stands. It's a
 //! heuristic, not a structural guarantee; a future engine release exposing a
 //! real flag on `ToolOutput` should replace it.
 //!
@@ -312,11 +314,11 @@ fn fold(records: &[&LogRecord]) -> Vec<ProjectedMessage> {
 /// unknown-tool/execution-error) starts with one of these two prefixes — see
 /// the module doc for why this is a heuristic, not a structural flag.
 ///
-/// Deliberately deferred (issue #28): entanglement-core 0.1.0's
-/// `OutEvent::ToolOutput` carries no error flag to key off instead, and this
-/// crate is a versioned dependency (not vendored in this repo), so there is
-/// nothing to change here yet. Replace with a structural flag the day
-/// `ToolOutput` grows one.
+/// Deliberately deferred (originally issue #28, re-investigated for 0.3.0 by
+/// #43): `OutEvent::ToolOutput` still carries no error flag to key off
+/// instead, and this crate is a versioned dependency (not vendored in this
+/// repo), so there is nothing to change here yet. Replace with a structural
+/// flag the day `ToolOutput` grows one.
 fn looks_like_tool_error(output: &str) -> bool {
     output.starts_with("tool `") || output.starts_with("unknown tool:")
 }
