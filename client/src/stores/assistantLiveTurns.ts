@@ -84,6 +84,26 @@ export function useLiveTurns(
     return call
   }
 
+  // The one place a live tool call is ever marked settled — called both from
+  // the `tool_output` WS handlers below (with the real output) and directly
+  // from the Approve/Reject buttons the instant their POST resolves
+  // (`stores/assistant.ts`'s `resolveLiveToolCall`), so the UI doesn't sit on
+  // `requires_approval` waiting for a WS round-trip that may be delayed or
+  // dropped (the stuck-approval bug). Calling it twice for the same id is
+  // harmless: the click path calls it with no `output` (just clears the
+  // buttons), and the `tool_output` event that eventually arrives calls it
+  // again with the real output, filling that in — never a hard requirement,
+  // never a double-processing error.
+  function resolveLiveToolCall(callId: string, agentSessionId?: string, output?: string) {
+    const calls = agentSessionId
+      ? liveSubAgents.value[agentSessionId]?.toolCalls
+      : live.value?.toolCalls
+    const call = calls?.find((c) => c.id === callId)
+    if (!call) return
+    call.status = 'done'
+    if (output !== undefined) call.output = output
+  }
+
   // A sub-agent's events carry the same envelope kinds as the root's own
   // turn, just tagged with `agent_session_id` instead of belonging to the
   // root — route them into `liveSubAgents` instead of `ensureLive`/`live`.
@@ -130,16 +150,9 @@ export function useLiveTurns(
         call.status = event === 'tool_request' ? 'requires_approval' : 'pending'
         break
       }
-      case 'tool_output': {
-        const call = liveSubAgents.value[agentSessionId]?.toolCalls.find(
-          (c) => c.id === payload.request_id,
-        )
-        if (call) {
-          call.status = 'done'
-          call.output = payload.output
-        }
+      case 'tool_output':
+        resolveLiveToolCall(payload.request_id, agentSessionId, payload.output)
         break
-      }
       case 'done':
       case 'error':
       case 'session_hibernated':
@@ -199,14 +212,9 @@ export function useLiveTurns(
         call.status = envelope.event === 'tool_request' ? 'requires_approval' : 'pending'
         break
       }
-      case 'tool_output': {
-        const call = live.value?.toolCalls.find((c) => c.id === payload.request_id)
-        if (call) {
-          call.status = 'done'
-          call.output = payload.output
-        }
+      case 'tool_output':
+        resolveLiveToolCall(payload.request_id, undefined, payload.output)
         break
-      }
       case 'done':
       case 'error':
       case 'session_hibernated':
@@ -250,5 +258,5 @@ export function useLiveTurns(
     }
   })
 
-  return { live, liveSubAgents }
+  return { live, liveSubAgents, resolveLiveToolCall }
 }

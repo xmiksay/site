@@ -26,19 +26,21 @@
 //! tapped. The local fold stays.
 
 mod collect;
+mod routing;
 
 pub(in crate::ai::handlers::sessions) use collect::send_and_collect;
+pub use routing::session_for_call_awaiting;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
-use entanglement_core::{ApprovalScope, InMsg, OutEvent, SessionId};
-use entanglement_runtime::session_store::{LogPayload, LogRecord};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
+use entanglement_core::{ApprovalScope, InMsg, SessionId};
+use entanglement_runtime::session_store::LogRecord;
+use routing::{open_tool_requests, remember_deny};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 
 use super::{MessageView, SessionDetail, SessionSummary, load_owned};
 use crate::ai::projection::{self, ProjectedMessage};
-use crate::ai::tool_permissions::Effect;
-use crate::entity::{assistant_event, assistant_session, tool_permission};
+use crate::entity::{assistant_event, assistant_session};
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
@@ -82,7 +84,7 @@ pub async fn send_message(
     let prior = load_prior_records(&state.db, &session_id).await?;
 
     let msg = InMsg::prompt(session_id.clone(), input.text);
-    let collected = collect::send_and_collect(engine, &session_id, vec![msg]).await?;
+    let collected = collect::send_and_collect(engine, &session_id, vec![msg], Vec::new()).await?;
 
     build_detail(&state, id, prior, collected).await
 }
@@ -131,12 +133,17 @@ pub async fn approve(
         // `researcher`/`page-writer` sub-agent's own pending tool call lives
         // under its *child* session, not this root, so an `Approve`/`Reject`
         // addressed to the root would silently resolve nothing and leave the
-        // child parked forever. Route each decision to whichever session
-        // actually owns the call (falling back to the root if the call isn't
-        // found in `prior` yet — the same eventual-consistency assumption
-        // `remember_deny`'s tool-name lookup below already makes).
+        // child parked forever (a documented, safe engine-side no-op that
+        // then hangs `send_and_collect` for the full `TURN_TIMEOUT`). Route
+        // each decision to whichever session actually owns the call, retrying
+        // a fresh DB read a few times if `prior` doesn't have it yet (closes
+        // `DbSink`'s async-writer TOCTOU window — see
+        // `session_for_call_awaiting`'s doc) and failing fast with a `4xx` if
+        // the call never shows up: silently falling back to the root here
+        // used to work by accident for a root-level call, but was actively
+        // wrong for a stale/unknown/misrouted sub-agent call id.
         let target_session =
-            session_for_call(&prior, &d.tool_call_id).unwrap_or_else(|| session_id.clone());
+            session_for_call_awaiting(&state.db, &session_id, &prior, &d.tool_call_id).await?;
         if d.approve {
             msgs.push(InMsg::Approve {
                 session: target_session,
@@ -159,83 +166,9 @@ pub async fn approve(
         }
     }
 
-    let collected = collect::send_and_collect(engine, &session_id, msgs).await?;
+    let extra_pending = open_tool_requests(&prior);
+    let collected = collect::send_and_collect(engine, &session_id, msgs, extra_pending).await?;
     build_detail(&state, id, prior, collected).await
-}
-
-/// Persist an "always deny" `tool_permissions` rule for the tool behind
-/// `call_id`, resolved by scanning `prior` for the `ToolCall`/`ToolRequest`
-/// record that named it. Mirrors the old approve-handler's direct insert;
-/// only reachable for `!approve && remember`, since an *allowed* `Always`
-/// grant is recorded by the engine itself (see `approve`'s doc).
-async fn remember_deny(
-    state: &AppState,
-    user_id: i32,
-    prior: &[LogRecord],
-    call_id: &str,
-) -> ApiResult<()> {
-    let Some(tool_name) = tool_name_for_call(prior, call_id) else {
-        tracing::warn!(
-            call_id,
-            "remembered deny: no matching tool call in history; skipping"
-        );
-        return Ok(());
-    };
-    let existing = tool_permission::Entity::find()
-        .filter(tool_permission::Column::UserId.eq(user_id))
-        .filter(tool_permission::Column::Name.eq(tool_name.as_str()))
-        .one(&state.db)
-        .await?;
-    match existing {
-        Some(row) if row.effect == Effect::Deny.as_str() => {}
-        Some(row) => {
-            let mut active: tool_permission::ActiveModel = row.into();
-            active.effect = Set(Effect::Deny.as_str().to_string());
-            active.update(&state.db).await?;
-        }
-        None => {
-            tool_permission::ActiveModel {
-                user_id: Set(user_id),
-                name: Set(tool_name),
-                effect: Set(Effect::Deny.as_str().to_string()),
-                priority: Set(100),
-                ..Default::default()
-            }
-            .insert(&state.db)
-            .await?;
-        }
-    }
-    Ok(())
-}
-
-fn tool_name_for_call(records: &[LogRecord], call_id: &str) -> Option<String> {
-    records.iter().rev().find_map(|r| match &r.payload {
-        LogPayload::Out(OutEvent::ToolCall {
-            request_id, tool, ..
-        })
-        | LogPayload::Out(OutEvent::ToolRequest {
-            request_id, tool, ..
-        }) if request_id == call_id => Some(tool.clone()),
-        _ => None,
-    })
-}
-
-/// The session that actually owns `call_id`'s pending tool call — a
-/// sub-agent (#17) child's own session if that's where the matching
-/// `ToolCall`/`ToolRequest` record lives, otherwise `None` (the caller falls
-/// back to the root). `PendingDecisions` keys a waiter by `(session,
-/// request_id)`, so `approve`/`reject` must address the exact session that
-/// registered it.
-fn session_for_call(records: &[LogRecord], call_id: &str) -> Option<SessionId> {
-    records.iter().rev().find_map(|r| match &r.payload {
-        LogPayload::Out(OutEvent::ToolCall { request_id, .. })
-        | LogPayload::Out(OutEvent::ToolRequest { request_id, .. })
-            if request_id == call_id =>
-        {
-            Some(r.session.clone())
-        }
-        _ => None,
-    })
 }
 
 pub(super) fn engine_session_id(session: &assistant_session::Model) -> ApiResult<SessionId> {

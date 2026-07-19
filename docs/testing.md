@@ -188,3 +188,16 @@ executes on every PR rather than self-skipping.
     generic `SessionStarted` watcher re-populates the cache from that
     cascade — proving the sub-agent replays correctly without ever having
     lived in this process before.
+  - `tests/assistant_session_subagent_approval_race.rs` — the stuck-approval
+    fix: `approve`'s `session_for_call_awaiting` (`src/ai/handlers/sessions/
+    turn.rs`) must retry a fresh DB read before routing a decision to a
+    sub-agent child, then fail fast (`400`) if the `tool_call_id` never
+    shows up at all, instead of silently falling back to the root and
+    hanging for the 180s `TURN_TIMEOUT`. The race itself needs deterministic
+    control over when a `ToolRequest` row lands in `assistant_events`
+    relative to the lookup — not reproducible on demand through a live turn
+    over the real HTTP API — so this fabricates a "not there yet" `prior`
+    directly (like the resume test above) and calls
+    `session_for_call_awaiting` itself, re-exported `pub` from `sessions::`
+    solely for this test to reach; the unknown-id case needs no such
+    contrivance and drives the real `POST .../approve` endpoint.

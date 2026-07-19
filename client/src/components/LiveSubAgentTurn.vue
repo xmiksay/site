@@ -31,6 +31,7 @@ const emit = defineEmits<{ decided: [] }>()
       <LiveToolCallList
         :tool-calls="turn.toolCalls"
         :session-id="turn.dbSessionId"
+        :agent-session-id="turn.agentSessionId"
         @decided="emit('decided')"
       />
     </div>

@@ -29,40 +29,23 @@
 //!
 //! `assistant_events` rows for a whole session tree (a root plus any
 //! `researcher`/`page-writer` children it spawned) all share one
-//! `root_session_id` — see `persistence.rs` — so `records` here can contain
-//! several sessions' worth of interleaved rows. [`project`] partitions them
-//! by `LogRecord.session`: the root's own records fold exactly as before;
-//! every other session's records are a sub-agent's own turn sequence, folded
-//! independently by the same logic and attached as a `sub_agents` array on
-//! the assistant message whose `tool_calls` include the `agent_spawn`/`agent`
-//! call that produced it.
-//!
-//! Matching a child to its spawning call is **structural, not positional**:
-//! `InMsg::Spawn` is never persisted (see `entanglement_runtime::persistence`'s
-//! doc), so there is no direct field linking a `ToolCall` to the `SessionId`
-//! it produced — but `entanglement_runtime::subagent::launch`'s own immediate
-//! reply *text* always names the child (`"...agent_id: {uuid}..."` for a
-//! detached `agent_spawn`, `` "sub-agent `{uuid}` completed..." `` for a
-//! blocking `agent`), and that reply is exactly the `tool_result` paired with
-//! *that* call's own `tool_call_id`. [`extract_child_session_id`] recovers the
-//! uuid from it, so matching only ever considers a call's own result — never
-//! an earlier or later message's — and correctly handles both a spawn that
-//! never actually started a session (a refusal's text contains no valid uuid,
-//! so it's skipped rather than stealing a later real child) and two spawns in
-//! the same batch racing to start concurrently (each still names its own
-//! child, so log order between them is irrelevant). A child's profile name
-//! comes from its own `SessionStarted` record; its task/prompt comes from the
-//! spawning call's own `args.prompt`, so the client never has to re-derive
-//! either by position.
+//! `root_session_id` — so `records` here can contain several sessions' worth
+//! of interleaved rows. [`project`] partitions them by `LogRecord.session`
+//! and hands every non-root session's records to [`subagents`] to fold and
+//! attach — see that module's doc for the structural (not positional)
+//! child-to-spawning-call matching.
 
 #[cfg(test)]
 mod tests;
+
+mod subagents;
 
 use std::collections::{HashMap, HashSet};
 
 use entanglement_core::{InMsg, OutEvent, SessionId};
 use entanglement_runtime::session_store::{LogPayload, LogRecord};
 use serde_json::{Value, json};
+use subagents::attach_sub_agents;
 
 /// One projected client-visible message: `{"role": ..., "content": ...}`.
 #[derive(Debug, Clone, PartialEq)]
@@ -105,129 +88,6 @@ pub fn project(records: &[LogRecord]) -> Vec<ProjectedMessage> {
         attach_sub_agents(&mut out, child_records, &child_profiles);
     }
     out
-}
-
-/// Attach each spawned sub-agent's projection to the specific
-/// `agent_spawn`/`agent` call that produced it — see the module doc for why
-/// this is a structural match (via [`extract_child_session_id`]), not a
-/// positional one. Any child whose owning call couldn't be matched (a
-/// gap-truncated resume dropped the spawning message, say) is still
-/// surfaced — appended as a turn-less trailing message rather than silently
-/// dropped.
-fn attach_sub_agents(
-    out: &mut Vec<ProjectedMessage>,
-    mut child_records: HashMap<SessionId, Vec<&LogRecord>>,
-    child_profiles: &HashMap<SessionId, String>,
-) {
-    // Every tool_call_id's own result text, so a spawn call's match is scoped
-    // to *its* result regardless of how far away it landed in `out`. Owned
-    // (not borrowed) so the loop below can mutate `out` at the same time.
-    let outputs: HashMap<String, String> = out
-        .iter()
-        .filter(|m| m.role == "tool_result")
-        .filter_map(|m| {
-            Some((
-                m.content.get("tool_call_id")?.as_str()?.to_string(),
-                m.content.get("output")?.as_str()?.to_string(),
-            ))
-        })
-        .collect();
-
-    for msg in out.iter_mut() {
-        if msg.role != "assistant" {
-            continue;
-        }
-        let Some(tool_calls) = msg
-            .content
-            .get("tool_calls")
-            .and_then(|v| v.as_array())
-            .cloned()
-        else {
-            continue;
-        };
-        let mut sub_agents = Vec::new();
-        for tc in &tool_calls {
-            let is_spawn = matches!(
-                tc.get("name").and_then(Value::as_str),
-                Some("agent_spawn" | "agent")
-            );
-            if !is_spawn {
-                continue;
-            }
-            let Some(call_id) = tc.get("id").and_then(Value::as_str) else {
-                continue;
-            };
-            let Some(child_id) = outputs
-                .get(call_id)
-                .and_then(|output| extract_child_session_id(output))
-            else {
-                continue;
-            };
-            let child = SessionId::new(child_id);
-            let Some(recs) = child_records.remove(&child) else {
-                continue;
-            };
-            let task = tc
-                .get("args")
-                .and_then(|a| a.get("prompt"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            sub_agents.push(sub_agent_json(&child, child_profiles, task, fold(&recs)));
-        }
-        if !sub_agents.is_empty()
-            && let Some(obj) = msg.content.as_object_mut()
-        {
-            obj.insert("sub_agents".into(), Value::Array(sub_agents));
-        }
-    }
-
-    if !child_records.is_empty() {
-        let leftover: Vec<Value> = child_records
-            .into_iter()
-            .map(|(child, recs)| sub_agent_json(&child, child_profiles, "", fold(&recs)))
-            .collect();
-        out.push(ProjectedMessage {
-            role: "sub_agents",
-            content: Value::Array(leftover),
-        });
-    }
-}
-
-fn sub_agent_json(
-    child: &SessionId,
-    child_profiles: &HashMap<SessionId, String>,
-    task: &str,
-    messages: Vec<ProjectedMessage>,
-) -> Value {
-    json!({
-        "agent_id": child.0,
-        "profile": child_profiles.get(child).cloned().unwrap_or_default(),
-        "task": task,
-        "messages": messages
-            .into_iter()
-            .map(|m| json!({ "role": m.role, "content": m.content }))
-            .collect::<Vec<_>>(),
-    })
-}
-
-/// Recover a sub-agent child's own `SessionId` from its spawning call's
-/// `tool_result` text — see the module doc. `entanglement_runtime::subagent::
-/// launch`'s reply always embeds the child's raw uuid as one whitespace/
-/// punctuation-delimited token (`` `{uuid}` `` or `agent_id: {uuid}.`);
-/// scanning for the first token that parses as a uuid finds it regardless of
-/// which of the two reply templates (detached `agent_spawn` vs blocking
-/// `agent`) produced the text. A refusal's text (no valid uuid anywhere)
-/// correctly yields `None` — nothing to match, not a wrong match.
-///
-/// Deliberately deferred (issue #28): `entanglement_runtime::subagent::launch`
-/// has no structured field naming the child session either, and this crate is
-/// a versioned dependency (not vendored in this repo), so there is nothing to
-/// change here yet. Replace with a structural field the day `launch` grows
-/// one.
-fn extract_child_session_id(output: &str) -> Option<String> {
-    output
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
-        .find_map(|tok| uuid::Uuid::parse_str(tok).ok().map(|_| tok.to_string()))
 }
 
 /// The original per-session fold, shared by [`project`] for the root's own
@@ -307,7 +167,57 @@ fn fold(records: &[&LogRecord]) -> Vec<ProjectedMessage> {
         }
     }
     turn.flush_into(&mut out);
+    mark_resolved_calls(&mut out);
     out
+}
+
+/// Retroactively flag every `tool_calls[]` entry that already has a matching
+/// `tool_result` message as `"resolved": true` — the most robust signal
+/// available for "is this call actually done", and one the client should
+/// trust over `decisions` (below). `flush_into`'s own per-call
+/// `requires_approval` (paired with this) says whether a call was *ever*
+/// gated at all; this says whether it's *still* worth a prompt. A client
+/// should only ever offer Allow/Reject for a call with `requires_approval:
+/// true` and no `resolved: true` — anything else is stale by construction.
+///
+/// Why this can't be derived from `decisions` alone: `InMsg::Approve`/
+/// `Reject` is recorded into whichever `OpenTurn` happens to be accumulating
+/// *at the moment that record is folded* — but a batch flushes (see
+/// `ToolOutput`'s match arm above) the instant its *first* call resolves,
+/// before every sibling in the same batch is necessarily decided. A
+/// second/third decision for that same already-flushed message, arriving
+/// after the reset, lands in a fresh `OpenTurn` instead — silently orphaned
+/// from the message it was actually deciding. Presence of a `tool_result` for
+/// the same `tool_call_id` sidesteps this entirely: it's only ever emitted
+/// once a call has genuinely resolved, regardless of how or when its
+/// decision got folded.
+fn mark_resolved_calls(out: &mut [ProjectedMessage]) {
+    let resolved: HashSet<String> = out
+        .iter()
+        .filter(|m| m.role == "tool_result")
+        .filter_map(|m| m.content.get("tool_call_id")?.as_str().map(String::from))
+        .collect();
+    for msg in out.iter_mut() {
+        if msg.role != "assistant" {
+            continue;
+        }
+        let Some(tool_calls) = msg
+            .content
+            .get_mut("tool_calls")
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        for tc in tool_calls.iter_mut() {
+            let is_resolved = tc
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| resolved.contains(id));
+            if is_resolved && let Some(obj) = tc.as_object_mut() {
+                obj.insert("resolved".into(), Value::Bool(true));
+            }
+        }
+    }
 }
 
 /// `tool_runner`'s reply text for every failure path (`Deny`/reject/mask/
@@ -338,6 +248,24 @@ impl OpenTurn {
     fn flush_into(&mut self, out: &mut Vec<ProjectedMessage>) {
         if !self.open {
             return;
+        }
+        // Per-call, not just the message-level `requires_approval` below: a
+        // batch can freely mix a call that actually paused for approval
+        // (present in `self.pending`, i.e. it got its own `ToolRequest`) with
+        // one the policy auto-allowed (only ever got a `ToolCall`, the
+        // display-only event every call gets regardless). Both end up in
+        // `tool_calls` either way, but only the former should ever offer an
+        // Allow/Reject prompt — flagging the message as a whole isn't
+        // specific enough for the client to tell them apart (see
+        // `mark_resolved_calls`'s doc for the concrete symptom this caused).
+        for tc in self.tool_calls.iter_mut() {
+            let is_pending = tc
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| self.pending.contains(id));
+            if is_pending && let Some(obj) = tc.as_object_mut() {
+                obj.insert("requires_approval".into(), Value::Bool(true));
+            }
         }
         let mut content = json!({
             "text": if self.text.is_empty() { Value::Null } else { json!(self.text) },
