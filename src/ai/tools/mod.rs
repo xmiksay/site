@@ -24,10 +24,10 @@ use sea_orm::DatabaseConnection;
 
 use crate::routes::ws::WsHub;
 
-/// Build the registry of built-in (non-MCP) tools: the 11 site tools — a
+/// Build the registry of built-in (non-MCP) tools: the 14 site tools — a
 /// curated subset, not full CRUD (pages read/search/edit/delete, tags
-/// list/create, files list/create, galleries list/create/update) — plus
-/// `web_search`/`web_fetch`. `engine.rs`
+/// list/create, files list/create/read/update/delete, galleries
+/// list/create/update) — plus `web_search`/`web_fetch`. `engine.rs`
 /// builds this once at `SiteEngine` construction and layers per-session MCP
 /// routing tools on top (see `crate::ai::mcp`). Every mutating tool also
 /// gets `ws_hub` so it broadcasts the same WS event a REST API mutation
@@ -55,6 +55,15 @@ pub fn registry(
     });
     reg.register(files::ListFilesTool { db: db.clone() });
     reg.register(files::CreateFileTool {
+        db: db.clone(),
+        ws_hub: ws_hub.clone(),
+    });
+    reg.register(files::ReadFileTool { db: db.clone() });
+    reg.register(files::UpdateFileTool {
+        db: db.clone(),
+        ws_hub: ws_hub.clone(),
+    });
+    reg.register(files::DeleteFileTool {
         db: db.clone(),
         ws_hub: ws_hub.clone(),
     });

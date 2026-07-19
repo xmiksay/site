@@ -105,6 +105,73 @@ async fn list_files_create_file_and_read_file_round_trip() {
 }
 
 #[tokio::test]
+async fn update_file_replaces_content_and_read_file_returns_it() {
+    let Some(db_url) = test_db_url().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let fx = setup(&db_url, "files-repair").await;
+    let path = format!("mcp-test-repair-{}.txt", uuid::Uuid::new_v4());
+    let original = base64::engine::general_purpose::STANDARD.encode(b"original content");
+
+    let created = call_tool(
+        &fx.app,
+        &fx.token,
+        "create_file",
+        json!({
+            "path": path,
+            "mimetype": "text/plain",
+            "data_base64": original,
+        }),
+    )
+    .await;
+    assert!(!is_tool_error(&created), "create_file failed: {created:?}");
+    let file_id = tool_json(&created)["id"].as_i64().expect("created file id");
+
+    // Repair: overwrite the file's content in place at the same id/path.
+    let new_content = "repaired content, much longer than the original";
+    let updated = call_tool(
+        &fx.app,
+        &fx.token,
+        "update_file",
+        json!({
+            "id": file_id,
+            "path": path,
+            "mimetype": "text/plain",
+            "data": new_content,
+        }),
+    )
+    .await;
+    assert!(!is_tool_error(&updated), "update_file failed: {updated:?}");
+
+    let read_with_content = call_tool(
+        &fx.app,
+        &fx.token,
+        "read_file",
+        json!({ "id": file_id, "include_content": true }),
+    )
+    .await;
+    assert!(
+        !is_tool_error(&read_with_content),
+        "read_file failed: {read_with_content:?}"
+    );
+    let read_json = tool_json(&read_with_content);
+    assert_eq!(read_json["content"], json!(new_content));
+    assert_eq!(read_json["size_bytes"], json!(new_content.len() as i64));
+
+    // Back-compat: omitting include_content must not add a "content" field.
+    let read_without_content =
+        call_tool(&fx.app, &fx.token, "read_file", json!({ "id": file_id })).await;
+    assert!(!is_tool_error(&read_without_content));
+    assert!(tool_json(&read_without_content).get("content").is_none());
+
+    let deleted = call_tool(&fx.app, &fx.token, "delete_file", json!({ "id": file_id })).await;
+    assert!(!is_tool_error(&deleted), "delete_file failed: {deleted:?}");
+
+    cleanup_user(&fx.db, fx.user_id).await;
+}
+
+#[tokio::test]
 async fn create_file_hints_the_type_specific_embed_directive() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");

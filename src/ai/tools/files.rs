@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use super::common::{arg_str, ok_json, ok_text, parse_args, required_str};
 use crate::ai::engine::user_id_from_session;
-use crate::repo::files::{self as files_repo, FileSaveError, NewFile};
+use crate::repo::files::{self as files_repo, FileMetaUpdate, FileSaveError, NewFile};
 use crate::routes::broadcast;
 use crate::routes::ws::WsHub;
 
@@ -160,5 +160,218 @@ impl Tool for CreateFileTool {
             "has_thumbnail": created.has_thumbnail,
             "embed": embed,
         })))
+    }
+}
+
+pub struct ReadFileTool {
+    pub db: Arc<DatabaseConnection>,
+}
+
+#[async_trait]
+impl Tool for ReadFileTool {
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("read_file")
+    }
+    fn description(&self) -> &str {
+        "Read file metadata by ID. Set `include_content` to also return the file's contents — \
+         only populated for text-ish mimetypes (plain text, JSON, PGN, mermaid, FEN); other \
+         mimetypes get `content: null` with a `content_error` note instead of binary data."
+    }
+    fn schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "integer" },
+                "include_content": { "type": "boolean", "description": "Also return the file's text contents when the mimetype is text-ish (default false)." }
+            },
+            "required": ["id"]
+        })
+    }
+    async fn run(&self, _input: &str) -> anyhow::Result<String> {
+        anyhow::bail!("read_file is session-scoped; use run_for_session")
+    }
+    async fn run_for_session(
+        &self,
+        _session: &SessionId,
+        input: &str,
+    ) -> anyhow::Result<Vec<ContentPart>> {
+        let args = parse_args(input)?;
+        let id = args
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow::anyhow!("id is required"))? as i32;
+        let include_content = args
+            .get("include_content")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let f = files_repo::find_with_thumbnail(&self.db, id)
+            .await
+            .context("reading file")?
+            .ok_or_else(|| anyhow::anyhow!("File not found: {id}"))?;
+
+        let mut result = json!({
+            "id": f.model.id,
+            "path": f.model.path,
+            "title": files_repo::title_from_path(&f.model.path),
+            "description": f.model.description,
+            "mimetype": f.model.mimetype,
+            "size_bytes": f.model.size_bytes,
+            "has_thumbnail": f.has_thumbnail,
+            "created_at": f.model.created_at.to_string(),
+        });
+        if include_content {
+            if files_repo::is_text_content(&f.model.mimetype) {
+                match crate::files::read_blob(self.db.as_ref(), &f.model.hash)
+                    .await
+                    .context("reading file blob")?
+                {
+                    Some(data) => result["content"] = json!(String::from_utf8_lossy(&data)),
+                    None => {
+                        result["content"] = Value::Null;
+                        result["content_error"] = json!("blob data missing");
+                    }
+                }
+            } else {
+                result["content"] = Value::Null;
+                result["content_error"] = json!("not a text mimetype");
+            }
+        }
+
+        Ok(ok_json(result))
+    }
+}
+
+pub struct UpdateFileTool {
+    pub db: Arc<DatabaseConnection>,
+    pub ws_hub: Arc<WsHub>,
+}
+
+#[async_trait]
+impl Tool for UpdateFileTool {
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("update_file")
+    }
+    fn description(&self) -> &str {
+        "Update a file's metadata (path, description) and/or replace its contents. Provide \
+         either base64-encoded `data_base64` (binary, e.g. images) or raw `data` (text, e.g. \
+         PGN/FEN/SVG) to replace the stored bytes, with an optional `mimetype` to match; a \
+         thumbnail is regenerated automatically when content changes and the file is an image. \
+         The display title is always derived from the path basename."
+    }
+    fn schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "integer" },
+                "path": { "type": "string" },
+                "description": { "type": "string" },
+                "mimetype": { "type": "string", "description": "New mimetype, e.g. image/png. Only applied when provided." },
+                "data_base64": { "type": "string", "description": "Base64-encoded binary contents to replace the file with." },
+                "data": { "type": "string", "description": "Raw text contents to replace the file with (alternative to data_base64)." }
+            },
+            "required": ["id", "path"]
+        })
+    }
+    async fn run(&self, _input: &str) -> anyhow::Result<String> {
+        anyhow::bail!("update_file is session-scoped; use run_for_session")
+    }
+    async fn run_for_session(
+        &self,
+        _session: &SessionId,
+        input: &str,
+    ) -> anyhow::Result<Vec<ContentPart>> {
+        let args = parse_args(input)?;
+        let id = args
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow::anyhow!("id is required"))? as i32;
+        let path = required_str(&args, "path")?.trim().to_string();
+        let description = arg_str(&args, "description").map(String::from);
+        let mimetype = arg_str(&args, "mimetype").map(String::from);
+
+        let data = match (arg_str(&args, "data_base64"), arg_str(&args, "data")) {
+            (Some(b64), _) if !b64.is_empty() => Some(
+                base64::engine::general_purpose::STANDARD
+                    .decode(b64.as_bytes())
+                    .context("invalid base64")?,
+            ),
+            (_, Some(text)) if !text.is_empty() => Some(text.as_bytes().to_vec()),
+            _ => None,
+        };
+
+        let updated = match files_repo::update_metadata(
+            &self.db,
+            id,
+            FileMetaUpdate {
+                path,
+                description,
+                mimetype,
+                data,
+            },
+        )
+        .await
+        {
+            Ok(Some(f)) => f,
+            Ok(None) => anyhow::bail!("File not found: {id}"),
+            Err(e @ (FileSaveError::EmptyPath | FileSaveError::EmptyData)) => {
+                anyhow::bail!("{e}")
+            }
+            Err(e) => return Err(anyhow::anyhow!(e).context("updating file")),
+        };
+        broadcast::file_updated(&self.ws_hub, &updated.model, updated.has_thumbnail);
+
+        Ok(ok_json(json!({
+            "id": updated.model.id,
+            "path": updated.model.path,
+            "mimetype": updated.model.mimetype,
+            "size_bytes": updated.model.size_bytes,
+            "has_thumbnail": updated.has_thumbnail,
+        })))
+    }
+}
+
+pub struct DeleteFileTool {
+    pub db: Arc<DatabaseConnection>,
+    pub ws_hub: Arc<WsHub>,
+}
+
+#[async_trait]
+impl Tool for DeleteFileTool {
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed("delete_file")
+    }
+    fn description(&self) -> &str {
+        "Delete a file by ID."
+    }
+    fn schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": { "id": { "type": "integer" } },
+            "required": ["id"]
+        })
+    }
+    async fn run(&self, _input: &str) -> anyhow::Result<String> {
+        anyhow::bail!("delete_file is session-scoped; use run_for_session")
+    }
+    async fn run_for_session(
+        &self,
+        _session: &SessionId,
+        input: &str,
+    ) -> anyhow::Result<Vec<ContentPart>> {
+        let args = parse_args(input)?;
+        let id = args
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow::anyhow!("id is required"))? as i32;
+        let deleted = files_repo::delete_by_id(&self.db, id)
+            .await
+            .context("deleting file")?;
+        if deleted {
+            broadcast::file_deleted(&self.ws_hub, id);
+            Ok(ok_text(format!("deleted file {id}")))
+        } else {
+            anyhow::bail!("File not found: {id}")
+        }
     }
 }

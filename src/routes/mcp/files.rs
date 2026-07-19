@@ -24,6 +24,13 @@ struct FileIdArgs {
 }
 
 #[derive(Deserialize)]
+struct ReadFileArgs {
+    id: i32,
+    #[serde(default)]
+    include_content: Option<bool>,
+}
+
+#[derive(Deserialize)]
 struct CreateFileArgs {
     path: String,
     #[serde(default)]
@@ -42,6 +49,12 @@ struct UpdateFileArgs {
     path: String,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    mimetype: Option<String>,
+    #[serde(default)]
+    data_base64: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
 }
 
 pub(super) async fn tool_list_files(
@@ -142,26 +155,43 @@ pub(super) async fn tool_read_file(
     id: Option<Value>,
     arguments: Value,
 ) -> JsonRpcResponse {
-    let args: FileIdArgs = match parse_args(id.clone(), arguments) {
+    let args: ReadFileArgs = match parse_args(id.clone(), arguments) {
         Ok(a) => a,
         Err(r) => return r,
     };
     match files_repo::find_with_thumbnail(&state.db, args.id).await {
         Ok(Some(f)) => {
             let title = files_repo::title_from_path(&f.model.path);
-            json_result(
-                id,
-                json!({
-                    "id": f.model.id,
-                    "path": f.model.path,
-                    "title": title,
-                    "description": f.model.description,
-                    "mimetype": f.model.mimetype,
-                    "size_bytes": f.model.size_bytes,
-                    "has_thumbnail": f.has_thumbnail,
-                    "created_at": f.model.created_at.to_string(),
-                }),
-            )
+            let mut result = json!({
+                "id": f.model.id,
+                "path": f.model.path,
+                "title": title,
+                "description": f.model.description,
+                "mimetype": f.model.mimetype,
+                "size_bytes": f.model.size_bytes,
+                "has_thumbnail": f.has_thumbnail,
+                "created_at": f.model.created_at.to_string(),
+            });
+            if args.include_content.unwrap_or(false) {
+                if files_repo::is_text_content(&f.model.mimetype) {
+                    match crate::files::read_blob(&state.db, &f.model.hash).await {
+                        Ok(Some(data)) => {
+                            result["content"] = json!(String::from_utf8_lossy(&data));
+                        }
+                        Ok(None) => {
+                            result["content"] = Value::Null;
+                            result["content_error"] = json!("blob data missing");
+                        }
+                        Err(e) => {
+                            return tool_error(id, &format!("Database error: {e}"));
+                        }
+                    }
+                } else {
+                    result["content"] = Value::Null;
+                    result["content_error"] = json!("not a text mimetype");
+                }
+            }
+            json_result(id, result)
         }
         Ok(None) => tool_error(id, &format!("File not found: {}", args.id)),
         Err(e) => tool_error(id, &format!("Database error: {e}")),
@@ -177,12 +207,25 @@ pub(super) async fn tool_update_file(
         Ok(a) => a,
         Err(r) => return r,
     };
+    let data = match (args.data_base64, args.data) {
+        (Some(b64), _) if !b64.is_empty() => {
+            match base64::engine::general_purpose::STANDARD.decode(b64.as_bytes()) {
+                Ok(d) => Some(d),
+                Err(e) => return tool_error(id, &format!("Invalid base64: {e}")),
+            }
+        }
+        (_, Some(text)) if !text.is_empty() => Some(text.into_bytes()),
+        _ => None,
+    };
+
     match files_repo::update_metadata(
         &state.db,
         args.id,
         FileMetaUpdate {
             path: args.path,
             description: args.description,
+            mimetype: args.mimetype,
+            data,
         },
     )
     .await
@@ -195,6 +238,9 @@ pub(super) async fn tool_update_file(
             )
         }
         Ok(None) => tool_error(id, &format!("File not found: {}", args.id)),
+        Err(e @ (FileSaveError::EmptyPath | FileSaveError::EmptyData)) => {
+            tool_error(id, &e.to_string())
+        }
         Err(e) => tool_error(id, &format!("Update failed: {e}")),
     }
 }

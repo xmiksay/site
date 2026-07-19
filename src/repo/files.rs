@@ -79,6 +79,8 @@ pub struct FileWithThumb {
 pub struct FileMetaUpdate {
     pub path: String,
     pub description: Option<String>,
+    pub mimetype: Option<String>,
+    pub data: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -126,6 +128,15 @@ pub fn infer_mimetype(path: &str) -> String {
             .map(|m| m.to_string())
             .unwrap_or_else(|| "application/octet-stream".to_string()),
     }
+}
+
+/// Whether a mimetype's bytes are safe to decode and return as UTF-8 text —
+/// covers the site's own text-ish directive formats (`.pgn`/`.mmd`/`.fen`/
+/// `.json`, per `infer_mimetype`/`embed_hint` above) plus generic `text/*`.
+pub fn is_text_content(mimetype: &str) -> bool {
+    mimetype.starts_with("text/")
+        || mimetype == "application/json"
+        || mimetype == "application/x-chess-pgn"
 }
 
 /// Suggest the markdown directive to embed a newly created file, based on its
@@ -268,15 +279,56 @@ pub async fn update_metadata(
     db: &DatabaseConnection,
     id: i32,
     update: FileMetaUpdate,
-) -> Result<Option<FileWithThumb>, DbErr> {
+) -> Result<Option<FileWithThumb>, FileSaveError> {
     let Some(model) = file::Entity::find_by_id(id).one(db).await? else {
         return Ok(None);
     };
     let mut active: file::ActiveModel = model.into();
     active.path = Set(path_util::normalize(&update.path));
     active.description = Set(update.description.filter(|s| !s.is_empty()));
+
+    let new_data = match update.data {
+        Some(data) if data.is_empty() => return Err(FileSaveError::EmptyData),
+        Some(data) => {
+            let hash = hash_blob(&data);
+            put_blob(db, &hash, &data).await?;
+            active.hash = Set(hash);
+            active.size_bytes = Set(data.len() as i64);
+            Some(data)
+        }
+        None => None,
+    };
+    if let Some(mimetype) = update.mimetype {
+        active.mimetype = Set(mimetype);
+    }
+
     let updated = active.update(db).await?;
-    let has_thumbnail = has_thumbnail(db, id).await?;
+
+    let has_thumbnail = if let Some(data) = new_data {
+        file_thumbnail::Entity::delete_by_id(id).exec(db).await?;
+        let mut has_thumbnail = false;
+        if let Some(thumb) = make_thumbnail(&data, &updated.mimetype) {
+            let thumb_hash = hash_blob(&thumb.data);
+            if put_blob(db, &thumb_hash, &thumb.data).await.is_ok() {
+                let now = chrono::Utc::now().fixed_offset();
+                let thumb_row = file_thumbnail::ActiveModel {
+                    file_id: Set(id),
+                    hash: Set(thumb_hash),
+                    width: Set(thumb.width as i32),
+                    height: Set(thumb.height as i32),
+                    mimetype: Set(thumb.mimetype.to_string()),
+                    created_at: Set(now),
+                };
+                if thumb_row.insert(db).await.is_ok() {
+                    has_thumbnail = true;
+                }
+            }
+        }
+        has_thumbnail
+    } else {
+        has_thumbnail(db, id).await?
+    };
+
     Ok(Some(FileWithThumb {
         model: updated,
         has_thumbnail,
@@ -290,7 +342,7 @@ pub async fn delete_by_id(db: &DatabaseConnection, id: i32) -> Result<bool, DbEr
 
 #[cfg(test)]
 mod tests {
-    use super::{embed_hint, infer_mimetype};
+    use super::{embed_hint, infer_mimetype, is_text_content};
 
     #[test]
     fn pgn_hints_pgn_directive() {
@@ -368,5 +420,25 @@ mod tests {
     #[test]
     fn falls_back_to_octet_stream_for_unknown_extension() {
         assert_eq!(infer_mimetype("blob.bin"), "application/octet-stream");
+    }
+
+    #[test]
+    fn text_plain_is_text_content() {
+        assert!(is_text_content("text/plain"));
+    }
+
+    #[test]
+    fn json_is_text_content() {
+        assert!(is_text_content("application/json"));
+    }
+
+    #[test]
+    fn pgn_is_text_content() {
+        assert!(is_text_content("application/x-chess-pgn"));
+    }
+
+    #[test]
+    fn image_is_not_text_content() {
+        assert!(!is_text_content("image/png"));
     }
 }
