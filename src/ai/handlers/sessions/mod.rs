@@ -7,6 +7,10 @@
 //! `assistant_events`) live in `turn.rs` — both split out to keep this file
 //! under the workspace's 400-line cap and re-exported here so the router
 //! (`handlers/mod.rs`) sees one flat `sessions::*` surface.
+//!
+//! `turn::session_for_call_awaiting` is also re-exported, but only for
+//! `tests/assistant_session_subagent_approval_race.rs` to call directly
+//! against a real DB — see that function's own doc for why.
 
 mod compact;
 mod mutate;
@@ -14,7 +18,7 @@ mod turn;
 
 pub use compact::compact;
 pub use mutate::{create, update};
-pub use turn::{approve, send_message};
+pub use turn::{approve, send_message, session_for_call_awaiting};
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};

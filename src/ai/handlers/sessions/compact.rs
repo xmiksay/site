@@ -77,7 +77,7 @@ pub async fn compact(
         op: "compact".into(),
         args: serde_json::Value::Object(args),
     };
-    let report = send_and_collect(engine, &source, vec![oneshot]).await?;
+    let report = send_and_collect(engine, &source, vec![oneshot], Vec::new()).await?;
     if let Some(message) = turn_error(&report) {
         return Err(ApiError::BadRequest(message));
     }
@@ -103,7 +103,7 @@ pub async fn compact(
         agent: ROOT_PROFILE.to_string(),
         prompt: summary.clone(),
     };
-    let mut collected = send_and_collect(engine, &successor, vec![spawn]).await?;
+    let mut collected = send_and_collect(engine, &successor, vec![spawn], Vec::new()).await?;
     engine.mark_live(successor.clone());
 
     // `entanglement_runtime`'s persistence tap synthesizes the seeded

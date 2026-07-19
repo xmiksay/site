@@ -313,4 +313,69 @@ describe('useLiveTurns', () => {
     expect(liveSubAgents.value['child-1']).toBeUndefined()
     expect(loadSession).not.toHaveBeenCalled()
   })
+
+  // ---- resolveLiveToolCall: the click-triggered path (#stuck approval fix) ----
+
+  it('resolveLiveToolCall marks a root call done without output, simulating the click path', () => {
+    const { live, resolveLiveToolCall } = setup()
+    wsHandler!(
+      envelope('tool_request', {
+        db_session_id: 1,
+        request_id: 'c1',
+        tool: 'delete_page',
+        input: '{"id":1}',
+      }),
+    )
+    expect(live.value!.toolCalls[0].status).toBe('requires_approval')
+
+    resolveLiveToolCall('c1')
+
+    expect(live.value!.toolCalls[0].status).toBe('done')
+    expect(live.value!.toolCalls[0].output).toBeUndefined()
+  })
+
+  it('a tool_output arriving after resolveLiveToolCall fills in the output idempotently', () => {
+    const { live, resolveLiveToolCall } = setup()
+    wsHandler!(
+      envelope('tool_request', {
+        db_session_id: 1,
+        request_id: 'c1',
+        tool: 'delete_page',
+        input: '{"id":1}',
+      }),
+    )
+
+    resolveLiveToolCall('c1')
+    expect(live.value!.toolCalls[0].status).toBe('done')
+    expect(live.value!.toolCalls[0].output).toBeUndefined()
+
+    wsHandler!(envelope('tool_output', { db_session_id: 1, request_id: 'c1', output: 'deleted' }))
+
+    expect(live.value!.toolCalls[0]).toMatchObject({ status: 'done', output: 'deleted' })
+  })
+
+  it('resolveLiveToolCall targets the right sub-agent bucket when given an agentSessionId', () => {
+    const { liveSubAgents, resolveLiveToolCall } = setup()
+    wsHandler!(
+      envelope('tool_request', {
+        db_session_id: 1,
+        agent_session_id: 'child-1',
+        request_id: 'c1',
+        tool: 'search_pages',
+        input: '{}',
+      }),
+    )
+    expect(liveSubAgents.value['child-1'].toolCalls[0].status).toBe('requires_approval')
+
+    resolveLiveToolCall('c1', 'child-1')
+
+    expect(liveSubAgents.value['child-1'].toolCalls[0].status).toBe('done')
+    expect(liveSubAgents.value['child-1'].toolCalls[0].output).toBeUndefined()
+  })
+
+  it('resolveLiveToolCall is a no-op when the call id is not found', () => {
+    const { live, resolveLiveToolCall } = setup()
+    expect(() => resolveLiveToolCall('missing')).not.toThrow()
+    expect(live.value).toBeNull()
+  })
 })

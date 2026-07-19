@@ -25,7 +25,7 @@ export const useAssistantStore = defineStore('assistant', () => {
   // (hoisted) function declaration, so passing it here ahead of its own
   // definition further down is fine — the whole store's setup body runs
   // synchronously before anything can call into `useLiveTurns`'s WS handler.
-  const { live, liveSubAgents } = useLiveTurns(current, sending, loadSession)
+  const { live, liveSubAgents, resolveLiveToolCall } = useLiveTurns(current, sending, loadSession)
 
   async function loadSessions() {
     sessions.value = await api<AssistantSession[]>('/api/assistant/sessions')
@@ -274,6 +274,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     sending,
     live,
     liveSubAgents,
+    resolveLiveToolCall,
     loadSessions,
     createSession,
     loadSession,

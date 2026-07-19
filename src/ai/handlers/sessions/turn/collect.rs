@@ -40,26 +40,75 @@ const TURN_TIMEOUT: Duration = Duration::from_secs(180);
 /// one HTTP request, never a resume in progress. The local `descendants` fold
 /// stays.
 ///
-/// The turn settles once *every* targeted session has settled — normally
-/// just `session` (a plain prompt/root-only approve), but `approve`'s
-/// `session_for_call` routing can target a sub-agent child directly when a
-/// decision is for its own pending call; that child (not the long-since-
-/// `Done` root) is what actually resumes and eventually settles, so waiting
-/// on `session` alone would hang for the full [`TURN_TIMEOUT`]. A batched
-/// `approve` whose `decisions` resolve calls on two different sessions (the
-/// root and a child, or two sibling children) waits for both — settling on
-/// whichever finishes first would silently omit the other's outcome from the
-/// response. A still-running detached `agent_spawn`/`agent` child that
-/// *isn't* targeted by any `msgs` never blocks this response either way
-/// (ADR-0026).
+/// Each sent `InMsg` settles independently, by its own criterion:
+///
+/// - A plain [`InMsg::Prompt`] (or anything else with no `request_id`)
+///   settles when *its own session* emits `Done`, `Error`, or a paused
+///   `WaitingApproval` status — the original, turn-level notion.
+/// - An [`InMsg::Approve`]/[`InMsg::Reject`] settles the moment its own
+///   `request_id` gets a matching [`OutEvent::ToolOutput`] — which the engine
+///   emits unconditionally as soon as *that specific call* resolves
+///   (`entanglement_core::session`'s `SessionCmd::ToolResult` handling calls
+///   `emit_tool_output` before it ever checks whether the rest of the current
+///   batch has drained). This is deliberately *not* gated on the whole
+///   session settling: a turn with several tool calls pending at once only
+///   resumes once *every* one of them is resolved (`TurnState::is_drained`),
+///   so if this waited for `Done`/`Error`/`WaitingApproval` on the session
+///   like a prompt does, approving anything other than the last pending call
+///   in a batch would hang this request for the full [`TURN_TIMEOUT`] — the
+///   session simply has nothing new to say until the rest of the batch is
+///   also decided.
+///
+/// `extra_pending` (`approve`'s `open_tool_requests`) names every call
+/// already outstanding on a target session *before* this request's own
+/// decisions, purely as a **readiness signal** — it never blocks this
+/// response. The moment this request's *own* decisions for a session settle,
+/// that session graduates into `session_targets` (below) *only if*
+/// `extra_pending` has no other still-open entry for it too: only then does
+/// that session's `TurnState` genuinely drain (`is_drained`), so the engine's
+/// own `drive_turn` is already running or about to — *now* it's correct to
+/// also wait (full [`TURN_TIMEOUT`] budget) for that session's `Done`/
+/// `Error`/next `WaitingApproval`, the same way a plain prompt always has,
+/// instead of returning the instant the last `ToolOutput` lands and silently
+/// omitting the continuation. If a sibling `extra_pending` call for that
+/// session is *still* open at that moment (a batch this request only
+/// partially decided), this correctly does **not** wait further — that's
+/// exactly the case that used to hang for the full timeout, since nothing
+/// new arrives on that session until the rest of the batch is decided
+/// elsewhere.
+///
+/// A batched `approve` whose `decisions` resolve calls on two different
+/// sessions (the root and a child, or two sibling children) waits for every
+/// one of them — settling on whichever finishes first would silently omit
+/// the others' outcomes from the response. A still-running detached
+/// `agent_spawn`/`agent` child that *isn't* targeted by any `msgs` never
+/// blocks this response either way (ADR-0026).
 pub(in crate::ai::handlers::sessions) async fn send_and_collect(
     engine: &SiteEngine,
     session: &SessionId,
     msgs: Vec<InMsg>,
+    extra_pending: Vec<(SessionId, String)>,
 ) -> ApiResult<Vec<LogRecord>> {
     let mut sub = engine.holly.subscribe();
     let mut collected = Vec::with_capacity(msgs.len() + 8);
     let mut targets: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
+    // This request's own decisions — the only obligations that gate the
+    // response at all. Settled individually by each one's own `ToolOutput`
+    // (see this function's doc), not by the session as a whole draining.
+    let mut pending_calls: std::collections::HashSet<(SessionId, String)> =
+        std::collections::HashSet::new();
+    // Sessions that had at least one `Approve`/`Reject` — once *all* of a
+    // session's own `pending_calls` entries drain, it's a candidate to
+    // graduate into `session_targets` below (gated further on
+    // `open_others`).
+    let mut approve_sessions: std::collections::HashSet<SessionId> =
+        std::collections::HashSet::new();
+    // Session-level obligations, settled by that session's own `Done`/
+    // `Error`/`WaitingApproval`: a plain prompt (or anything with no
+    // `request_id`) immediately; an approve-session only once it's confirmed
+    // fully drained (see this function's doc).
+    let mut session_targets: std::collections::HashSet<SessionId> =
+        std::collections::HashSet::new();
     for msg in msgs {
         // #17: an `Approve`/`Reject` for a sub-agent's own pending call
         // targets that *child* session (see `approve`'s `session_for_call`
@@ -68,6 +117,15 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
         // partitioning doesn't misfile it under the wrong turn.
         let msg_session = msg.session().cloned().unwrap_or_else(|| session.clone());
         targets.insert(msg_session.clone());
+        match &msg {
+            InMsg::Approve { request_id, .. } | InMsg::Reject { request_id, .. } => {
+                pending_calls.insert((msg_session.clone(), request_id.clone()));
+                approve_sessions.insert(msg_session.clone());
+            }
+            _ => {
+                session_targets.insert(msg_session.clone());
+            }
+        }
         engine
             .holly
             .send(msg.clone())
@@ -77,14 +135,21 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
     }
     if targets.is_empty() {
         targets.insert(session.clone());
+        session_targets.insert(session.clone());
+    }
+    // Readiness-only tracking (see this function's doc) — never gates the
+    // response, only whether a session that just drained *our* decisions is
+    // also free of any other still-open call.
+    let mut open_others: std::collections::HashSet<(SessionId, String)> = extra_pending
+        .into_iter()
+        .filter(|key| !pending_calls.contains(key))
+        .collect();
+    for (s, _) in &open_others {
+        targets.insert(s.clone());
     }
 
     let mut descendants: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
-    // Every target must settle, not just the first — a batched `approve`
-    // whose `decisions` route to two different sessions (root + a child, or
-    // two sibling children) must wait for both, or the response would
-    // silently omit whichever target settled second.
-    let mut settled_targets: std::collections::HashSet<SessionId> =
+    let mut settled_sessions: std::collections::HashSet<SessionId> =
         std::collections::HashSet::new();
     let deadline = tokio::time::Instant::now() + TURN_TIMEOUT;
     loop {
@@ -126,7 +191,24 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
         if !ours {
             continue; // an unrelated session's event on the shared fan-out
         }
-        if targets.contains(&ev_session)
+        if let OutEvent::ToolOutput { request_id, .. } = &ev {
+            let key = (ev_session.clone(), request_id.clone());
+            pending_calls.remove(&key);
+            open_others.remove(&key);
+            // Our own decisions for this session just drained *and* nothing
+            // else was left open for it either — it's now safe to also wait
+            // for its continuation (see this function's doc). Checked on
+            // every `ToolOutput` for this session, not just ours, since a
+            // sibling resolving (concurrently, elsewhere) can be what
+            // finally empties `open_others` for it.
+            if approve_sessions.contains(&ev_session)
+                && !pending_calls.iter().any(|(s, _)| s == &ev_session)
+                && !open_others.iter().any(|(s, _)| s == &ev_session)
+            {
+                session_targets.insert(ev_session.clone());
+            }
+        }
+        if session_targets.contains(&ev_session)
             && matches!(
                 ev,
                 OutEvent::Done { .. }
@@ -137,10 +219,18 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
                     }
             )
         {
-            settled_targets.insert(ev_session.clone());
+            settled_sessions.insert(ev_session.clone());
+        }
+        // Safety net: if the whole session ends before individually
+        // acknowledging one of our calls (shouldn't happen — `seam::reply`
+        // always runs on both the `Approve` and `Reject` paths — but a
+        // `Done`/`Error` is a stronger signal than any per-call obligation),
+        // don't hang on it forever either.
+        if matches!(ev, OutEvent::Done { .. } | OutEvent::Error { .. }) {
+            pending_calls.retain(|(s, _)| s != &ev_session);
         }
         collected.push(LogRecord::new(ev_session, LogPayload::Out(ev)));
-        if settled_targets.len() == targets.len() {
+        if pending_calls.is_empty() && settled_sessions.len() == session_targets.len() {
             break;
         }
     }
