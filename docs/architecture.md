@@ -449,7 +449,23 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     `model_id`'s existing convention) — the row is a display cache of the
     caller's intent, not the engine's merged state; the engine's own
     `Session::generation` is the source of truth `OutEvent::GenerationChanged`
-    reports back over the WS bridge.
+    reports back over the WS bridge. `create`/`update` themselves live in
+    their own `sessions/mutate/create.rs`/`sessions/mutate/update.rs` files
+    (`mutate.rs`'s own 400-line cap, #54) — `mutate.rs` keeps only what both
+    share (`apply_live_changes`, the MCP-id/model-resolution helpers).
+  - **A model switch preserves existing generation overrides (`sessions/
+    mutate/generation.rs`'s `generation_after_model_switch`/
+    `carry_forward_generation`, #54):** `entanglement-core`'s `rebind()`
+    rebuilds the live session's `generation` from the `ModelResolver`'s
+    `ResolvedModel::generation`, which `SiteCatalog::model_resolver` always
+    resolves to `None` (the resolver has no session handle to read the prior
+    value from) — so a model-only `PATCH` (no generation fields in the
+    request) would otherwise silently wipe every knob. `update` re-derives
+    the row's existing overrides — falling back to whichever knobs this call
+    didn't explicitly change — and resends them via `SetGeneration`
+    immediately after `SetModel`, silently dropping any knob the new model
+    doesn't support (#53) rather than rejecting the whole switch or
+    resurrecting it once the session switches back.
   - **Manual compaction (`handlers/sessions/compact.rs`, #40):** drives
     `entanglement_core`'s copy-on-write `InMsg::Oneshot { op: "compact" }` on
     the session's current (source) engine session, which reports an

@@ -377,6 +377,112 @@ async fn update_session_generation_merges_partial_overrides() {
     cleanup(&fx, session_db_id).await;
 }
 
+/// #54: a model-only `PATCH` (no generation fields in the request body) must
+/// not silently wipe the session's existing overrides — `rebind()`
+/// (`entanglement-core`) rebuilds the live session's `generation` from
+/// scratch on every `SetModel`, and this site's `ModelResolver` always
+/// resolves to `generation: None` (it has no session handle to read the
+/// prior value from), so without `generation_after_model_switch` carrying
+/// the row's overrides forward, this `PATCH` would rebind with no follow-up
+/// `SetGeneration` at all and `temperature` would vanish from the live
+/// session with no broadcast to say so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn update_session_model_switch_preserves_generation_overrides() {
+    let Some(db_url) = test_db_url().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let fx = setup(&db_url, "switch").await;
+
+    let (status, created) = send(
+        &fx.app,
+        "POST",
+        "/assistant/sessions",
+        &fx.cookie,
+        Some(json!({ "model_id": fx.model_id })),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED, "create: {created}");
+    let session_db_id = created["id"].as_i64().expect("session id") as i32;
+    let session_id = engine_session_id(&fx.db, session_db_id).await;
+
+    // model-a (fx.model_id) supports all three knobs — set all of them.
+    let mut sub = fx.state.agent_engine.holly.subscribe();
+    let (status, updated) = send(
+        &fx.app,
+        "PATCH",
+        &format!("/assistant/sessions/{session_db_id}"),
+        &fx.cookie,
+        Some(json!({
+            "temperature": 0.3,
+            "reasoning_effort": "high",
+            "thinking_budget_tokens": 1024,
+        })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "set overrides: {updated}"
+    );
+    wait_for(&mut sub, &session_id, |ev| {
+        matches!(ev, OutEvent::GenerationChanged { .. })
+    })
+    .await;
+
+    // model-b (fx.model_id_2) only declares `supports_temperature` (m_029's
+    // opt-in defaults) — switching to it, model-only, must carry `temperature`
+    // forward and drop `reasoning_effort`/`thinking_budget_tokens` rather than
+    // silently dropping all three or erroring.
+    let (status, updated) = send(
+        &fx.app,
+        "PATCH",
+        &format!("/assistant/sessions/{session_db_id}"),
+        &fx.cookie,
+        Some(json!({ "model_id": fx.model_id_2 })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "switch model: {updated}"
+    );
+    assert_eq!(
+        updated["temperature"],
+        json!(0.3),
+        "the row's own override must survive a model-only PATCH"
+    );
+
+    wait_for(&mut sub, &session_id, |ev| {
+        matches!(ev, OutEvent::ModelChanged { .. })
+    })
+    .await;
+    let ev = wait_for(&mut sub, &session_id, |ev| {
+        matches!(ev, OutEvent::GenerationChanged { .. })
+    })
+    .await;
+    match ev {
+        OutEvent::GenerationChanged { generation, .. } => {
+            assert_eq!(
+                generation.temperature,
+                Some(0.3),
+                "temperature must be re-applied to the live session across the switch"
+            );
+            assert_eq!(
+                generation.reasoning_effort, None,
+                "model-b doesn't support reasoning_effort — must be dropped, not resurrected"
+            );
+            assert_eq!(
+                generation.thinking_budget_tokens, None,
+                "model-b doesn't support thinking — must be dropped, not resurrected"
+            );
+        }
+        other => panic!("expected GenerationChanged after the switch, got {other:?}"),
+    }
+
+    cleanup(&fx, session_db_id).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn update_session_agent_profile_switches_live_and_rejects_unknown() {
     let Some(db_url) = test_db_url().await else {
