@@ -6,7 +6,7 @@ use super::super::RenderCtx;
 use super::super::directives::Directive;
 use super::super::lookup::{fetch_file, lookup_label, parse_file_lookup};
 use super::super::renderer::{block, render_md_template};
-use super::{inline_body, parse_size_class, read_text_blob};
+use super::{TextBlob, inline_body, parse_size_class, read_text_blob};
 
 // ---------------------------------------------------------------------------
 // <fen path|id|hash=... size=small|large>  — file-backed, or
@@ -28,11 +28,20 @@ pub(in crate::markdown) async fn directive_fen(d: &Directive, ctx: &mut RenderCt
                 let html = format!(r#"<p><em>[fen file "{label}" not found]</em></p>"#);
                 return block(html);
             };
-            let Some(fen) = read_text_blob(ctx.db, &file.hash).await else {
-                let html = format!(r#"<p><em>[fen blob for "{}" missing]</em></p>"#, file.path);
-                return block(html);
-            };
-            fen
+            match read_text_blob(ctx.db, &file.hash).await {
+                TextBlob::Found(fen) => fen,
+                TextBlob::NotFound => {
+                    let html = format!(r#"<p><em>[fen file "{}" not found]</em></p>"#, file.path);
+                    return block(html);
+                }
+                TextBlob::InvalidUtf8 => {
+                    let html = format!(
+                        r#"<p><em>[fen "{}": stored file is not valid UTF-8 text]</em></p>"#,
+                        file.path
+                    );
+                    return block(html);
+                }
+            }
         }
     };
 
@@ -65,11 +74,20 @@ pub(in crate::markdown) async fn directive_pgn(d: &Directive, ctx: &mut RenderCt
                 let html = format!(r#"<p><em>[pgn file "{label}" not found]</em></p>"#);
                 return block(html);
             };
-            let Some(pgn) = read_text_blob(ctx.db, &file.hash).await else {
-                let html = format!(r#"<p><em>[pgn blob for "{}" missing]</em></p>"#, file.path);
-                return block(html);
-            };
-            pgn
+            match read_text_blob(ctx.db, &file.hash).await {
+                TextBlob::Found(pgn) => pgn,
+                TextBlob::NotFound => {
+                    let html = format!(r#"<p><em>[pgn file "{}" not found]</em></p>"#, file.path);
+                    return block(html);
+                }
+                TextBlob::InvalidUtf8 => {
+                    let html = format!(
+                        r#"<p><em>[pgn "{}": stored file is not valid UTF-8 text]</em></p>"#,
+                        file.path
+                    );
+                    return block(html);
+                }
+            }
         }
     };
 
@@ -111,14 +129,23 @@ pub(in crate::markdown) async fn directive_mermaid(
                 let html = format!(r#"<p><em>[mermaid file "{label}" not found]</em></p>"#);
                 return block(html);
             };
-            let Some(src) = read_text_blob(ctx.db, &file.hash).await else {
-                let html = format!(
-                    r#"<p><em>[mermaid blob for "{}" missing]</em></p>"#,
-                    file.path
-                );
-                return block(html);
-            };
-            src
+            match read_text_blob(ctx.db, &file.hash).await {
+                TextBlob::Found(src) => src,
+                TextBlob::NotFound => {
+                    let html = format!(
+                        r#"<p><em>[mermaid file "{}" not found]</em></p>"#,
+                        file.path
+                    );
+                    return block(html);
+                }
+                TextBlob::InvalidUtf8 => {
+                    let html = format!(
+                        r#"<p><em>[mermaid "{}": stored file is not valid UTF-8 text]</em></p>"#,
+                        file.path
+                    );
+                    return block(html);
+                }
+            }
         }
     };
     let source = source.trim().to_string();

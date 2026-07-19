@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use super::directives::{Directive, parse_tag_directive};
-use super::handlers::{json_table, parse_size_class, run_jq};
+use super::handlers::{TextBlob, decode_text_blob, json_table, parse_size_class, run_jq};
 use super::highlight::highlight_code_block;
 use super::lookup::{FileLookup, parse_file_lookup};
-use super::renderer::{collect_container, collect_mermaid_fence};
+use super::renderer::{block, collect_container, collect_mermaid_fence};
 
 fn parse_block(line: &str) -> Option<Directive> {
     let trimmed = line.trim();
@@ -263,6 +263,42 @@ fn highlight_has_no_blank_lines() {
         !html.contains("\n\n"),
         "blank line in emitted HTML: {html:?}"
     );
+}
+
+#[test]
+fn decode_text_blob_found() {
+    let result = decode_text_blob(Some(b"1. e4 e5".to_vec()));
+    assert_eq!(result, TextBlob::Found("1. e4 e5".to_string()));
+}
+
+#[test]
+fn decode_text_blob_not_found() {
+    let result = decode_text_blob(None);
+    assert_eq!(result, TextBlob::NotFound);
+}
+
+#[test]
+fn decode_text_blob_invalid_utf8() {
+    // Lone continuation byte: not valid UTF-8 on its own.
+    let result = decode_text_blob(Some(vec![0x80, 0x81]));
+    assert_eq!(result, TextBlob::InvalidUtf8);
+}
+
+#[test]
+fn block_strips_whitespace_only_lines() {
+    let html = block("<div>\n  \n<span>x</span>\n\t\n</div>".to_string());
+    let inner_lines: Vec<&str> = html.trim().lines().collect();
+    assert!(
+        inner_lines.iter().all(|line| !line.trim().is_empty()),
+        "blank line survived block(): {html:?}"
+    );
+    assert!(html.contains("<span>x</span>"));
+}
+
+#[test]
+fn block_wraps_with_leading_trailing_blank_lines() {
+    let html = block("<p>ok</p>".to_string());
+    assert_eq!(html, "\n\n<p>ok</p>\n\n");
 }
 
 fn jv(s: &str) -> serde_json::Value {
