@@ -255,3 +255,76 @@ async fn concurrency_capped_provider_serializes_concurrent_turns() {
         "concurrency: Some(1) must serialize every in-flight request to this endpoint"
     );
 }
+
+/// One catalog entry pointing at `base_url`, so which endpoint the produced
+/// `Llm` connects to reveals which model a factory resolved.
+fn ollama_catalog_model(id: i32, base_url: &str, http: &HttpClient) -> CatalogModel {
+    let p = provider("ollama", None, Some(base_url));
+    CatalogModel {
+        model_id: id,
+        provider_id: p.id,
+        provider_label: p.label.clone(),
+        kind: p.kind.clone(),
+        wire_model: "test-model".to_string(),
+        is_default: false,
+        context_window: None,
+        concurrency: None,
+        rpm: None,
+        llm_factory: build_factory(&p, "test-model", http).expect("build ollama factory"),
+    }
+}
+
+async fn drive_one_stream(factory: &LlmFactory) {
+    let factory = factory.clone();
+    let mut llm = factory();
+    let mut stream = llm
+        .stream(entanglement_provider::LlmRequest {
+            system: "",
+            model: None,
+            messages: &[],
+            tools: &[],
+            generation: None,
+        })
+        .await
+        .expect("stream should start");
+    while futures_util::StreamExt::next(&mut stream).await.is_some() {}
+}
+
+/// The engine freezes `EngineConfig.llm_factory` at spawn, so an un-pinned
+/// session (a resumed one, a `/compact` fork's seed) built from a *snapshot*
+/// factory would keep calling whatever model was default at boot even after an
+/// admin default change (the `qwen3.5:9b`-after-switch-to-`ornith` bug).
+/// `dynamic_default_factory` must instead re-resolve the current default on
+/// every invocation, so the same factory handle follows a mid-life refresh.
+#[tokio::test]
+async fn dynamic_default_factory_tracks_the_current_default_across_refresh() {
+    let (url_a, hits_a) = spawn_concurrency_probe(std::time::Duration::from_millis(10)).await;
+    let (url_b, hits_b) = spawn_concurrency_probe(std::time::Duration::from_millis(10)).await;
+    let http = HttpClient::new();
+
+    let catalog = Arc::new(SiteCatalog::new_for_test(CatalogInner {
+        by_model_id: HashMap::from([
+            (1, ollama_catalog_model(1, &url_a, &http)),
+            (2, ollama_catalog_model(2, &url_b, &http)),
+        ]),
+        default_model_id: Some(1),
+    }));
+
+    // Resolved once — the exact handle the engine would freeze into its config.
+    let factory = catalog.dynamic_default_factory();
+
+    drive_one_stream(&factory).await;
+    assert_eq!(hits_a.load(Ordering::SeqCst), 1, "default 1 → endpoint A");
+    assert_eq!(hits_b.load(Ordering::SeqCst), 0);
+
+    // Simulate the admin flipping the default (what `refresh()` rewrites).
+    catalog.set_default_for_test(Some(2));
+
+    drive_one_stream(&factory).await;
+    assert_eq!(
+        hits_b.load(Ordering::SeqCst),
+        1,
+        "the same factory handle must follow the new default to endpoint B"
+    );
+    assert_eq!(hits_a.load(Ordering::SeqCst), 1, "endpoint A not hit again");
+}

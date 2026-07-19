@@ -211,7 +211,12 @@ impl SiteEngine {
             })
             .collect();
         let cfg = EngineConfig {
-            llm_factory: llm_factory_override.unwrap_or_else(|| catalog.default_llm_factory()),
+            // Defer to the catalog's *current* default at call time (not a
+            // frozen snapshot) so an admin default-model change via
+            // `catalog.refresh()` takes effect for un-pinned/resumed sessions
+            // without a restart — otherwise the engine keeps calling whatever
+            // model was default when the process booted.
+            llm_factory: llm_factory_override.unwrap_or_else(|| catalog.dynamic_default_factory()),
             tool_specs: local_specs.clone(),
             profiles: profiles.clone(),
             profile_tool_specs,
