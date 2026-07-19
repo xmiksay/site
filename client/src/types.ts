@@ -253,6 +253,12 @@ export interface LlmModel {
   is_default: boolean
   /** Real context window in tokens (#40); `null` falls back to the engine's generic default. */
   context_window: number | null
+  /** Whether this model accepts a `temperature` generation override (#53). */
+  supports_temperature: boolean
+  /** Whether this model accepts a `reasoning_effort` generation override (#53). */
+  supports_reasoning_effort: boolean
+  /** Whether this model accepts a `thinking_budget_tokens` generation override (#53). */
+  supports_thinking: boolean
   created_at: string
 }
 
@@ -262,6 +268,9 @@ export interface LlmModelInput {
   model: string
   is_default?: boolean
   context_window?: number
+  supports_temperature?: boolean
+  supports_reasoning_effort?: boolean
+  supports_thinking?: boolean
 }
 
 export interface ToolPermission {

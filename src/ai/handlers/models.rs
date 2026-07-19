@@ -19,6 +19,9 @@ pub struct ModelView {
     pub model: String,
     pub is_default: bool,
     pub context_window: Option<i32>,
+    pub supports_temperature: bool,
+    pub supports_reasoning_effort: bool,
+    pub supports_thinking: bool,
     pub created_at: String,
 }
 
@@ -31,6 +34,12 @@ pub struct CreateModel {
     pub is_default: Option<bool>,
     #[serde(default)]
     pub context_window: Option<i32>,
+    #[serde(default)]
+    pub supports_temperature: Option<bool>,
+    #[serde(default)]
+    pub supports_reasoning_effort: Option<bool>,
+    #[serde(default)]
+    pub supports_thinking: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -43,6 +52,12 @@ pub struct UpdateModel {
     pub is_default: Option<bool>,
     #[serde(default)]
     pub context_window: Option<i32>,
+    #[serde(default)]
+    pub supports_temperature: Option<bool>,
+    #[serde(default)]
+    pub supports_reasoning_effort: Option<bool>,
+    #[serde(default)]
+    pub supports_thinking: Option<bool>,
 }
 
 async fn enrich(state: &AppState, rows: Vec<llm_model::Model>) -> ApiResult<Vec<ModelView>> {
@@ -66,6 +81,9 @@ async fn enrich(state: &AppState, rows: Vec<llm_model::Model>) -> ApiResult<Vec<
                 model: m.model,
                 is_default: m.is_default,
                 context_window: m.context_window,
+                supports_temperature: m.supports_temperature,
+                supports_reasoning_effort: m.supports_reasoning_effort,
+                supports_thinking: m.supports_thinking,
                 created_at: m.created_at.to_string(),
             })
         })
@@ -108,6 +126,9 @@ pub async fn create(
         model: Set(input.model),
         is_default: Set(want_default || none_yet),
         context_window: Set(input.context_window),
+        supports_temperature: Set(input.supports_temperature.unwrap_or(true)),
+        supports_reasoning_effort: Set(input.supports_reasoning_effort.unwrap_or(false)),
+        supports_thinking: Set(input.supports_thinking.unwrap_or(false)),
         ..Default::default()
     }
     .insert(&state.db)
@@ -152,6 +173,15 @@ pub async fn update(
     }
     if let Some(w) = input.context_window {
         active.context_window = Set(Some(w));
+    }
+    if let Some(v) = input.supports_temperature {
+        active.supports_temperature = Set(v);
+    }
+    if let Some(v) = input.supports_reasoning_effort {
+        active.supports_reasoning_effort = Set(v);
+    }
+    if let Some(v) = input.supports_thinking {
+        active.supports_thinking = Set(v);
     }
     let updated = active.update(&state.db).await?;
     state

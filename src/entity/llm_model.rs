@@ -21,6 +21,16 @@ pub struct Model {
     /// fallback. `None` when unset (falls back to
     /// `entanglement_core::context::CONTEXT_LIMIT_TOKENS`).
     pub context_window: Option<i32>,
+    /// Gates the `GenerationParams.temperature` knob (#53, m_029) — an
+    /// unsupported value is rejected up front instead of being forwarded to
+    /// the provider, which would otherwise reject the whole turn.
+    pub supports_temperature: bool,
+    /// Gates the `GenerationParams.reasoning_effort` knob (#53, m_029); most
+    /// non-reasoning models (e.g. `gpt-4o`, z.ai `glm-*`) reject it outright.
+    pub supports_reasoning_effort: bool,
+    /// Gates the `GenerationParams.thinking_budget_tokens` knob (#53, m_029);
+    /// same rationale as `supports_reasoning_effort`.
+    pub supports_thinking: bool,
     pub created_at: DateTimeWithTimeZone,
 }
 

@@ -12,15 +12,28 @@ const draft = ref<LlmModelInput>({
   model: '',
   is_default: false,
   context_window: undefined,
+  supports_temperature: true,
+  supports_reasoning_effort: false,
+  supports_thinking: false,
 })
 
 interface EditDraft {
   label: string
   model: string
   context_window: number | undefined
+  supports_temperature: boolean
+  supports_reasoning_effort: boolean
+  supports_thinking: boolean
 }
 const editingId = ref<number | null>(null)
-const editDraft = ref<EditDraft>({ label: '', model: '', context_window: undefined })
+const editDraft = ref<EditDraft>({
+  label: '',
+  model: '',
+  context_window: undefined,
+  supports_temperature: true,
+  supports_reasoning_effort: false,
+  supports_thinking: false,
+})
 
 onMounted(async () => {
   await Promise.all([assistant.loadProviders(), assistant.loadModels()])
@@ -57,6 +70,9 @@ async function create() {
     model: draft.value.model.trim(),
     is_default: draft.value.is_default,
     context_window: draft.value.context_window,
+    supports_temperature: draft.value.supports_temperature,
+    supports_reasoning_effort: draft.value.supports_reasoning_effort,
+    supports_thinking: draft.value.supports_thinking,
   })
   draft.value = {
     provider_id: assistant.providers[0]?.id ?? 0,
@@ -64,13 +80,23 @@ async function create() {
     model: '',
     is_default: false,
     context_window: undefined,
+    supports_temperature: true,
+    supports_reasoning_effort: false,
+    supports_thinking: false,
   }
   showCreate.value = false
 }
 
 function startEdit(m: LlmModel) {
   editingId.value = m.id
-  editDraft.value = { label: m.label, model: m.model, context_window: m.context_window ?? undefined }
+  editDraft.value = {
+    label: m.label,
+    model: m.model,
+    context_window: m.context_window ?? undefined,
+    supports_temperature: m.supports_temperature,
+    supports_reasoning_effort: m.supports_reasoning_effort,
+    supports_thinking: m.supports_thinking,
+  }
 }
 
 function cancelEdit() {
@@ -90,6 +116,15 @@ async function saveEdit(m: LlmModel) {
     editDraft.value.context_window !== m.context_window
   ) {
     patch.context_window = editDraft.value.context_window
+  }
+  if (editDraft.value.supports_temperature !== m.supports_temperature) {
+    patch.supports_temperature = editDraft.value.supports_temperature
+  }
+  if (editDraft.value.supports_reasoning_effort !== m.supports_reasoning_effort) {
+    patch.supports_reasoning_effort = editDraft.value.supports_reasoning_effort
+  }
+  if (editDraft.value.supports_thinking !== m.supports_thinking) {
+    patch.supports_thinking = editDraft.value.supports_thinking
   }
   if (Object.keys(patch).length > 0) {
     await assistant.updateModel(m.id, patch)
@@ -166,6 +201,15 @@ async function remove(id: number, label: string) {
         />
       </div>
       <label class="flex items-center gap-2 text-sm">
+        <input v-model="draft.supports_temperature" type="checkbox" /> supports temperature
+      </label>
+      <label class="flex items-center gap-2 text-sm">
+        <input v-model="draft.supports_reasoning_effort" type="checkbox" /> supports reasoning effort
+      </label>
+      <label class="flex items-center gap-2 text-sm">
+        <input v-model="draft.supports_thinking" type="checkbox" /> supports thinking budget
+      </label>
+      <label class="flex items-center gap-2 text-sm">
         <input v-model="draft.is_default" type="checkbox" /> default for new chats
       </label>
       <div class="flex justify-end">
@@ -181,6 +225,7 @@ async function remove(id: number, label: string) {
             <th class="text-left px-4 py-2">Provider</th>
             <th class="text-left px-4 py-2">Model</th>
             <th class="text-left px-4 py-2">Context window</th>
+            <th class="text-left px-4 py-2">Capabilities</th>
             <th class="text-left px-4 py-2">Default</th>
             <th class="px-4 py-2"></th>
           </tr>
@@ -192,6 +237,23 @@ async function remove(id: number, label: string) {
               <td class="px-4 py-2 text-gray-600">{{ m.provider_label }} ({{ m.provider_kind }})</td>
               <td class="px-4 py-2 font-mono text-xs">{{ m.model }}</td>
               <td class="px-4 py-2 text-gray-600">{{ m.context_window ?? '—' }}</td>
+              <td class="px-4 py-2 space-x-1 text-xs">
+                <span
+                  class="rounded px-1.5 py-0.5"
+                  :class="m.supports_temperature ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'"
+                  title="Temperature"
+                >T</span>
+                <span
+                  class="rounded px-1.5 py-0.5"
+                  :class="m.supports_reasoning_effort ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'"
+                  title="Reasoning effort"
+                >R</span>
+                <span
+                  class="rounded px-1.5 py-0.5"
+                  :class="m.supports_thinking ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'"
+                  title="Thinking budget"
+                >Th</span>
+              </td>
               <td class="px-4 py-2">
                 <span v-if="m.is_default" class="text-xs text-emerald-700 font-semibold">default</span>
                 <button
@@ -223,7 +285,7 @@ async function remove(id: number, label: string) {
               </td>
             </tr>
             <tr v-if="editingId === m.id" class="border-t border-gray-100 bg-gray-50">
-              <td colspan="6" class="px-4 py-3">
+              <td colspan="7" class="px-4 py-3">
                 <div class="space-y-3">
                   <div class="grid grid-cols-2 gap-3">
                     <div>
@@ -255,6 +317,15 @@ async function remove(id: number, label: string) {
                       class="w-full border rounded p-2 text-sm"
                     />
                   </div>
+                  <label class="flex items-center gap-2 text-sm">
+                    <input v-model="editDraft.supports_temperature" type="checkbox" /> supports temperature
+                  </label>
+                  <label class="flex items-center gap-2 text-sm">
+                    <input v-model="editDraft.supports_reasoning_effort" type="checkbox" /> supports reasoning effort
+                  </label>
+                  <label class="flex items-center gap-2 text-sm">
+                    <input v-model="editDraft.supports_thinking" type="checkbox" /> supports thinking budget
+                  </label>
                   <div class="flex justify-end">
                     <button
                       class="rounded bg-gray-800 text-white px-4 py-2 text-sm"
@@ -268,7 +339,7 @@ async function remove(id: number, label: string) {
             </tr>
           </template>
           <tr v-if="assistant.models.length === 0">
-            <td colspan="6" class="px-4 py-6 text-center text-gray-400">
+            <td colspan="7" class="px-4 py-6 text-center text-gray-400">
               No models yet.
             </td>
           </tr>

@@ -92,6 +92,14 @@ async fn setup(db_url: &str, tag: &str) -> Fixture {
         label: Set("model-a".to_string()),
         model: Set("model-a".to_string()),
         is_default: Set(true),
+        // This fixture's whole point is round-tripping temperature/
+        // reasoning_effort/thinking_budget_tokens through PATCH (#53's
+        // capability gate rejects unsupported knobs, so this model must
+        // explicitly declare support for all three rather than rely on the
+        // migration's opt-in defaults for the latter two).
+        supports_temperature: Set(true),
+        supports_reasoning_effort: Set(true),
+        supports_thinking: Set(true),
         ..Default::default()
     }
     .insert(&db)
