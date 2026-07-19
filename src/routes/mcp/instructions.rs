@@ -156,7 +156,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                 },
                 {
                     "name": "create_file",
-                    "description": "Upload a file at the given path. Provide either `data_base64` (binary, e.g. images) or `data` (raw text, e.g. PGN/FEN/SVG). The display title is derived from the basename of the path. Returns the new file id (referenceable via `<image id=\"ID\">` / `<gallery id=\"ID\">` in markdown). Generates a thumbnail automatically for images.",
+                    "description": "Upload a file at the given path. Provide either `data_base64` (binary, e.g. images) or `data` (raw text, e.g. PGN/FEN/SVG). The display title is derived from the basename of the path. Returns the new file id plus an `embed` hint for the matching markdown directive: `<image id=\"ID\">` for images, `<pgn id=\"ID\">` for `.pgn`, `<mermaid id=\"ID\">` for `.mmd`, `<fen id=\"ID\">` for `.fen`, `<json id=\"ID\" query=\"...\">` for `.json`, `<file id=\"ID\">` otherwise (or `<gallery id=\"ID\">` to group several files). Generates a thumbnail automatically for images.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {

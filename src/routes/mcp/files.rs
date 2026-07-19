@@ -112,6 +112,11 @@ pub(super) async fn tool_create_file(
         Ok(created) => {
             let summary =
                 broadcast::file_created(&state.ws_hub, &created.model, created.has_thumbnail);
+            let embed = files_repo::embed_hint(
+                &created.model.path,
+                &created.model.mimetype,
+                created.model.id,
+            );
             json_result(
                 id,
                 json!({
@@ -121,7 +126,7 @@ pub(super) async fn tool_create_file(
                     "mimetype": created.model.mimetype,
                     "size_bytes": created.model.size_bytes,
                     "has_thumbnail": created.has_thumbnail,
-                    "embed": format!("<image id=\"{}\">", created.model.id),
+                    "embed": embed,
                 }),
             )
         }

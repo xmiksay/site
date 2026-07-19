@@ -111,6 +111,22 @@ pub fn title_from_path(path: &str) -> String {
         .to_string()
 }
 
+/// Suggest the markdown directive to embed a newly created file, based on its
+/// extension/mimetype — `<image>` only makes sense for `image/*` blobs; a
+/// `.pgn`/`.mmd`/`.fen`/`.json` file needs its own type-specific directive to
+/// render as a board/diagram/table instead of a broken `<img>`.
+pub fn embed_hint(path: &str, mimetype: &str, id: i32) -> String {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "pgn" => format!(r#"<pgn id="{id}">"#),
+        "mmd" | "mermaid" => format!(r#"<mermaid id="{id}">"#),
+        "fen" => format!(r#"<fen id="{id}">"#),
+        "json" => format!(r#"<json id="{id}" query=".">"#),
+        _ if mimetype.starts_with("image/") => format!(r#"<image id="{id}">"#),
+        _ => format!(r#"<file id="{id}">"#),
+    }
+}
+
 pub async fn create_file(
     db: &DatabaseConnection,
     user_id: i32,
@@ -253,4 +269,62 @@ pub async fn update_metadata(
 pub async fn delete_by_id(db: &DatabaseConnection, id: i32) -> Result<bool, DbErr> {
     let res = file::Entity::delete_by_id(id).exec(db).await?;
     Ok(res.rows_affected > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::embed_hint;
+
+    #[test]
+    fn pgn_hints_pgn_directive() {
+        assert_eq!(
+            embed_hint("game.pgn", "application/octet-stream", 1),
+            r#"<pgn id="1">"#
+        );
+    }
+
+    #[test]
+    fn mermaid_hints_mermaid_directive() {
+        assert_eq!(
+            embed_hint("diagrams/flow.mmd", "text/plain", 2),
+            r#"<mermaid id="2">"#
+        );
+    }
+
+    #[test]
+    fn fen_hints_fen_directive() {
+        assert_eq!(
+            embed_hint("opening.fen", "application/x-chess-fen", 3),
+            r#"<fen id="3">"#
+        );
+    }
+
+    #[test]
+    fn json_hints_json_directive_with_query_placeholder() {
+        assert_eq!(
+            embed_hint("data/stats.json", "application/json", 4),
+            r#"<json id="4" query=".">"#
+        );
+    }
+
+    #[test]
+    fn image_mimetype_hints_image_directive() {
+        assert_eq!(
+            embed_hint("photo.jpg", "image/jpeg", 5),
+            r#"<image id="5">"#
+        );
+    }
+
+    #[test]
+    fn unknown_type_hints_file_directive() {
+        assert_eq!(embed_hint("notes.txt", "text/plain", 6), r#"<file id="6">"#);
+    }
+
+    #[test]
+    fn extension_wins_over_generic_mimetype() {
+        assert_eq!(
+            embed_hint("game.pgn", "application/octet-stream", 7),
+            r#"<pgn id="7">"#
+        );
+    }
 }
