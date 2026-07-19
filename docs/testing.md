@@ -149,7 +149,7 @@ executes on every PR rather than self-skipping.
   mid-session once its server is discovered (issue #38, no executor restart).
 - The assistant-session flow — drives a session through the real HTTP API
   (`tower::ServiceExt::oneshot`, no socket) end to end: create, message, tool
-  call, approve. Split by scenario across three top-level test files (each
+  call, approve. Split by scenario across several top-level test files (each
   `tests/*.rs` compiles as its own binary, so this is the natural split
   boundary), sharing setup helpers via `tests/common/mod.rs` (`test_db_url`,
   `send`) and `tests/common/scripted.rs` (the scripted-`Llm` fixture, `#[path]`-
@@ -176,3 +176,15 @@ executes on every PR rather than self-skipping.
     a real catalog-driven factory, discarding the override). **Prefer this
     pattern over a live model** for any new test that needs the engine to
     receive a specific tool call.
+  - `tests/assistant_session_subagent_resume.rs` (#43) — resume of a session
+    with a **live** sub-agent, sourced from `assistant_events` alone: a whole
+    root + `page-writer` child conversation (child parked on a pending
+    `edit_page` approval) is inserted directly, never driven through a live
+    turn, so this process's in-memory `SESSION_PARENTS` cache
+    (`ai::engine::session_tree`) starts genuinely cold for the child. The
+    first `GET` triggers `ensure_live`/`resume_session`, and approving the
+    still-pending call afterward only succeeds because entanglement 0.3.0's
+    resume cascades over the whole spawn sub-tree (ADR-0112) and this site's
+    generic `SessionStarted` watcher re-populates the cache from that
+    cascade — proving the sub-agent replays correctly without ever having
+    lived in this process before.

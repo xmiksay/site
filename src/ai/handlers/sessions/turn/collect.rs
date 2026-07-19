@@ -31,7 +31,14 @@ const TURN_TIMEOUT: Duration = Duration::from_secs(180);
 /// receiver rather than via `engine::root_session_of`'s process-global cache —
 /// that cache is written by a *different* subscriber task (`engine.rs`'s
 /// session watcher), so trusting it here would race this loop against that
-/// task's own processing of the same `SessionStarted`.
+/// task's own processing of the same `SessionStarted`. Reassessed for #43:
+/// entanglement 0.3.0's resume-cascade (ADR-0112) and spawn-prompt
+/// persistence (ADR-0113) are both about *replaying a settled log*, not about
+/// ordering across this process's own live broadcast subscribers, so they
+/// don't touch this race — `send_and_collect` only ever runs against a
+/// session already `ensure_live`'d for the current turn, live traffic within
+/// one HTTP request, never a resume in progress. The local `descendants` fold
+/// stays.
 ///
 /// The turn settles once *every* targeted session has settled — normally
 /// just `session` (a plain prompt/root-only approve), but `approve`'s

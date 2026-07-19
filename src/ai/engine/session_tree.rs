@@ -20,6 +20,23 @@
 //! [`SESSION_PARENTS`], fed by `engine.rs`'s `spawn`'s session-lifecycle
 //! watcher) and only then parses the `u{user_id}:` prefix — so every existing
 //! call site keeps working unchanged for sub-agent sessions too.
+//!
+//! ## Reassessed against entanglement 0.3.0 (issue #43)
+//!
+//! 0.3.0's `Holly::resume` now cascades over a root's whole spawn sub-tree
+//! (ADR-0112): a live-at-persistence-time child is re-materialized alongside
+//! the root, re-emitting its own `SessionStarted { parent: Some(root), .. }`
+//! exactly like a fresh live spawn does. This cache's population needs no
+//! resume-specific code — the existing `engine.rs` watcher, generic over
+//! every `SessionStarted` it observes, already re-populates
+//! [`SESSION_PARENTS`] for a cascaded child with zero changes here. What
+//! *doesn't* go away: the child id still can't be tenant-parsed directly (the
+//! library has no notion of this site's prefix), so the cache itself stays;
+//! and [`user_id_from_session_awaiting`]'s TOCTOU retry — racing this
+//! process's watcher subscriber against whoever needs the link — now covers
+//! *both* a freshly live-spawned child and a resume-reconstituted one with a
+//! parked mid-turn call, since both re-announce `SessionStarted` on the same
+//! racy broadcast. Neither is a library guarantee this site can drop.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -137,20 +154,25 @@ const SESSION_PARENT_RETRY_ATTEMPTS: u32 = 5;
 const SESSION_PARENT_RETRY_DELAY: Duration = Duration::from_millis(5);
 
 /// [`user_id_from_session`], but retried a few times on failure — closes the
-/// TOCTOU window a bare `user_id_from_session` call has for a **freshly**
-/// spawned sub-agent child: [`SESSION_PARENTS`] is populated by `engine.rs`'s
-/// `spawn`'s session watcher task, itself an independent `holly.subscribe()`r
-/// racing against whatever *other* task first needs to resolve that same
-/// child's user (there is no cross-task ordering guarantee between two
-/// independent broadcast subscribers, only within one). Unlike `ws_bridge.rs`
-/// (which sidesteps the race entirely with its own locally-fed parent map,
-/// since it already taps the same ordered stream), a detached per-call
-/// dispatch task — `SitePolicy::resolve`'s caller — has no such stream to
-/// piggyback on, so a short bounded retry is the practical fix: the
-/// watcher's own work is microseconds, so in the near-certain case this
-/// returns on the first try, and the worst case adds at most
-/// `SESSION_PARENT_RETRY_ATTEMPTS * SESSION_PARENT_RETRY_DELAY` (25ms) to a
-/// single permission resolution rather than silently denying it.
+/// TOCTOU window a bare `user_id_from_session` call has for a sub-agent child
+/// whose `SessionStarted` this process has not yet folded: [`SESSION_PARENTS`]
+/// is populated by `engine.rs`'s `spawn`'s session watcher task, itself an
+/// independent `holly.subscribe()`r racing against whatever *other* task
+/// first needs to resolve that same child's user (there is no cross-task
+/// ordering guarantee between two independent broadcast subscribers, only
+/// within one). That race hits two distinct child births the same way: a
+/// **freshly** live-spawned child, and — since 0.3.0's ADR-0112 cascades
+/// `resume` over the whole spawn sub-tree — a child re-materialized on
+/// *resume*, re-announcing `SessionStarted` on the exact same racy broadcast
+/// as a live spawn. Neither case is fixed by the library; both still need
+/// this retry. Unlike `ws_bridge.rs` (which sidesteps the race entirely with
+/// its own locally-fed parent map, since it already taps the same ordered
+/// stream), a detached per-call dispatch task — `SitePolicy::resolve`'s
+/// caller — has no such stream to piggyback on, so a short bounded retry is
+/// the practical fix: the watcher's own work is microseconds, so in the
+/// near-certain case this returns on the first try, and the worst case adds
+/// at most `SESSION_PARENT_RETRY_ATTEMPTS * SESSION_PARENT_RETRY_DELAY`
+/// (25ms) to a single permission resolution rather than silently denying it.
 pub async fn user_id_from_session_awaiting(session: &SessionId) -> anyhow::Result<i32> {
     let mut last_err = None;
     for attempt in 0..SESSION_PARENT_RETRY_ATTEMPTS {

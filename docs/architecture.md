@@ -282,6 +282,19 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     `tools/*`/`mcp.rs`, all of which import the same `user_id_from_session` —
     resolve a sub-agent call against the *spawning user's* own
     `tool_permissions` rules instead of failing closed.
+    `user_id_from_session_awaiting` (used wherever the caller has no ordered
+    stream of its own to fall back on, e.g. `policy.rs`) retries a bare lookup
+    a few times to close a TOCTOU window: `SESSION_PARENTS` is written by this
+    watcher's own `holly.subscribe()`r, an independent broadcast subscriber
+    racing against whoever else needs the same child's link. Reassessed for
+    #43 against entanglement 0.3.0's cascading `resume` (ADR-0112, which
+    re-materializes a root's whole spawn sub-tree and re-announces each
+    child's `SessionStarted` exactly like a live spawn): this cache's resume
+    population needs no extra code — the same generic watcher already covers
+    a cascaded child — but the retry race is *not* eliminated, only widened to
+    also cover a resume-reconstituted child's re-announced `SessionStarted`,
+    not just a freshly live-spawned one. Neither `SESSION_PARENTS` nor the
+    retry is a library-guaranteed problem this site can drop.
 - `catalog.rs` — `SiteCatalog`: builds `entanglement_provider::LlmFactory`/
   `ModelResolver` closures from `llm_providers`/`llm_models`; `refresh()` is
   called after provider/model CRUD. `ModelResolver` populates
@@ -343,7 +356,18 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   broadcast-lag path — and `resume_session` (issue #28) no longer hard-refuses
   a session with a detected gap; it resumes from the intact prefix strictly
   before the gap (`truncate_at_gap`), so a session stays resumable forever
-  instead of every future `ensure_live` failing.
+  instead of every future `ensure_live` failing. `resume_session` passes
+  `assistant_events`' whole root file (root + any sub-agent children, since
+  they share one `root_session_id`) to `Holly::resume` in one call —
+  entanglement 0.3.0's `resume` cascades over the *whole* spawn sub-tree
+  itself (ADR-0112), re-materializing a child that was still live as of where
+  the log stopped, so no per-child loop is needed here.
+  `handlers/sessions/turn.rs`'s `send_and_collect` builds its own response
+  from the `LogRecord`s it just observed rather than re-reading
+  `assistant_events` after a turn settles — reassessed for #43 and unrelated
+  to `entanglement_runtime`'s own guarantees either way: it exists solely
+  because `DbSink`'s async writer task gives no read-your-writes guarantee at
+  the instant this handler observes e.g. `Done`.
 - `projection/` — pure fold of a session's `assistant_events` rows into the
   `{role, content}` shape the admin client renders (`role` one of
   `user | assistant | tool_result | error`). Since #17, `assistant_events`
@@ -359,7 +383,10 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   `tool_call_id` — `extract_child_session_id` recovers the uuid from it. This
   correctly handles a refused spawn (no valid uuid in its refusal text, so it
   claims nothing) and concurrent siblings in one batch (each still names its
-  own child, so log order between them doesn't matter).
+  own child, so log order between them doesn't matter). `content.is_error` on
+  a `tool_result` is a text-prefix heuristic (`looks_like_tool_error`), not a
+  structural flag — `OutEvent::ToolOutput` carries none, re-checked against
+  entanglement-core 0.3.0 for #43 and still true.
 - `tools/` — the built-in (non-MCP) tool vocabulary, ported to
   `entanglement_runtime::tools::Tool`. A curated subset of the site API (not
   full CRUD): pages `read`/`search`/`edit`/`delete`, tags `list`/`create`,
