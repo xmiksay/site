@@ -68,12 +68,49 @@ pub(in crate::markdown) async fn directive_json(d: &Directive, ctx: &mut RenderC
         Err(e) => return format!("\n\n*[json: {e}]*\n\n"),
     };
 
+    if ctx.export.is_some() {
+        return if columns.is_empty() && rows.is_empty() {
+            block("*[json: empty result]*".to_string())
+        } else {
+            block(markdown_table(&columns, &rows))
+        };
+    }
+
     let html = render_md_template(
         ctx,
         "json",
         context! { kind => kind, columns => columns, rows => rows },
     );
     block(html)
+}
+
+/// Render a jq result as a real markdown pipe table (rather than the HTML
+/// table the live renderer builds) — mdcast's typst backend converts real
+/// markdown tables, but doesn't understand raw HTML (#66).
+pub(in crate::markdown) fn markdown_table(columns: &[String], rows: &[Vec<String>]) -> String {
+    let ncols = if !columns.is_empty() {
+        columns.len()
+    } else {
+        rows.first().map(Vec::len).unwrap_or(0)
+    };
+    if ncols == 0 {
+        return String::new();
+    }
+    fn escape(s: &str) -> String {
+        s.replace('|', "\\|").replace('\n', " ")
+    }
+    let header: Vec<String> = if columns.is_empty() {
+        vec![String::new(); ncols]
+    } else {
+        columns.iter().map(|c| escape(c)).collect()
+    };
+    let mut out = format!("| {} |\n", header.join(" | "));
+    out.push_str(&format!("|{}\n", "---|".repeat(ncols)));
+    for row in rows {
+        let cells: Vec<String> = row.iter().map(|c| escape(c)).collect();
+        out.push_str(&format!("| {} |\n", cells.join(" | ")));
+    }
+    out
 }
 
 /// Run a jq query over `input` using jaq, collecting all outputs.

@@ -8,15 +8,20 @@
 //! startup check that turns a missing binary into a typed, loggable error
 //! instead of a panic the first time an export route tries to spawn it
 //! (routes land in #67). `assets` (#65) provides the DB-backed
-//! `mdcast::AssetProvider` those routes will render through.
+//! `mdcast::AssetProvider` those routes will render through. `bridge` (#66)
+//! layers `markdown::render_for_export`'s synthesized fen/pgn/mermaid SVGs
+//! over that provider.
 
 mod assets;
+mod bridge;
 
 use std::fmt;
 
 use tokio::process::Command;
 
+pub use crate::markdown::BridgedMarkdown;
 pub use assets::DbAssetProvider;
+pub use bridge::asset_provider;
 
 /// The configured pandoc binary could not be spawned or reported a failing
 /// exit status. Never constructed from a panic — every path that can fail

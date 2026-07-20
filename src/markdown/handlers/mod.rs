@@ -18,7 +18,9 @@ pub(super) use simple::{directive_file, directive_gallery, directive_img, direct
 // Re-exported at crate::markdown visibility solely so `tests.rs` can exercise
 // them directly, matching the coverage the original single-file module had.
 #[cfg(test)]
-pub(super) use json::{json_table, run_jq};
+pub(super) use json::{json_table, markdown_table, run_jq};
+#[cfg(test)]
+pub(super) use media::{PgnPlyRequest, pgn_ply_request};
 
 /// Trimmed paired-tag body, if the directive carries a non-empty one.
 pub(super) fn inline_body(d: &Directive) -> Option<String> {
@@ -27,6 +29,14 @@ pub(super) fn inline_body(d: &Directive) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
+}
+
+/// A `![alt](key)` markdown image reference — the export-mode splice every
+/// directive that resolves to an image (a synthesized SVG or a page-authored
+/// file) uses instead of an HTML `<img>`, since mdcast's typst backend
+/// converts real markdown images but not raw HTML.
+pub(super) fn markdown_image(alt: &str, key: &str) -> String {
+    format!("![{alt}]({key})")
 }
 
 pub(super) fn parse_size_class(d: &Directive) -> &'static str {
