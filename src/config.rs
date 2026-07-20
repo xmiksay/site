@@ -4,6 +4,10 @@ pub struct Config {
     pub database_url: String,
     pub design_dir: Option<PathBuf>,
     pub serper_api_key: Option<String>,
+    /// `pandoc` binary used by mdcast's DOCX/ODT/PPTX/reveal.js-slides
+    /// backends (#64). No equivalent path exists for typst — it renders
+    /// PDF/PDF-slides in-process via the `typst`/`typst-as-lib` crates.
+    pub mdcast_pandoc_path: String,
 }
 
 impl Config {
@@ -18,6 +22,10 @@ impl Config {
             serper_api_key: std::env::var("SERPER_API_KEY")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            mdcast_pandoc_path: std::env::var("MDCAST_PANDOC_PATH")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "pandoc".to_string()),
         }
     }
 }

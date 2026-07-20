@@ -14,6 +14,7 @@ Hybrid personal site: server-rendered public pages (MiniJinja) + Vue 3 admin SPA
 - **Auth:** Argon2 password hashing, session cookies (`site_session`, 24 h), legacy service tokens, OAuth2 (PKCE)
 - **MCP:** hand-rolled JSON-RPC 2.0 server at `POST /mcp` (the per-user MCP *client* the AI assistant consumes goes through `entanglement_runtime::mcp::HttpClient`)
 - **AI:** `src/ai/` adapts a single process-wide `entanglement-core`/`-runtime`/`-provider` engine (`Holly`) into `AppState` — per-user sessions, DB-backed tool permissions, per-user MCP client, event-sourced history, sub-agent profiles, streamed over the WS hub
+- **Export:** `mdcast` (`src/export/`) renders pages to PDF/PDF-slides in-process via `typst`/`typst-as-lib`, and to DOCX/ODT/PPTX/reveal.js-slides via a `pandoc` subprocess — see [`docs/architecture.md`](../docs/architecture.md#export-mdcast) (#64; routes/AssetProvider land in follow-up issues)
 - **Logging:** tracing + tracing-subscriber with env filter
 
 ## Architecture (overview)
@@ -65,6 +66,7 @@ Tests: `make test` (backend unit + integration + client), `make test-unit`, `mak
 | `SERPER_API_KEY` | (unset) | Enables AI assistant `web_search` tool |
 | `PUBLIC_URL` | (unset) | Public base URL used to build absolute `<loc>` entries in `/sitemap.xml` |
 | `SELF_URL` | (unset) | Fallback base URL for the sitemap when `PUBLIC_URL` is unset |
+| `MDCAST_PANDOC_PATH` | `pandoc` | Override the `pandoc` binary path/name mdcast's DOCX/ODT/PPTX/reveal.js-slides export backends spawn (#64) |
 
 ## Conventions
 

@@ -3,6 +3,7 @@ pub mod auth;
 pub mod config;
 pub mod design;
 pub mod entity;
+pub mod export;
 pub mod files;
 pub mod markdown;
 pub mod mcp_args;
