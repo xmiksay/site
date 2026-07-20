@@ -62,13 +62,26 @@ impl DesignStore {
     /// override folder and the baked default. Used to compile all templates up
     /// front in release builds.
     pub fn template_names(&self) -> Vec<String> {
+        self.list_prefix("templates/")
+            .into_iter()
+            .filter_map(|path| path.strip_prefix("templates/").map(str::to_owned))
+            .collect()
+    }
+
+    /// Every resource path starting with `prefix`, deduplicated across the
+    /// override folder and the baked default — the general form
+    /// `template_names` specializes to `"templates/"`. Used by the export
+    /// `AssetProvider` (#65) so mdcast's typst/reveal.js backends can
+    /// discover sibling files under a design-bundle subtree via
+    /// `AssetProvider::list`.
+    pub fn list_prefix(&self, prefix: &str) -> Vec<String> {
         let mut names = BTreeSet::new();
         for file in Baked::iter() {
-            if let Some(rest) = file.strip_prefix("templates/") {
-                names.insert(rest.to_string());
+            if file.starts_with(prefix) {
+                names.insert(file.to_string());
             }
         }
-        self.overlay.template_names(&mut names);
+        self.overlay.list_prefix(prefix, &mut names);
         names.into_iter().collect()
     }
 
@@ -90,19 +103,33 @@ impl Overlay {
         }
     }
 
-    fn template_names(&self, names: &mut BTreeSet<String>) {
+    fn list_prefix(&self, prefix: &str, names: &mut BTreeSet<String>) {
         match self {
             Overlay::None => {}
             Overlay::Frozen(map) => {
                 for key in map.keys() {
-                    if let Some(rest) = key.strip_prefix("templates/") {
-                        names.insert(rest.to_string());
+                    if key.starts_with(prefix) {
+                        names.insert(key.clone());
                     }
                 }
             }
             Overlay::Live(dir) => {
-                let base = dir.join("templates");
-                collect_relative_files(&base, &base, names);
+                // Scope the walk to the narrowest directory that can contain a
+                // match instead of the whole override tree: a `/`-terminated
+                // prefix names that directory directly; otherwise fall back to
+                // its parent (the last path segment may be a partial name).
+                // `template_names()`'s `"templates/"` case resolves to exactly
+                // the old hardcoded `dir.join("templates")` scope.
+                let scope = match prefix.strip_suffix('/') {
+                    Some(d) => dir.join(d),
+                    None => match prefix.rsplit_once('/') {
+                        Some((parent, _)) => dir.join(parent),
+                        None => dir.clone(),
+                    },
+                };
+                let mut found = BTreeSet::new();
+                collect_relative_files(dir, &scope, &mut found);
+                names.extend(found.into_iter().filter(|f| f.starts_with(prefix)));
             }
         }
     }
@@ -224,6 +251,27 @@ mod tests {
         assert_eq!(
             store.load("templates/base.html").as_deref(),
             Some(&b"OVERRIDDEN"[..])
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_prefix_scopes_the_live_overlay_walk_to_the_matching_subtree() {
+        // A nested, non-"templates/" prefix (e.g. the export AssetProvider's
+        // `mdcast/typst/...` namespace, #65) must still resolve correctly once
+        // the walk is scoped to avoid reading the whole override tree.
+        let dir = std::env::temp_dir().join("design_store_list_prefix_scoping_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("mdcast/typst/layouts/pdf")).unwrap();
+        std::fs::write(dir.join("mdcast/typst/layouts/pdf/default.typ"), b"x").unwrap();
+        std::fs::create_dir_all(dir.join("assets/img")).unwrap();
+        std::fs::write(dir.join("assets/img/unrelated.png"), b"y").unwrap();
+
+        let store = DesignStore::new(Some(dir.clone()));
+        assert_eq!(
+            store.list_prefix("mdcast/typst/layouts/pdf/"),
+            vec!["mdcast/typst/layouts/pdf/default.typ".to_string()]
         );
 
         let _ = std::fs::remove_dir_all(&dir);

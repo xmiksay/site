@@ -51,8 +51,9 @@ src/
                           # MCP/AI text formatters, #25)
   export/                 # mod.rs: probe_pandoc — startup capability check
                           # for mdcast's pandoc subprocess dependency (#64,
-                          # foundation for #63; routes/AssetProvider land in
-                          # follow-up issues)
+                          # foundation for #63); assets.rs: DbAssetProvider,
+                          # the DB-backed mdcast::AssetProvider (#65; export
+                          # routes land in follow-up issues)
   auth.rs config.rs design.rs files.rs
   markdown/              # mod.rs (entry + MARKDOWN_EXTENSIONS_DOC), directives.rs
                           # (tag parsing), renderer.rs (expansion pipeline),
@@ -527,7 +528,12 @@ Epic #63 integrates [`mdcast`](https://github.com/xmiksay/mdcast) (`Cargo.toml`,
 - **typst** (`Target::Pdf`/`PdfPresentation`) compiles **in-process** via the `typst`/`typst-as-lib` crates — no external `typst` binary is ever spawned, and typst-kit's bundled fonts (`typst-kit-embed-fonts`) mean no host font install is required either. Nothing to provision, nothing that can go "missing" at runtime.
 - **pandoc** (`Target::Docx`/`Odt`/`Pptx`/`HtmlReveal` — the latter is the epic's slice-1 slide format) shells out to a `pandoc` subprocess. This *is* an external runtime dependency: the Docker runtime image installs it via `apt-get install pandoc`, and local dev needs `pandoc` on `PATH` (`brew install pandoc` / `apt install pandoc` / see pandoc.org).
 
-`src/export/mod.rs` (#64) provides `probe_pandoc(binary) -> Result<(), PandocUnavailable>`, a cheap subprocess spawn-and-check (`pandoc --version`) run once at startup from `state::create_state`. The result is cached on `AppState.pandoc_available: bool` rather than re-probed per request. A missing binary logs a `tracing::warn!` and leaves `pandoc_available = false` — it never panics and never blocks the rest of the site from starting; PDF export is unaffected either way, since typst needs no probe. Override the probed binary's path/name with `MDCAST_PANDOC_PATH` (e.g. a non-`PATH` install). The actual export routes, `AssetProvider`, and directive pre-render bridge that consume `pandoc_available` land in follow-up issues (#65–#69).
+`src/export/mod.rs` (#64) provides `probe_pandoc(binary) -> Result<(), PandocUnavailable>`, a cheap subprocess spawn-and-check (`pandoc --version`) run once at startup from `state::create_state`. The result is cached on `AppState.pandoc_available: bool` rather than re-probed per request. A missing binary logs a `tracing::warn!` and leaves `pandoc_available = false` — it never panics and never blocks the rest of the site from starting; PDF export is unaffected either way, since typst needs no probe. Override the probed binary's path/name with `MDCAST_PANDOC_PATH` (e.g. a non-`PATH` install). The actual export routes and directive pre-render bridge land in follow-up issues (#66–#69).
+
+`src/export/assets.rs` (#65) provides `DbAssetProvider`, the `mdcast::AssetProvider` impl those routes will render through — `mdcast` never touches `std::fs` itself, so every template/brand-config file and page-referenced image it needs is fetched through this trait instead. Two namespaces share the single `get`/`list` key space:
+
+- **mdcast's own catalog** — keys under `typst/`, `revealjs/`, `reference/`, or `filters/` (the prefixes mdcast's embedded catalog uses by convention) resolve via `DesignStore::load`/`DesignStore::list_prefix`, prefixed with `mdcast/` (e.g. `typst/layouts/pdf/default.typ` → `design/mdcast/typst/layouts/pdf/default.typ`). Never a direct filesystem read, so a `DESIGN_DIR` override applies to exported documents exactly like it does to public pages. `DesignStore::list_prefix` (the general form `template_names` now specializes to `"templates/"`) backs `AssetProvider::list`, letting mdcast's typst/reveal.js backends discover sibling files under a template directory.
+- **page-authored content** — any other key (an image reference from a page body, or a `BrandSpec::logo` key) is a path into this site's own content tree, resolved through the content-addressed `file_blobs` table the same way the `<image>`/`<file>` markdown directives do — `markdown::lookup::{FileLookup, fetch_file}` (widened to `pub(crate)` for this reuse) + `files::read_blob`.
 
 ## WebSocket Hub (`src/routes/ws.rs`)
 

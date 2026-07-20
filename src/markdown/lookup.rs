@@ -10,7 +10,7 @@ use crate::entity::page as page_entity;
 use super::directives::Directive;
 
 #[derive(Debug)]
-pub(super) enum FileLookup {
+pub(crate) enum FileLookup {
     Path(String),
     Id(i32),
     Hash(String),
@@ -50,7 +50,7 @@ pub(super) fn parse_file_lookup(d: &Directive, name: &str) -> Result<FileLookup,
     }
 }
 
-pub(super) async fn fetch_file(
+pub(crate) async fn fetch_file(
     db: &DatabaseConnection,
     lookup: &FileLookup,
 ) -> Option<file_entity::Model> {

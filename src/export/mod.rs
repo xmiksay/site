@@ -7,11 +7,16 @@
 //! runtime dependency and can be absent. `probe_pandoc` is the cheap
 //! startup check that turns a missing binary into a typed, loggable error
 //! instead of a panic the first time an export route tries to spawn it
-//! (routes land in #67).
+//! (routes land in #67). `assets` (#65) provides the DB-backed
+//! `mdcast::AssetProvider` those routes will render through.
+
+mod assets;
 
 use std::fmt;
 
 use tokio::process::Command;
+
+pub use assets::DbAssetProvider;
 
 /// The configured pandoc binary could not be spawned or reported a failing
 /// exit status. Never constructed from a panic — every path that can fail
