@@ -212,7 +212,7 @@ async fn create_session_then_message_then_approve_completes_the_turn() {
     // few times in the same session before giving up, since that's cheap and
     // keeps the test meaningfully exercising a real tool call/approval round
     // trip instead of either flaking in CI or asserting nothing.
-    let prompt = "Call the list_tags tool right now with no arguments. \
+    let prompt = "Call the tag_list tool right now with no arguments. \
                   Only call the tool, do not write any other text.";
     const MAX_ATTEMPTS: u32 = 3;
     let mut detail = Value::Null;
@@ -243,7 +243,7 @@ async fn create_session_then_message_then_approve_completes_the_turn() {
     assert_eq!(
         tool_msg["content"]["requires_approval"],
         json!(true),
-        "fresh user has no tool_permissions rules, so list_tags must default to Ask/requires_approval: {detail:#}"
+        "fresh user has no tool_permissions rules, so tag_list must default to Ask/requires_approval: {detail:#}"
     );
     // 3. Approve every call as it comes up. A small model sometimes issues a
     // second tool call after seeing the first result (real, observed

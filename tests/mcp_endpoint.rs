@@ -2,8 +2,8 @@
 //! `POST /mcp` (`src/routes/mcp/mod.rs`): auth, the `initialize`/
 //! `notifications/initialized`/`tools/list` envelope methods, and the
 //! `tools/call` dispatch error paths (unknown method/tool, missing params,
-//! malformed arguments). Real per-tool round trips (`edit_page`+`read_page`,
-//! `list_tags`+`create_tag`, `list_files`+`create_file`, ...) live in the
+//! malformed arguments). Real per-tool round trips (`page_edit`+`page_read`,
+//! `tag_list`+`tag_create`, `file_list`+`file_create`, ...) live in the
 //! sibling `tests/mcp_pages.rs` and `tests/mcp_tags_files_galleries.rs` —
 //! split by tool family the same way the production code itself is
 //! (`src/routes/mcp/{pages,tags,files,galleries}.rs`), and to keep each file
@@ -163,11 +163,11 @@ async fn tools_list_returns_the_known_tool_names() {
     assert!(!tools.is_empty());
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     for expected in [
-        "read_page",
-        "edit_page",
-        "list_tags",
-        "create_file",
-        "list_galleries",
+        "page_read",
+        "page_edit",
+        "tag_list",
+        "file_create",
+        "gallery_list",
     ] {
         assert!(
             names.contains(&expected),
@@ -251,7 +251,7 @@ async fn tools_call_unknown_tool_name_returns_unknown_tool_error() {
 }
 
 #[tokio::test]
-async fn edit_page_missing_required_path_is_a_tool_level_error() {
+async fn page_edit_missing_required_path_is_a_tool_level_error() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
@@ -263,7 +263,7 @@ async fn edit_page_missing_required_path_is_a_tool_level_error() {
     let resp = call_tool(
         &fx.app,
         &fx.token,
-        "edit_page",
+        "page_edit",
         json!({ "summary": "no path here" }),
     )
     .await;
@@ -275,7 +275,7 @@ async fn edit_page_missing_required_path_is_a_tool_level_error() {
 }
 
 #[tokio::test]
-async fn edit_page_wrong_type_for_a_field_is_a_tool_level_error() {
+async fn page_edit_wrong_type_for_a_field_is_a_tool_level_error() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
@@ -284,7 +284,7 @@ async fn edit_page_wrong_type_for_a_field_is_a_tool_level_error() {
 
     // `path` must be a string; sending a number should fail deserialization
     // cleanly rather than panicking.
-    let resp = call_tool(&fx.app, &fx.token, "edit_page", json!({ "path": 12345 })).await;
+    let resp = call_tool(&fx.app, &fx.token, "page_edit", json!({ "path": 12345 })).await;
 
     assert!(is_tool_error(&resp));
     assert!(tool_text(&resp).starts_with("Invalid arguments:"));

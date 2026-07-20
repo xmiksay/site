@@ -36,7 +36,7 @@ pub struct ReadPageTool {
 #[async_trait]
 impl Tool for ReadPageTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("read_page")
+        Cow::Borrowed("page_read")
     }
     fn description(&self) -> &str {
         "Read a site page by its path. Returns metadata and full markdown."
@@ -49,7 +49,7 @@ impl Tool for ReadPageTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("read_page is session-scoped; use run_for_session")
+        anyhow::bail!("page_read is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,
@@ -74,7 +74,7 @@ pub struct SearchPagesTool {
 #[async_trait]
 impl Tool for SearchPagesTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("search_pages")
+        Cow::Borrowed("page_search")
     }
     fn description(&self) -> &str {
         "Search site pages by path prefix, tag name, and/or fulltext query (q). Path and tag \
@@ -93,7 +93,7 @@ impl Tool for SearchPagesTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("search_pages is session-scoped; use run_for_session")
+        anyhow::bail!("page_search is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,
@@ -141,7 +141,7 @@ pub struct EditPageTool {
 #[async_trait]
 impl Tool for EditPageTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("edit_page")
+        Cow::Borrowed("page_edit")
     }
     fn description(&self) -> &str {
         EDIT_PAGE_DESCRIPTION.as_str()
@@ -160,7 +160,7 @@ impl Tool for EditPageTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("edit_page is session-scoped; use run_for_session")
+        anyhow::bail!("page_edit is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,
@@ -232,7 +232,7 @@ pub struct DeletePageTool {
 #[async_trait]
 impl Tool for DeletePageTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("delete_page")
+        Cow::Borrowed("page_delete")
     }
     fn description(&self) -> &str {
         "Delete a site page by its path."
@@ -245,7 +245,7 @@ impl Tool for DeletePageTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("delete_page is session-scoped; use run_for_session")
+        anyhow::bail!("page_delete is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,

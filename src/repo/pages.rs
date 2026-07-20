@@ -82,7 +82,7 @@ pub struct PageUpdate {
 }
 
 /// The "nothing to update" guard shared by every edge that upserts a page by
-/// path (MCP `edit_page`, the AI assistant's `edit_page` tool) — checked
+/// path (MCP `page_edit`, the AI assistant's `page_edit` tool) — checked
 /// against the *raw* caller-provided fields, before `tag_names` is resolved
 /// to `tag_ids`, so an explicit empty `tag_names: []` still counts as "the
 /// caller provided a field" (existing behavior: it resolves to no tag change,

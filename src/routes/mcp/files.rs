@@ -1,5 +1,5 @@
-//! MCP tools for the `files` family: `list_files`, `create_file`,
-//! `read_file`, `update_file`, `delete_file`.
+//! MCP tools for the `files` family: `file_list`, `file_create`,
+//! `file_read`, `file_update`, `file_delete`.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -57,7 +57,7 @@ struct UpdateFileArgs {
     data: Option<String>,
 }
 
-pub(super) async fn tool_list_files(
+pub(super) async fn tool_file_list(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,
@@ -84,7 +84,7 @@ pub(super) async fn tool_list_files(
     }
 }
 
-pub(super) async fn tool_create_file(
+pub(super) async fn tool_file_create(
     state: &AppState,
     user_id: i32,
     id: Option<Value>,
@@ -150,7 +150,7 @@ pub(super) async fn tool_create_file(
     }
 }
 
-pub(super) async fn tool_read_file(
+pub(super) async fn tool_file_read(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,
@@ -198,7 +198,7 @@ pub(super) async fn tool_read_file(
     }
 }
 
-pub(super) async fn tool_update_file(
+pub(super) async fn tool_file_update(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,
@@ -245,7 +245,7 @@ pub(super) async fn tool_update_file(
     }
 }
 
-pub(super) async fn tool_delete_file(
+pub(super) async fn tool_file_delete(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,

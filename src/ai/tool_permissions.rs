@@ -7,7 +7,7 @@
 //!
 //! [`CAPABILITIES`] mirrors the shape of
 //! `entanglement_runtime::tool_names::CAPABILITIES`, but over *this site's*
-//! built-in tool vocabulary (`read_page`/`edit_page`/…, `src/ai/tools/mod.rs`)
+//! built-in tool vocabulary (`page_read`/`page_edit`/…, `src/ai/tools/mod.rs`)
 //! rather than the coding-agent's own (`bash`/`edit`/`read`/`grep`/`glob`) —
 //! this site's tools don't share those names, so the library's fixed
 //! capability table and its `agents::expand_capabilities`/
@@ -76,22 +76,22 @@ pub const CAPABILITIES: &[(&str, &[&str])] = &[
     (
         "read",
         &[
-            "read_page",
-            "search_pages",
-            "list_files",
-            "list_galleries",
-            "list_tags",
+            "page_read",
+            "page_search",
+            "file_list",
+            "gallery_list",
+            "tag_list",
         ],
     ),
     (
         "write",
         &[
-            "edit_page",
-            "delete_page",
-            "create_file",
-            "create_gallery",
-            "update_gallery",
-            "create_tag",
+            "page_edit",
+            "page_delete",
+            "file_create",
+            "gallery_create",
+            "gallery_update",
+            "tag_create",
         ],
     ),
     ("call", &["web_search", "web_fetch"]),
@@ -138,7 +138,7 @@ fn split_rule_key(key: &str) -> (&str, RuleScope<'_>) {
 /// per-tool rules it actually matches against:
 ///
 /// - a non-capability key (a literal tool name, `*`, or an already-scoped
-///   literal like `edit_page(obsidian/*)`) is pushed verbatim;
+///   literal like `page_edit(obsidian/*)`) is pushed verbatim;
 /// - a bare capability key (`read`/`write`/`call`) pushes its member tools
 ///   plus any MCP tool `mcp` annotates with that capability (#39, ADR-0117);
 /// - a scoped capability key (`read(obsidian/*)`/`write{...}`) pushes
@@ -190,9 +190,9 @@ fn expand_capabilities(
 pub fn permission_arg(tool: &str, input: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(input).ok()?;
     let field = match tool {
-        "read_page" | "edit_page" | "delete_page" | "create_file" | "create_gallery"
-        | "update_gallery" => "path",
-        "search_pages" => "prefix",
+        "page_read" | "page_edit" | "page_delete" | "file_create" | "gallery_create"
+        | "gallery_update" => "path",
+        "page_search" => "prefix",
         "web_search" => "query",
         "web_fetch" => "url",
         _ => return None,
@@ -318,17 +318,14 @@ mod tests {
     #[test]
     fn bare_read_capability_expands_to_member_tools() {
         let p = profile_from(&[("read", Effect::Allow, 10, 1)]);
-        assert_eq!(p.resolve_scoped("read_page", None, None), Permission::Allow);
+        assert_eq!(p.resolve_scoped("page_read", None, None), Permission::Allow);
         assert_eq!(
-            p.resolve_scoped("search_pages", None, None),
+            p.resolve_scoped("page_search", None, None),
             Permission::Allow
         );
-        assert_eq!(
-            p.resolve_scoped("list_files", None, None),
-            Permission::Allow
-        );
+        assert_eq!(p.resolve_scoped("file_list", None, None), Permission::Allow);
         // Not a `read` member — untouched, falls to the Ask default.
-        assert_eq!(p.resolve_scoped("edit_page", None, None), Permission::Ask);
+        assert_eq!(p.resolve_scoped("page_edit", None, None), Permission::Ask);
     }
 
     #[test]
@@ -337,9 +334,9 @@ mod tests {
             ("write", Effect::Allow, 20, 1),
             ("call", Effect::Deny, 20, 2),
         ]);
-        assert_eq!(p.resolve_scoped("edit_page", None, None), Permission::Allow);
+        assert_eq!(p.resolve_scoped("page_edit", None, None), Permission::Allow);
         assert_eq!(
-            p.resolve_scoped("create_tag", None, None),
+            p.resolve_scoped("tag_create", None, None),
             Permission::Allow
         );
         assert_eq!(p.resolve_scoped("web_search", None, None), Permission::Deny);
@@ -348,15 +345,15 @@ mod tests {
 
     #[test]
     fn arg_scoped_rule_matches_the_extracted_path() {
-        let p = profile_from(&[("edit_page(obsidian/*)", Effect::Allow, 10, 1)]);
-        let arg = permission_arg("edit_page", r#"{"path":"obsidian/rust"}"#);
+        let p = profile_from(&[("page_edit(obsidian/*)", Effect::Allow, 10, 1)]);
+        let arg = permission_arg("page_edit", r#"{"path":"obsidian/rust"}"#);
         assert_eq!(
-            p.resolve_scoped("edit_page", arg.as_deref(), None),
+            p.resolve_scoped("page_edit", arg.as_deref(), None),
             Permission::Allow
         );
-        let other = permission_arg("edit_page", r#"{"path":"projects/x"}"#);
+        let other = permission_arg("page_edit", r#"{"path":"projects/x"}"#);
         assert_eq!(
-            p.resolve_scoped("edit_page", other.as_deref(), None),
+            p.resolve_scoped("page_edit", other.as_deref(), None),
             Permission::Ask
         );
     }
@@ -364,16 +361,16 @@ mod tests {
     #[test]
     fn scoped_capability_rule_fans_out_to_every_member_with_the_pattern() {
         let p = profile_from(&[("write(obsidian/*)", Effect::Deny, 10, 1)]);
-        let arg = permission_arg("edit_page", r#"{"path":"obsidian/rust"}"#);
+        let arg = permission_arg("page_edit", r#"{"path":"obsidian/rust"}"#);
         assert_eq!(
-            p.resolve_scoped("edit_page", arg.as_deref(), None),
+            p.resolve_scoped("page_edit", arg.as_deref(), None),
             Permission::Deny
         );
-        // `delete_page` has no `path`-shaped arg extractor collision here —
+        // `page_delete` has no `path`-shaped arg extractor collision here —
         // same scoped rule still reaches it since it's a `write` member too.
-        let del_arg = permission_arg("delete_page", r#"{"path":"obsidian/rust"}"#);
+        let del_arg = permission_arg("page_delete", r#"{"path":"obsidian/rust"}"#);
         assert_eq!(
-            p.resolve_scoped("delete_page", del_arg.as_deref(), None),
+            p.resolve_scoped("page_delete", del_arg.as_deref(), None),
             Permission::Deny
         );
     }
@@ -383,18 +380,18 @@ mod tests {
         // #39: `tool{pattern}` parses and is retained like any other rule, but
         // no site tool currently supplies a `workdir` — `resolve` always
         // passes `None`, so this rule can never actually fire yet.
-        let p = profile_from(&[("edit_page{/tmp/*}", Effect::Deny, 10, 1)]);
-        assert_eq!(p.resolve_scoped("edit_page", None, None), Permission::Ask);
+        let p = profile_from(&[("page_edit{/tmp/*}", Effect::Deny, 10, 1)]);
+        assert_eq!(p.resolve_scoped("page_edit", None, None), Permission::Ask);
     }
 
     #[test]
     fn literal_and_wildcard_rules_still_work_unexpanded() {
         let p = profile_from(&[
             ("*", Effect::Deny, 100, 1),
-            ("read_page", Effect::Allow, 10, 2),
+            ("page_read", Effect::Allow, 10, 2),
         ]);
-        assert_eq!(p.resolve_scoped("read_page", None, None), Permission::Allow);
-        assert_eq!(p.resolve_scoped("edit_page", None, None), Permission::Deny);
+        assert_eq!(p.resolve_scoped("page_read", None, None), Permission::Allow);
+        assert_eq!(p.resolve_scoped("page_edit", None, None), Permission::Deny);
     }
 
     #[test]
@@ -403,10 +400,10 @@ mod tests {
         // order. `profile_from` sorts into `priority DESC, id DESC` the same
         // way `resolve`'s DB query does.
         let p = profile_from(&[
-            ("read_page", Effect::Deny, 50, 1),
-            ("read_page", Effect::Allow, 10, 2),
+            ("page_read", Effect::Deny, 50, 1),
+            ("page_read", Effect::Allow, 10, 2),
         ]);
-        assert_eq!(p.resolve_scoped("read_page", None, None), Permission::Allow);
+        assert_eq!(p.resolve_scoped("page_read", None, None), Permission::Allow);
     }
 
     #[test]
@@ -433,11 +430,11 @@ mod tests {
     #[test]
     fn permission_arg_extracts_per_site_tool_shape() {
         assert_eq!(
-            permission_arg("edit_page", r#"{"path":"a/b"}"#).as_deref(),
+            permission_arg("page_edit", r#"{"path":"a/b"}"#).as_deref(),
             Some("a/b")
         );
         assert_eq!(
-            permission_arg("search_pages", r#"{"prefix":"obsidian"}"#).as_deref(),
+            permission_arg("page_search", r#"{"prefix":"obsidian"}"#).as_deref(),
             Some("obsidian")
         );
         assert_eq!(
@@ -449,8 +446,8 @@ mod tests {
             Some("https://x")
         );
         // No meaningful scoping argument for this tool.
-        assert_eq!(permission_arg("list_tags", r#"{}"#), None);
+        assert_eq!(permission_arg("tag_list", r#"{}"#), None);
         // Malformed input.
-        assert_eq!(permission_arg("edit_page", "not json"), None);
+        assert_eq!(permission_arg("page_edit", "not json"), None);
     }
 }

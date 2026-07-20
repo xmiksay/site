@@ -116,7 +116,7 @@ async fn cleanup_fabricated(db: &sea_orm::DatabaseConnection, root: &SessionId, 
     let _ = user::Entity::delete_by_id(user_id).exec(db).await;
 }
 
-/// Case 1 (the race): a sub-agent child's `edit_page` call lands in
+/// Case 1 (the race): a sub-agent child's `page_edit` call lands in
 /// `assistant_events` a beat *after* `prior` was snapshotted — exactly the
 /// `DbSink`-async-writer TOCTOU window `session_for_call_awaiting` exists to
 /// close. The naive one-shot lookup (`prior` alone) must miss; the awaiting
@@ -202,7 +202,7 @@ async fn session_for_call_awaiting_finds_a_call_that_lands_after_prior_was_read(
                     session: child2.clone(),
                     seq: 1,
                     request_id: "edit-1".into(),
-                    tool: "edit_page".into(),
+                    tool: "page_edit".into(),
                     input: r#"{"path":"test/whatever","markdown":"x"}"#.into(),
                 }),
             ),
@@ -217,7 +217,7 @@ async fn session_for_call_awaiting_finds_a_call_that_lands_after_prior_was_read(
                     session: child2.clone(),
                     seq: 2,
                     request_id: "edit-1".into(),
-                    tool: "edit_page".into(),
+                    tool: "page_edit".into(),
                     input: r#"{"path":"test/whatever","markdown":"x"}"#.into(),
                 }),
             ),

@@ -15,7 +15,7 @@ use mcp_common::{
 use serde_json::json;
 
 #[tokio::test]
-async fn list_tags_create_tag_read_tag_and_delete_tag_round_trip() {
+async fn tag_list_create_read_delete_round_trip() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
@@ -23,34 +23,34 @@ async fn list_tags_create_tag_read_tag_and_delete_tag_round_trip() {
     let fx = setup(&db_url, "tags-roundtrip").await;
     let name = format!("mcp-test-tag-{}", uuid::Uuid::new_v4());
 
-    let before = call_tool(&fx.app, &fx.token, "list_tags", json!({})).await;
-    assert!(!is_tool_error(&before), "list_tags failed: {before:?}");
+    let before = call_tool(&fx.app, &fx.token, "tag_list", json!({})).await;
+    assert!(!is_tool_error(&before), "tag_list failed: {before:?}");
 
     let created = call_tool(
         &fx.app,
         &fx.token,
-        "create_tag",
+        "tag_create",
         json!({ "name": name, "description": "a throwaway test tag" }),
     )
     .await;
-    assert!(!is_tool_error(&created), "create_tag failed: {created:?}");
+    assert!(!is_tool_error(&created), "tag_create failed: {created:?}");
     assert!(tool_text(&created).contains(&name));
 
-    let read = call_tool(&fx.app, &fx.token, "read_tag", json!({ "name": name })).await;
-    assert!(!is_tool_error(&read), "read_tag failed: {read:?}");
+    let read = call_tool(&fx.app, &fx.token, "tag_read", json!({ "name": name })).await;
+    assert!(!is_tool_error(&read), "tag_read failed: {read:?}");
     let read_json = tool_json(&read);
     assert_eq!(read_json["name"], json!(name));
     assert_eq!(read_json["description"], json!("a throwaway test tag"));
 
-    let after = call_tool(&fx.app, &fx.token, "list_tags", json!({})).await;
+    let after = call_tool(&fx.app, &fx.token, "tag_list", json!({})).await;
     assert!(tool_text(&after).contains(&name));
 
-    let deleted = call_tool(&fx.app, &fx.token, "delete_tag", json!({ "name": name })).await;
-    assert!(!is_tool_error(&deleted), "delete_tag failed: {deleted:?}");
+    let deleted = call_tool(&fx.app, &fx.token, "tag_delete", json!({ "name": name })).await;
+    assert!(!is_tool_error(&deleted), "tag_delete failed: {deleted:?}");
     assert!(tool_text(&deleted).contains(&name));
 
     let read_after_delete =
-        call_tool(&fx.app, &fx.token, "read_tag", json!({ "name": name })).await;
+        call_tool(&fx.app, &fx.token, "tag_read", json!({ "name": name })).await;
     assert!(is_tool_error(&read_after_delete));
     assert!(tool_text(&read_after_delete).contains("Tag not found"));
 
@@ -58,7 +58,7 @@ async fn list_tags_create_tag_read_tag_and_delete_tag_round_trip() {
 }
 
 #[tokio::test]
-async fn list_files_create_file_and_read_file_round_trip() {
+async fn file_list_file_create_and_file_read_round_trip() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
@@ -67,13 +67,13 @@ async fn list_files_create_file_and_read_file_round_trip() {
     let path = format!("mcp-test-file-{}.txt", uuid::Uuid::new_v4());
     let payload = base64::engine::general_purpose::STANDARD.encode(b"tiny test payload");
 
-    let before = call_tool(&fx.app, &fx.token, "list_files", json!({})).await;
-    assert!(!is_tool_error(&before), "list_files failed: {before:?}");
+    let before = call_tool(&fx.app, &fx.token, "file_list", json!({})).await;
+    assert!(!is_tool_error(&before), "file_list failed: {before:?}");
 
     let created = call_tool(
         &fx.app,
         &fx.token,
-        "create_file",
+        "file_create",
         json!({
             "path": path,
             "description": "a throwaway test file",
@@ -82,7 +82,7 @@ async fn list_files_create_file_and_read_file_round_trip() {
         }),
     )
     .await;
-    assert!(!is_tool_error(&created), "create_file failed: {created:?}");
+    assert!(!is_tool_error(&created), "file_create failed: {created:?}");
     let created_json = tool_json(&created);
     assert_eq!(created_json["path"], json!(path));
     assert_eq!(created_json["mimetype"], json!("text/plain"));
@@ -92,20 +92,20 @@ async fn list_files_create_file_and_read_file_round_trip() {
     );
     let file_id = created_json["id"].as_i64().expect("created file id");
 
-    let read = call_tool(&fx.app, &fx.token, "read_file", json!({ "id": file_id })).await;
-    assert!(!is_tool_error(&read), "read_file failed: {read:?}");
+    let read = call_tool(&fx.app, &fx.token, "file_read", json!({ "id": file_id })).await;
+    assert!(!is_tool_error(&read), "file_read failed: {read:?}");
     let read_json = tool_json(&read);
     assert_eq!(read_json["path"], json!(path));
     assert_eq!(read_json["description"], json!("a throwaway test file"));
 
-    let deleted = call_tool(&fx.app, &fx.token, "delete_file", json!({ "id": file_id })).await;
-    assert!(!is_tool_error(&deleted), "delete_file failed: {deleted:?}");
+    let deleted = call_tool(&fx.app, &fx.token, "file_delete", json!({ "id": file_id })).await;
+    assert!(!is_tool_error(&deleted), "file_delete failed: {deleted:?}");
 
     cleanup_user(&fx.db, fx.user_id).await;
 }
 
 #[tokio::test]
-async fn update_file_replaces_content_and_read_file_returns_it() {
+async fn file_update_replaces_content_and_file_read_returns_it() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
@@ -117,7 +117,7 @@ async fn update_file_replaces_content_and_read_file_returns_it() {
     let created = call_tool(
         &fx.app,
         &fx.token,
-        "create_file",
+        "file_create",
         json!({
             "path": path,
             "mimetype": "text/plain",
@@ -125,7 +125,7 @@ async fn update_file_replaces_content_and_read_file_returns_it() {
         }),
     )
     .await;
-    assert!(!is_tool_error(&created), "create_file failed: {created:?}");
+    assert!(!is_tool_error(&created), "file_create failed: {created:?}");
     let file_id = tool_json(&created)["id"].as_i64().expect("created file id");
 
     // Repair: overwrite the file's content in place at the same id/path.
@@ -133,7 +133,7 @@ async fn update_file_replaces_content_and_read_file_returns_it() {
     let updated = call_tool(
         &fx.app,
         &fx.token,
-        "update_file",
+        "file_update",
         json!({
             "id": file_id,
             "path": path,
@@ -142,18 +142,18 @@ async fn update_file_replaces_content_and_read_file_returns_it() {
         }),
     )
     .await;
-    assert!(!is_tool_error(&updated), "update_file failed: {updated:?}");
+    assert!(!is_tool_error(&updated), "file_update failed: {updated:?}");
 
     let read_with_content = call_tool(
         &fx.app,
         &fx.token,
-        "read_file",
+        "file_read",
         json!({ "id": file_id, "include_content": true }),
     )
     .await;
     assert!(
         !is_tool_error(&read_with_content),
-        "read_file failed: {read_with_content:?}"
+        "file_read failed: {read_with_content:?}"
     );
     let read_json = tool_json(&read_with_content);
     assert_eq!(read_json["content"], json!(new_content));
@@ -161,18 +161,18 @@ async fn update_file_replaces_content_and_read_file_returns_it() {
 
     // Back-compat: omitting include_content must not add a "content" field.
     let read_without_content =
-        call_tool(&fx.app, &fx.token, "read_file", json!({ "id": file_id })).await;
+        call_tool(&fx.app, &fx.token, "file_read", json!({ "id": file_id })).await;
     assert!(!is_tool_error(&read_without_content));
     assert!(tool_json(&read_without_content).get("content").is_none());
 
-    let deleted = call_tool(&fx.app, &fx.token, "delete_file", json!({ "id": file_id })).await;
-    assert!(!is_tool_error(&deleted), "delete_file failed: {deleted:?}");
+    let deleted = call_tool(&fx.app, &fx.token, "file_delete", json!({ "id": file_id })).await;
+    assert!(!is_tool_error(&deleted), "file_delete failed: {deleted:?}");
 
     cleanup_user(&fx.db, fx.user_id).await;
 }
 
 #[tokio::test]
-async fn create_file_hints_the_type_specific_embed_directive() {
+async fn file_create_hints_the_type_specific_embed_directive() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
@@ -184,11 +184,11 @@ async fn create_file_hints_the_type_specific_embed_directive() {
     let created = call_tool(
         &fx.app,
         &fx.token,
-        "create_file",
+        "file_create",
         json!({ "path": path, "data_base64": payload }),
     )
     .await;
-    assert!(!is_tool_error(&created), "create_file failed: {created:?}");
+    assert!(!is_tool_error(&created), "file_create failed: {created:?}");
     let created_json = tool_json(&created);
     let file_id = created_json["id"].as_i64().expect("created file id");
     assert_eq!(
@@ -197,14 +197,14 @@ async fn create_file_hints_the_type_specific_embed_directive() {
         "a .pgn upload must hint <pgn>, not <image> (issue #55)"
     );
 
-    let deleted = call_tool(&fx.app, &fx.token, "delete_file", json!({ "id": file_id })).await;
+    let deleted = call_tool(&fx.app, &fx.token, "file_delete", json!({ "id": file_id })).await;
     assert!(!is_tool_error(&deleted));
 
     cleanup_user(&fx.db, fx.user_id).await;
 }
 
 #[tokio::test]
-async fn create_file_without_mimetype_infers_it_from_the_extension() {
+async fn file_create_without_mimetype_infers_it_from_the_extension() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
@@ -216,11 +216,11 @@ async fn create_file_without_mimetype_infers_it_from_the_extension() {
     let created = call_tool(
         &fx.app,
         &fx.token,
-        "create_file",
+        "file_create",
         json!({ "path": path, "data_base64": payload }),
     )
     .await;
-    assert!(!is_tool_error(&created), "create_file failed: {created:?}");
+    assert!(!is_tool_error(&created), "file_create failed: {created:?}");
     let created_json = tool_json(&created);
     assert_eq!(
         created_json["mimetype"],
@@ -229,14 +229,14 @@ async fn create_file_without_mimetype_infers_it_from_the_extension() {
     );
     let file_id = created_json["id"].as_i64().expect("created file id");
 
-    let deleted = call_tool(&fx.app, &fx.token, "delete_file", json!({ "id": file_id })).await;
+    let deleted = call_tool(&fx.app, &fx.token, "file_delete", json!({ "id": file_id })).await;
     assert!(!is_tool_error(&deleted));
 
     cleanup_user(&fx.db, fx.user_id).await;
 }
 
 #[tokio::test]
-async fn list_galleries_and_create_gallery_round_trip() {
+async fn gallery_list_and_gallery_create_round_trip() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
@@ -248,21 +248,21 @@ async fn list_galleries_and_create_gallery_round_trip() {
     let file = call_tool(
         &fx.app,
         &fx.token,
-        "create_file",
+        "file_create",
         json!({ "path": file_path, "data_base64": payload }),
     )
     .await;
-    assert!(!is_tool_error(&file), "create_file failed: {file:?}");
+    assert!(!is_tool_error(&file), "file_create failed: {file:?}");
     let file_id = tool_json(&file)["id"].as_i64().expect("created file id");
 
-    let before = call_tool(&fx.app, &fx.token, "list_galleries", json!({})).await;
-    assert!(!is_tool_error(&before), "list_galleries failed: {before:?}");
+    let before = call_tool(&fx.app, &fx.token, "gallery_list", json!({})).await;
+    assert!(!is_tool_error(&before), "gallery_list failed: {before:?}");
 
     let gallery_path = format!("mcp-test-gallery-{}", uuid::Uuid::new_v4());
     let created = call_tool(
         &fx.app,
         &fx.token,
-        "create_gallery",
+        "gallery_create",
         json!({
             "path": gallery_path,
             "title": "a throwaway test gallery",
@@ -272,11 +272,11 @@ async fn list_galleries_and_create_gallery_round_trip() {
     .await;
     assert!(
         !is_tool_error(&created),
-        "create_gallery failed: {created:?}"
+        "gallery_create failed: {created:?}"
     );
     assert!(tool_text(&created).contains("a throwaway test gallery"));
 
-    let after = call_tool(&fx.app, &fx.token, "list_galleries", json!({})).await;
+    let after = call_tool(&fx.app, &fx.token, "gallery_list", json!({})).await;
     assert!(tool_text(&after).contains("a throwaway test gallery"));
 
     // Extract the gallery id from `created gallery [ID] title` to clean up.
@@ -291,13 +291,13 @@ async fn list_galleries_and_create_gallery_round_trip() {
     let deleted_gallery = call_tool(
         &fx.app,
         &fx.token,
-        "delete_gallery",
+        "gallery_delete",
         json!({ "id": gallery_id }),
     )
     .await;
     assert!(!is_tool_error(&deleted_gallery));
 
-    let deleted_file = call_tool(&fx.app, &fx.token, "delete_file", json!({ "id": file_id })).await;
+    let deleted_file = call_tool(&fx.app, &fx.token, "file_delete", json!({ "id": file_id })).await;
     assert!(!is_tool_error(&deleted_file));
 
     cleanup_user(&fx.db, fx.user_id).await;

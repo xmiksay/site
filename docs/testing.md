@@ -179,7 +179,7 @@ executes on every PR rather than self-skipping.
   - `tests/assistant_session_subagent_resume.rs` (#43) — resume of a session
     with a **live** sub-agent, sourced from `assistant_events` alone: a whole
     root + `page-writer` child conversation (child parked on a pending
-    `edit_page` approval) is inserted directly, never driven through a live
+    `page_edit` approval) is inserted directly, never driven through a live
     turn, so this process's in-memory `SESSION_PARENTS` cache
     (`ai::engine::session_tree`) starts genuinely cold for the child. The
     first `GET` triggers `ensure_live`/`resume_session`, and approving the

@@ -1,5 +1,5 @@
-//! MCP tools for the `pages` family: `read_page`, `edit_page`,
-//! `search_pages`, `delete_page`.
+//! MCP tools for the `pages` family: `page_read`, `page_edit`,
+//! `page_search`, `page_delete`.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -50,7 +50,7 @@ struct DeletePageArgs {
     path: String,
 }
 
-pub(super) async fn tool_read_page(
+pub(super) async fn tool_page_read(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,
@@ -70,7 +70,7 @@ pub(super) async fn tool_read_page(
     }
 }
 
-pub(super) async fn tool_edit_page(
+pub(super) async fn tool_page_edit(
     state: &AppState,
     user_id: i32,
     id: Option<Value>,
@@ -139,7 +139,7 @@ pub(super) async fn tool_edit_page(
     }
 }
 
-pub(super) async fn tool_search_pages(
+pub(super) async fn tool_page_search(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,
@@ -174,7 +174,7 @@ pub(super) async fn tool_search_pages(
     tool_result(id, format::format_search_results(&result, limit, offset))
 }
 
-pub(super) async fn tool_delete_page(
+pub(super) async fn tool_page_delete(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,

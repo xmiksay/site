@@ -1,5 +1,5 @@
-//! `tools/call` round trips for the `pages` tool family (`edit_page`,
-//! `read_page`, `search_pages`, `delete_page` — `src/routes/mcp/pages.rs`)
+//! `tools/call` round trips for the `pages` tool family (`page_edit`,
+//! `page_read`, `page_search`, `page_delete` — `src/routes/mcp/pages.rs`)
 //! through the real `POST /mcp` handler. Envelope-level scenarios (auth,
 //! `initialize`, dispatch errors) live in the sibling `tests/mcp_endpoint.rs`;
 //! shared fixture/helpers in `tests/common/mcp.rs`. Same DB-gated +
@@ -12,7 +12,7 @@ use mcp_common::{call_tool, cleanup_user, is_tool_error, setup, test_db_url, too
 use serde_json::json;
 
 #[tokio::test]
-async fn edit_page_creates_then_read_page_returns_it_then_delete_page_removes_it() {
+async fn page_edit_creates_then_page_read_returns_it_then_page_delete_removes_it() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
@@ -23,7 +23,7 @@ async fn edit_page_creates_then_read_page_returns_it_then_delete_page_removes_it
     let created = call_tool(
         &fx.app,
         &fx.token,
-        "edit_page",
+        "page_edit",
         json!({
             "path": path,
             "markdown": "hello from the mcp test",
@@ -31,22 +31,22 @@ async fn edit_page_creates_then_read_page_returns_it_then_delete_page_removes_it
         }),
     )
     .await;
-    assert!(!is_tool_error(&created), "edit_page failed: {created:?}");
+    assert!(!is_tool_error(&created), "page_edit failed: {created:?}");
     assert!(tool_text(&created).starts_with("created: "));
 
-    let read = call_tool(&fx.app, &fx.token, "read_page", json!({ "path": path })).await;
-    assert!(!is_tool_error(&read), "read_page failed: {read:?}");
+    let read = call_tool(&fx.app, &fx.token, "page_read", json!({ "path": path })).await;
+    assert!(!is_tool_error(&read), "page_read failed: {read:?}");
     let read_text = tool_text(&read);
     assert!(read_text.contains(&path));
     assert!(read_text.contains("hello from the mcp test"));
     assert!(read_text.contains("Summary: a throwaway test page"));
 
-    let deleted = call_tool(&fx.app, &fx.token, "delete_page", json!({ "path": path })).await;
-    assert!(!is_tool_error(&deleted), "delete_page failed: {deleted:?}");
+    let deleted = call_tool(&fx.app, &fx.token, "page_delete", json!({ "path": path })).await;
+    assert!(!is_tool_error(&deleted), "page_delete failed: {deleted:?}");
     assert_eq!(tool_text(&deleted), format!("deleted: {path}"));
 
     let read_after_delete =
-        call_tool(&fx.app, &fx.token, "read_page", json!({ "path": path })).await;
+        call_tool(&fx.app, &fx.token, "page_read", json!({ "path": path })).await;
     assert!(is_tool_error(&read_after_delete));
     assert!(tool_text(&read_after_delete).contains("Page not found"));
 
@@ -54,7 +54,7 @@ async fn edit_page_creates_then_read_page_returns_it_then_delete_page_removes_it
 }
 
 #[tokio::test]
-async fn search_pages_finds_a_page_by_path_prefix() {
+async fn page_search_finds_a_page_by_path_prefix() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
@@ -66,32 +66,32 @@ async fn search_pages_finds_a_page_by_path_prefix() {
     let created = call_tool(
         &fx.app,
         &fx.token,
-        "edit_page",
+        "page_edit",
         json!({ "path": path, "markdown": "findable content", "summary": "findme" }),
     )
     .await;
-    assert!(!is_tool_error(&created), "edit_page failed: {created:?}");
+    assert!(!is_tool_error(&created), "page_edit failed: {created:?}");
 
     let found = call_tool(
         &fx.app,
         &fx.token,
-        "search_pages",
+        "page_search",
         json!({ "prefix": prefix }),
     )
     .await;
-    assert!(!is_tool_error(&found), "search_pages failed: {found:?}");
+    assert!(!is_tool_error(&found), "page_search failed: {found:?}");
     let found_text = tool_text(&found);
     assert!(found_text.contains(&path), "search results: {found_text}");
     assert!(found_text.contains("total: 1"));
 
-    let deleted = call_tool(&fx.app, &fx.token, "delete_page", json!({ "path": path })).await;
+    let deleted = call_tool(&fx.app, &fx.token, "page_delete", json!({ "path": path })).await;
     assert!(!is_tool_error(&deleted));
 
     cleanup_user(&fx.db, fx.user_id).await;
 }
 
 #[tokio::test]
-async fn delete_page_on_unknown_path_is_a_tool_level_error() {
+async fn page_delete_on_unknown_path_is_a_tool_level_error() {
     let Some(db_url) = test_db_url().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
@@ -99,7 +99,7 @@ async fn delete_page_on_unknown_path_is_a_tool_level_error() {
     let fx = setup(&db_url, "pages-delete-missing").await;
     let path = format!("mcp-test/never-created-{}", uuid::Uuid::new_v4());
 
-    let deleted = call_tool(&fx.app, &fx.token, "delete_page", json!({ "path": path })).await;
+    let deleted = call_tool(&fx.app, &fx.token, "page_delete", json!({ "path": path })).await;
     assert!(is_tool_error(&deleted));
     assert!(tool_text(&deleted).contains("Page not found"));
 

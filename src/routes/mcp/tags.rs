@@ -1,5 +1,5 @@
-//! MCP tools for the `tags` family: `list_tags`, `read_tag`, `create_tag`,
-//! `update_tag`, `delete_tag`.
+//! MCP tools for the `tags` family: `tag_list`, `tag_read`, `tag_create`,
+//! `tag_update`, `tag_delete`.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -34,14 +34,14 @@ struct UpdateTagArgs {
     description: Option<String>,
 }
 
-pub(super) async fn tool_list_tags(state: &AppState, id: Option<Value>) -> JsonRpcResponse {
+pub(super) async fn tool_tag_list(state: &AppState, id: Option<Value>) -> JsonRpcResponse {
     match tags_repo::list_all(&state.db).await {
         Ok(tags) => tool_result(id, format::format_tags(&tags)),
         Err(e) => tool_error(id, &format!("Database error: {e}")),
     }
 }
 
-pub(super) async fn tool_read_tag(
+pub(super) async fn tool_tag_read(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,
@@ -60,7 +60,7 @@ pub(super) async fn tool_read_tag(
     }
 }
 
-pub(super) async fn tool_create_tag(
+pub(super) async fn tool_tag_create(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,
@@ -87,7 +87,7 @@ pub(super) async fn tool_create_tag(
     }
 }
 
-pub(super) async fn tool_update_tag(
+pub(super) async fn tool_tag_update(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,
@@ -116,7 +116,7 @@ pub(super) async fn tool_update_tag(
     }
 }
 
-pub(super) async fn tool_delete_tag(
+pub(super) async fn tool_tag_delete(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,

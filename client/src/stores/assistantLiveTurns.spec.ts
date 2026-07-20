@@ -71,7 +71,7 @@ describe('useLiveTurns', () => {
       envelope('tool_call_delta', {
         db_session_id: 1,
         request_id: 'c1',
-        tool: 'edit_page',
+        tool: 'page_edit',
         delta: '{"path"',
       }),
     )
@@ -79,7 +79,7 @@ describe('useLiveTurns', () => {
       envelope('tool_call_delta', {
         db_session_id: 1,
         request_id: 'c1',
-        tool: 'edit_page',
+        tool: 'page_edit',
         delta: ':"a"}',
       }),
     )
@@ -87,7 +87,7 @@ describe('useLiveTurns', () => {
       envelope('tool_call', {
         db_session_id: 1,
         request_id: 'c1',
-        tool: 'edit_page',
+        tool: 'page_edit',
         input: '{"path":"a"}',
       }),
     )
@@ -95,7 +95,7 @@ describe('useLiveTurns', () => {
     const call = live.value!.toolCalls[0]
     expect(call).toMatchObject({
       id: 'c1',
-      name: 'edit_page',
+      name: 'page_edit',
       argsText: '{"path":"a"}',
       args: { path: 'a' },
       status: 'pending',
@@ -108,7 +108,7 @@ describe('useLiveTurns', () => {
       envelope('tool_request', {
         db_session_id: 1,
         request_id: 'c1',
-        tool: 'delete_page',
+        tool: 'page_delete',
         input: '{"id":1}',
       }),
     )
@@ -121,7 +121,7 @@ describe('useLiveTurns', () => {
       envelope('tool_call', {
         db_session_id: 1,
         request_id: 'c1',
-        tool: 'edit_page',
+        tool: 'page_edit',
         input: 'not json',
       }),
     )
@@ -131,7 +131,7 @@ describe('useLiveTurns', () => {
   it('tool_output marks the matching call done and stores output', () => {
     const { live } = setup()
     wsHandler!(
-      envelope('tool_call', { db_session_id: 1, request_id: 'c1', tool: 'edit_page', input: '{}' }),
+      envelope('tool_call', { db_session_id: 1, request_id: 'c1', tool: 'page_edit', input: '{}' }),
     )
     wsHandler!(envelope('tool_output', { db_session_id: 1, request_id: 'c1', output: 'ok' }))
     expect(live.value!.toolCalls[0]).toMatchObject({ status: 'done', output: 'ok' })
@@ -251,7 +251,7 @@ describe('useLiveTurns', () => {
         db_session_id: 1,
         agent_session_id: 'child-1',
         request_id: 'c1',
-        tool: 'search_pages',
+        tool: 'page_search',
         input: '{"q":"x"}',
       }),
     )
@@ -260,7 +260,7 @@ describe('useLiveTurns', () => {
     expect(liveSubAgents.value['child-1'].text).toBe('child')
     expect(liveSubAgents.value['child-1'].toolCalls[0]).toMatchObject({
       id: 'c1',
-      name: 'search_pages',
+      name: 'page_search',
       args: { q: 'x' },
     })
   })
@@ -272,7 +272,7 @@ describe('useLiveTurns', () => {
         db_session_id: 1,
         agent_session_id: 'child-1',
         request_id: 'c1',
-        tool: 'search_pages',
+        tool: 'page_search',
         input: '{}',
       }),
     )
@@ -322,7 +322,7 @@ describe('useLiveTurns', () => {
       envelope('tool_request', {
         db_session_id: 1,
         request_id: 'c1',
-        tool: 'delete_page',
+        tool: 'page_delete',
         input: '{"id":1}',
       }),
     )
@@ -340,7 +340,7 @@ describe('useLiveTurns', () => {
       envelope('tool_request', {
         db_session_id: 1,
         request_id: 'c1',
-        tool: 'delete_page',
+        tool: 'page_delete',
         input: '{"id":1}',
       }),
     )
@@ -361,7 +361,7 @@ describe('useLiveTurns', () => {
         db_session_id: 1,
         agent_session_id: 'child-1',
         request_id: 'c1',
-        tool: 'search_pages',
+        tool: 'page_search',
         input: '{}',
       }),
     )

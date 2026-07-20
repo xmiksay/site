@@ -79,7 +79,7 @@ describe('assistant store — sub-agent live routing', () => {
         db_session_id: 42,
         agent_session_id: 'child-1',
         request_id: 'call-1',
-        tool: 'edit_page',
+        tool: 'page_edit',
         input: '{"path":"a"}',
       }),
     )
@@ -88,7 +88,7 @@ describe('assistant store — sub-agent live routing', () => {
     expect(store.liveSubAgents['child-1'].toolCalls).toHaveLength(1)
     expect(store.liveSubAgents['child-1'].toolCalls[0]).toMatchObject({
       id: 'call-1',
-      name: 'edit_page',
+      name: 'page_edit',
       args: { path: 'a' },
     })
     expect(store.live).toBeNull()

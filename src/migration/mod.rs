@@ -29,6 +29,7 @@ mod m_026_add_llm_providers_concurrency_rpm;
 mod m_027_add_assistant_sessions_generation;
 mod m_028_add_assistant_sessions_more_generation;
 mod m_029_add_llm_models_generation_capabilities;
+mod m_030_rename_tools_to_resource_operation;
 
 pub struct Migrator;
 
@@ -65,6 +66,7 @@ impl MigratorTrait for Migrator {
             Box::new(m_027_add_assistant_sessions_generation::Migration),
             Box::new(m_028_add_assistant_sessions_more_generation::Migration),
             Box::new(m_029_add_llm_models_generation_capabilities::Migration),
+            Box::new(m_030_rename_tools_to_resource_operation::Migration),
         ]
     }
 }

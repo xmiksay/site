@@ -29,8 +29,8 @@ override these instructions for your installation, create a page with path \
 - **path**: unique URL slug. Hierarchical paths use `/` (e.g. `section/sub/page`).
 - **markdown**: content in Markdown with custom extensions (see below).
 - **summary**: short description for listings.
-- **tags**: assigned by name via `edit_page`; names that don't exist yet are \
-  skipped (create them first with `create_tag` to attach them).
+- **tags**: assigned by name via `page_edit`; names that don't exist yet are \
+  skipped (create them first with `tag_create` to attach them).
 - **private**: private pages are only visible to logged-in users. \
   New pages created via MCP default to private.
 - **revisions**: every markdown change stores a diff automatically.
@@ -46,7 +46,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
             "tools": [
                 // ----- Pages -----
                 {
-                    "name": "read_page",
+                    "name": "page_read",
                     "description": "Read a page by its path. Returns title (path), summary, tags, and full markdown content.",
                     "inputSchema": {
                         "type": "object",
@@ -55,7 +55,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "edit_page",
+                    "name": "page_edit",
                     "description": "Create or update a page by its path. Creates the page if it doesn't exist. A revision diff is stored automatically when markdown changes.",
                     "inputSchema": {
                         "type": "object",
@@ -70,7 +70,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "search_pages",
+                    "name": "page_search",
                     "description": "Search pages by path prefix, tag name, and/or fulltext query (q). Path and tag matches rank above markdown content matches. Returns path, summary for each match, plus total count and has_more flag for pagination.",
                     "inputSchema": {
                         "type": "object",
@@ -84,7 +84,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "delete_page",
+                    "name": "page_delete",
                     "description": "Delete a page by its path.",
                     "inputSchema": {
                         "type": "object",
@@ -95,12 +95,12 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
 
                 // ----- Tags -----
                 {
-                    "name": "list_tags",
+                    "name": "tag_list",
                     "description": "List all available tags. Returns tag name and description.",
                     "inputSchema": { "type": "object", "properties": {} }
                 },
                 {
-                    "name": "read_tag",
+                    "name": "tag_read",
                     "description": "Read a single tag by name.",
                     "inputSchema": {
                         "type": "object",
@@ -109,7 +109,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "create_tag",
+                    "name": "tag_create",
                     "description": "Create a new tag.",
                     "inputSchema": {
                         "type": "object",
@@ -121,7 +121,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "update_tag",
+                    "name": "tag_update",
                     "description": "Update an existing tag's name and/or description (look up by current name).",
                     "inputSchema": {
                         "type": "object",
@@ -134,7 +134,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "delete_tag",
+                    "name": "tag_delete",
                     "description": "Delete a tag by name.",
                     "inputSchema": {
                         "type": "object",
@@ -145,7 +145,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
 
                 // ----- Files -----
                 {
-                    "name": "list_files",
+                    "name": "file_list",
                     "description": "List uploaded files. Optionally filter by mimetype prefix (e.g. 'image/').",
                     "inputSchema": {
                         "type": "object",
@@ -155,7 +155,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "create_file",
+                    "name": "file_create",
                     "description": "Upload a file at the given path. Provide either `data_base64` (binary, e.g. images) or `data` (raw text, e.g. PGN/FEN/SVG). The display title is derived from the basename of the path. Returns the new file id plus an `embed` hint for the matching markdown directive: `<image id=\"ID\">` for images, `<pgn id=\"ID\">` for `.pgn`, `<mermaid id=\"ID\">` for `.mmd`, `<fen id=\"ID\">` for `.fen`, `<json id=\"ID\" query=\"...\">` for `.json`, `<file id=\"ID\">` otherwise (or `<gallery id=\"ID\">` to group several files). Generates a thumbnail automatically for images.",
                     "inputSchema": {
                         "type": "object",
@@ -170,7 +170,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "read_file",
+                    "name": "file_read",
                     "description": "Read file metadata by ID. Set `include_content` to also return the file's contents — only populated for text-ish mimetypes (plain text, JSON, PGN, mermaid, FEN); other mimetypes get `content: null` with a `content_error` note instead of binary data.",
                     "inputSchema": {
                         "type": "object",
@@ -182,7 +182,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "update_file",
+                    "name": "file_update",
                     "description": "Update a file's metadata (path, description) and/or replace its contents. Provide either `data_base64` (binary, e.g. images) or `data` (raw text, e.g. PGN/FEN/SVG) to replace the stored bytes, with an optional `mimetype` to match; a thumbnail is regenerated automatically when content changes and the file is an image. The display title is always derived from the path basename.",
                     "inputSchema": {
                         "type": "object",
@@ -198,7 +198,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "delete_file",
+                    "name": "file_delete",
                     "description": "Delete a file by ID.",
                     "inputSchema": {
                         "type": "object",
@@ -209,12 +209,12 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
 
                 // ----- Galleries -----
                 {
-                    "name": "list_galleries",
+                    "name": "gallery_list",
                     "description": "List all galleries.",
                     "inputSchema": { "type": "object", "properties": {} }
                 },
                 {
-                    "name": "read_gallery",
+                    "name": "gallery_read",
                     "description": "Read a gallery by ID.",
                     "inputSchema": {
                         "type": "object",
@@ -223,7 +223,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "create_gallery",
+                    "name": "gallery_create",
                     "description": "Create a gallery from a list of file IDs. `path` is the unique URL slug (e.g. `holiday-2024`).",
                     "inputSchema": {
                         "type": "object",
@@ -237,7 +237,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "update_gallery",
+                    "name": "gallery_update",
                     "description": "Update a gallery (replaces all fields).",
                     "inputSchema": {
                         "type": "object",
@@ -252,7 +252,7 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 },
                 {
-                    "name": "delete_gallery",
+                    "name": "gallery_delete",
                     "description": "Delete a gallery by ID.",
                     "inputSchema": {
                         "type": "object",

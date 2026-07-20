@@ -25,7 +25,7 @@ pub struct ListFilesTool {
 #[async_trait]
 impl Tool for ListFilesTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("list_files")
+        Cow::Borrowed("file_list")
     }
     fn description(&self) -> &str {
         "List uploaded files. Optional mime_prefix filter (e.g. 'image/')."
@@ -37,7 +37,7 @@ impl Tool for ListFilesTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("list_files is session-scoped; use run_for_session")
+        anyhow::bail!("file_list is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,
@@ -76,7 +76,7 @@ pub struct CreateFileTool {
 #[async_trait]
 impl Tool for CreateFileTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("create_file")
+        Cow::Borrowed("file_create")
     }
     fn description(&self) -> &str {
         "Upload a file at the given path. Provide either base64-encoded `data_base64` (binary, \
@@ -102,7 +102,7 @@ impl Tool for CreateFileTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("create_file is session-scoped; use run_for_session")
+        anyhow::bail!("file_create is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,
@@ -170,7 +170,7 @@ pub struct ReadFileTool {
 #[async_trait]
 impl Tool for ReadFileTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("read_file")
+        Cow::Borrowed("file_read")
     }
     fn description(&self) -> &str {
         "Read file metadata by ID. Set `include_content` to also return the file's contents — \
@@ -188,7 +188,7 @@ impl Tool for ReadFileTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("read_file is session-scoped; use run_for_session")
+        anyhow::bail!("file_read is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,
@@ -250,7 +250,7 @@ pub struct UpdateFileTool {
 #[async_trait]
 impl Tool for UpdateFileTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("update_file")
+        Cow::Borrowed("file_update")
     }
     fn description(&self) -> &str {
         "Update a file's metadata (path, description) and/or replace its contents. Provide \
@@ -274,7 +274,7 @@ impl Tool for UpdateFileTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("update_file is session-scoped; use run_for_session")
+        anyhow::bail!("file_update is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,
@@ -339,7 +339,7 @@ pub struct DeleteFileTool {
 #[async_trait]
 impl Tool for DeleteFileTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("delete_file")
+        Cow::Borrowed("file_delete")
     }
     fn description(&self) -> &str {
         "Delete a file by ID."
@@ -352,7 +352,7 @@ impl Tool for DeleteFileTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("delete_file is session-scoped; use run_for_session")
+        anyhow::bail!("file_delete is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,

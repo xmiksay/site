@@ -201,14 +201,16 @@ section below).
 
 `POST /mcp` exposes JSON-RPC 2.0 with these tools (defined in `src/routes/mcp/{pages,tags,files,galleries}.rs`):
 
-- **Pages:** `read_page`, `edit_page`, `search_pages` (prefix/tag/q + limit/offset), `delete_page`
-- **Tags:** `list_tags`, `read_tag`, `create_tag`, `update_tag`, `delete_tag`
-- **Files:** `list_files`, `create_file`, `read_file` (`include_content` returns the file's text for text-ish mimetypes — plain text, JSON, PGN, mermaid, FEN, per `files_repo::is_text_content`), `update_file` (path/description, plus optional `mimetype`/`data`/`data_base64` to replace the stored bytes in place — issue #56, so a bad upload is repairable instead of unrecoverable), `delete_file`
-- **Galleries:** `list_galleries`, `read_gallery`, `create_gallery`, `update_gallery`, `delete_gallery`
+- **Pages:** `page_read`, `page_edit`, `page_search` (prefix/tag/q + limit/offset), `page_delete`
+- **Tags:** `tag_list`, `tag_read`, `tag_create`, `tag_update`, `tag_delete`
+- **Files:** `file_list`, `file_create`, `file_read` (`include_content` returns the file's text for text-ish mimetypes — plain text, JSON, PGN, mermaid, FEN, per `files_repo::is_text_content`), `file_update` (path/description, plus optional `mimetype`/`data`/`data_base64` to replace the stored bytes in place — issue #56, so a bad upload is repairable instead of unrecoverable), `file_delete`
+- **Galleries:** `gallery_list`, `gallery_read`, `gallery_create`, `gallery_update`, `gallery_delete`
+
+Tool names follow a `<resource>_<operation>` convention (issue #61); `web_search`/`web_fetch` (below) are the exception, already resource-first.
 
 Server instructions are assembled by `server_instructions()` = `SERVER_INSTRUCTIONS_HEADER` + `MARKDOWN_EXTENSIONS_DOC` (`src/routes/mcp/instructions.rs`, `src/markdown/mod.rs`). If a private `CLAUDE` page exists (editable via admin UI / MCP), its markdown replaces the assembled default entirely — so keep that page in sync with the code. Tool/parameter descriptions live in `handle_tools_list()` (`src/routes/mcp/instructions.rs`).
 
-Every mutating tool broadcasts the same `WsHub` event a REST API mutation would (`src/routes/broadcast.rs`), so a page/tag/file/gallery change made over MCP shows up live in an open admin tab. `read_page`/`search_pages`/`list_tags` render through `src/repo/format.rs`, and the pages/galleries/files/tags "empty required field" and pages "nothing to update" guards live on the `repo` mutation functions themselves (`PageSaveError`/`GallerySaveError`/`FileSaveError`/`TagSaveError`, `pages::validate_page_edit_fields`) — the same formatters, guards, and `crate::mcp_args` argument parsing are shared verbatim with the AI assistant's built-in tools (`src/ai/tools/*.rs`), so the two edges can't drift (#25).
+Every mutating tool broadcasts the same `WsHub` event a REST API mutation would (`src/routes/broadcast.rs`), so a page/tag/file/gallery change made over MCP shows up live in an open admin tab. `page_read`/`page_search`/`tag_list` render through `src/repo/format.rs`, and the pages/galleries/files/tags "empty required field" and pages "nothing to update" guards live on the `repo` mutation functions themselves (`PageSaveError`/`GallerySaveError`/`FileSaveError`/`TagSaveError`, `pages::validate_page_edit_fields`) — the same formatters, guards, and `crate::mcp_args` argument parsing are shared verbatim with the AI assistant's built-in tools (`src/ai/tools/*.rs`), so the two edges can't drift (#25).
 
 ### Markdown directives
 
@@ -270,10 +272,10 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     spawned at boot keeps running for the process lifetime.
   - **Sub-agents (#17):** the profile registry (`EngineConfig.profiles`) holds
     the root `build` profile plus two spawnable leaves — `researcher`
-    (read-only: `web_search`/`web_fetch`/`read_page`/`search_pages`/
-    `list_tags`/`list_files`/`list_galleries`) and `page-writer`
-    (`read_page`/`search_pages`/`edit_page`/`create_tag`/`create_file`/
-    `list_galleries`/`create_gallery`/`update_gallery`). `build`'s
+    (read-only: `web_search`/`web_fetch`/`page_read`/`page_search`/
+    `tag_list`/`file_list`/`gallery_list`) and `page-writer`
+    (`page_read`/`page_search`/`page_edit`/`tag_create`/`file_create`/
+    `gallery_list`/`gallery_create`/`gallery_update`). `build`'s
     `spawnable_agents` allowlist is narrowed to exactly these two; each leaf's
     `can_spawn: Some(false)` keeps spawn depth at 1. `profile_tool_specs`
     (built via `entanglement_runtime::subagent::spawn_specs_for`) is what
@@ -398,10 +400,11 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
 - `tools/` — the built-in (non-MCP) tool vocabulary, ported to
   `entanglement_runtime::tools::Tool`. A curated subset of the site API (not
   full CRUD): pages `read`/`search`/`edit`/`delete`, tags `list`/`create`,
-  files `list`/`create`/`read`/`update`/`delete` (issue #56 — `update_file`
-  can replace a file's stored bytes/mimetype in place, and `read_file` can
+  files `list`/`create`/`read`/`update`/`delete` (issue #56 — `file_update`
+  can replace a file's stored bytes/mimetype in place, and `file_read` can
   return its text content, so a bad upload is repairable instead of orphaned),
-  galleries `list`/`create`/`update`, plus `web_search`/`web_fetch`.
+  galleries `list`/`create`/`update`, plus `web_search`/`web_fetch`. Tool
+  names follow the `<resource>_<operation>` convention (issue #61).
 - `tool_permissions.rs` — the allow/deny/prompt rule evaluator `policy.rs`
   wraps (#39): a user's rows (ordered `priority DESC, id DESC` — ascending
   precedence, so `PermissionProfile::resolve_scoped`'s last-match-wins

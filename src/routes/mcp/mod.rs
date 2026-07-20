@@ -109,31 +109,31 @@ async fn handle_tools_call(
 
     match tool_name {
         // pages
-        "read_page" => pages::tool_read_page(state, id, arguments).await,
-        "edit_page" => pages::tool_edit_page(state, user_id, id, arguments).await,
-        "search_pages" => pages::tool_search_pages(state, id, arguments).await,
-        "delete_page" => pages::tool_delete_page(state, id, arguments).await,
+        "page_read" => pages::tool_page_read(state, id, arguments).await,
+        "page_edit" => pages::tool_page_edit(state, user_id, id, arguments).await,
+        "page_search" => pages::tool_page_search(state, id, arguments).await,
+        "page_delete" => pages::tool_page_delete(state, id, arguments).await,
 
         // tags
-        "list_tags" => tags::tool_list_tags(state, id).await,
-        "read_tag" => tags::tool_read_tag(state, id, arguments).await,
-        "create_tag" => tags::tool_create_tag(state, id, arguments).await,
-        "update_tag" => tags::tool_update_tag(state, id, arguments).await,
-        "delete_tag" => tags::tool_delete_tag(state, id, arguments).await,
+        "tag_list" => tags::tool_tag_list(state, id).await,
+        "tag_read" => tags::tool_tag_read(state, id, arguments).await,
+        "tag_create" => tags::tool_tag_create(state, id, arguments).await,
+        "tag_update" => tags::tool_tag_update(state, id, arguments).await,
+        "tag_delete" => tags::tool_tag_delete(state, id, arguments).await,
 
         // files
-        "list_files" => files::tool_list_files(state, id, arguments).await,
-        "create_file" => files::tool_create_file(state, user_id, id, arguments).await,
-        "read_file" => files::tool_read_file(state, id, arguments).await,
-        "update_file" => files::tool_update_file(state, id, arguments).await,
-        "delete_file" => files::tool_delete_file(state, id, arguments).await,
+        "file_list" => files::tool_file_list(state, id, arguments).await,
+        "file_create" => files::tool_file_create(state, user_id, id, arguments).await,
+        "file_read" => files::tool_file_read(state, id, arguments).await,
+        "file_update" => files::tool_file_update(state, id, arguments).await,
+        "file_delete" => files::tool_file_delete(state, id, arguments).await,
 
         // galleries
-        "list_galleries" => galleries::tool_list_galleries(state, id).await,
-        "read_gallery" => galleries::tool_read_gallery(state, id, arguments).await,
-        "create_gallery" => galleries::tool_create_gallery(state, user_id, id, arguments).await,
-        "update_gallery" => galleries::tool_update_gallery(state, id, arguments).await,
-        "delete_gallery" => galleries::tool_delete_gallery(state, id, arguments).await,
+        "gallery_list" => galleries::tool_gallery_list(state, id).await,
+        "gallery_read" => galleries::tool_gallery_read(state, id, arguments).await,
+        "gallery_create" => galleries::tool_gallery_create(state, user_id, id, arguments).await,
+        "gallery_update" => galleries::tool_gallery_update(state, id, arguments).await,
+        "gallery_delete" => galleries::tool_gallery_delete(state, id, arguments).await,
 
         _ => JsonRpcResponse::error(id, -32602, format!("Unknown tool: {tool_name}")),
     }
