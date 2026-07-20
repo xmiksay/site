@@ -39,7 +39,7 @@ src/
     llm_{provider,model},
     assistant_{session,event},
     user_mcp_server, tool_permission
-  migration/              # m_001 … m_029
+  migration/              # m_001 … m_030
   ai/                     # config, handlers, tool_permissions, ws_bridge —
                           # plus the entanglement-core/-runtime engine
                           # adapters: engine, catalog, mcp, persistence,
@@ -204,7 +204,7 @@ section below).
 
 - **Pages:** `page_read`, `page_edit`, `page_search` (prefix/tag/q + limit/offset), `page_delete`
 - **Tags:** `tag_list`, `tag_read`, `tag_create`, `tag_update`, `tag_delete`
-- **Files:** `file_list`, `file_create`, `file_read` (`include_content` returns the file's text for text-ish mimetypes — plain text, JSON, PGN, mermaid, FEN, per `files_repo::is_text_content`), `file_update` (path/description, plus optional `mimetype`/`data`/`data_base64` to replace the stored bytes in place — issue #56, so a bad upload is repairable instead of unrecoverable), `file_delete`
+- **Files:** `file_list`, `file_create` (mimetype inferred from the path extension when omitted — `.pgn`/`.mmd`/`.fen`/`.json` get dedicated mimetypes, issue #57 — and the response's `embed` field is a ready-to-use directive derived from that extension/mimetype: `<pgn>`/`<mermaid>`/`<fen>`/`<json>` for those extensions, `<image>` for `image/*`, `<file>` otherwise — `files_repo::embed_hint`, issue #55), `file_read` (`include_content` returns the file's text for text-ish mimetypes — plain text, JSON, PGN, mermaid, FEN, per `files_repo::is_text_content`), `file_update` (path/description, plus optional `mimetype`/`data`/`data_base64` to replace the stored bytes in place — issue #56, so a bad upload is repairable instead of unrecoverable), `file_delete`
 - **Galleries:** `gallery_list`, `gallery_read`, `gallery_create`, `gallery_update`, `gallery_delete`
 
 Tool names follow a `<resource>_<operation>` convention (issue #61); `web_search`/`web_fetch` (below) are the exception, already resource-first.
