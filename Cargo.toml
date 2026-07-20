@@ -49,6 +49,7 @@ anyhow        = "1"
 uuid          = { version = "1.23.1", features = ["v4", "serde"] }
 htmd          = "0.5.4"
 mermaid-svg   = "0.7.0"
+chess-diagram = { version = "0.2", features = ["pgn"] }
 syntect       = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "default-themes", "html", "regex-fancy"] }
 mdcast        = { version = "0.3.0", features = ["typst-html"] }
 bytes         = "1"

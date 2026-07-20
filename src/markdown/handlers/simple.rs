@@ -15,6 +15,7 @@ use super::super::lookup::{
 use super::super::renderer::{
     block, expand_directives, render_expanded_to_html, render_md_template,
 };
+use super::markdown_image;
 
 // ---------------------------------------------------------------------------
 // <page path|id=...>
@@ -49,6 +50,12 @@ pub(in crate::markdown) async fn directive_page(d: &Directive, ctx: &mut RenderC
     let nested = expand_directives(&page.markdown, ctx).await;
     ctx.visited_pages.remove(&path);
 
+    if ctx.export.is_some() {
+        // Not `block()`: nested markdown legitimately has blank lines between
+        // paragraphs, which `block()` would corrupt.
+        return format!("\n\n{}\n\n", nested.trim());
+    }
+
     let inner_html = render_expanded_to_html(&nested);
 
     let html = render_md_template(
@@ -76,6 +83,20 @@ pub(in crate::markdown) async fn directive_file(d: &Directive, ctx: &mut RenderC
     };
 
     let title = title_from_path(&file.path);
+    let description = file
+        .description
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(title.as_str());
+
+    if ctx.export.is_some() {
+        return if file.mimetype.starts_with("image/") {
+            block(markdown_image(&title, &file.path))
+        } else {
+            block(format!("[{description}]({})", file.path))
+        };
+    }
+
     if file.mimetype.starts_with("image/") {
         let html = render_md_template(
             ctx,
@@ -85,11 +106,6 @@ pub(in crate::markdown) async fn directive_file(d: &Directive, ctx: &mut RenderC
         return block(html);
     }
 
-    let description = file
-        .description
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(title.as_str());
     let html = render_md_template(
         ctx,
         "file",
@@ -119,6 +135,11 @@ pub(in crate::markdown) async fn directive_img(d: &Directive, ctx: &mut RenderCt
         .arg("alt")
         .filter(|s| !s.is_empty())
         .unwrap_or(title.as_str());
+
+    if ctx.export.is_some() {
+        return block(markdown_image(alt, &file.path));
+    }
+
     let html = render_md_template(
         ctx,
         "img",
@@ -153,6 +174,7 @@ pub(in crate::markdown) async fn directive_gallery(
     struct GalleryItem {
         hash: String,
         title: String,
+        path: String,
     }
 
     let mut items: Vec<GalleryItem> = Vec::with_capacity(gal.file_ids.len());
@@ -161,8 +183,21 @@ pub(in crate::markdown) async fn directive_gallery(
             items.push(GalleryItem {
                 hash: img.hash,
                 title: title_from_path(&img.path),
+                path: img.path,
             });
         }
+    }
+
+    if ctx.export.is_some() {
+        let mut md = format!("\n\n### {}\n\n", gal.title);
+        if items.is_empty() {
+            md.push_str("*Gallery is empty*\n\n");
+        } else {
+            for item in &items {
+                md.push_str(&format!("![{}]({})\n\n", item.title, item.path));
+            }
+        }
+        return md;
     }
 
     let html = render_md_template(

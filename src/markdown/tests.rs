@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use super::directives::{Directive, parse_tag_directive};
-use super::handlers::{TextBlob, decode_text_blob, json_table, parse_size_class, run_jq};
+use super::handlers::{
+    PgnPlyRequest, TextBlob, decode_text_blob, json_table, markdown_image, markdown_table,
+    parse_size_class, pgn_ply_request, run_jq,
+};
 use super::highlight::highlight_code_block;
 use super::lookup::{FileLookup, parse_file_lookup};
 use super::renderer::{block, collect_container, collect_mermaid_fence};
@@ -362,4 +365,90 @@ fn size_class_parsing() {
     assert_eq!(parse_size_class(&d), " size-sm");
     let d = make_dir("pgn", &[]);
     assert_eq!(parse_size_class(&d), "");
+}
+
+// ---------------------------------------------------------------------------
+// Export bridge (#66): chess-diagram shape checks, `move`-attr ply
+// resolution, `markdown_table`/`markdown_image` helpers.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn chess_diagram_render_svg_start_position() {
+    let svg = chess_diagram::render_svg(
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        &chess_diagram::Options::default(),
+    )
+    .expect("valid FEN must render");
+    assert!(svg.starts_with("<svg"));
+}
+
+#[test]
+fn chess_diagram_render_svg_invalid_fen_errors() {
+    assert!(chess_diagram::render_svg("not a fen", &chess_diagram::Options::default()).is_err());
+}
+
+#[test]
+fn pgn_ply_request_none_or_last_means_last() {
+    assert_eq!(pgn_ply_request(None), PgnPlyRequest::Last);
+    assert_eq!(pgn_ply_request(Some("last")), PgnPlyRequest::Last);
+}
+
+#[test]
+fn pgn_ply_request_first_or_zero_means_ply_zero() {
+    assert_eq!(pgn_ply_request(Some("first")), PgnPlyRequest::Ply(0));
+    assert_eq!(pgn_ply_request(Some("0")), PgnPlyRequest::Ply(0));
+}
+
+#[test]
+fn pgn_ply_request_numeric() {
+    assert_eq!(pgn_ply_request(Some("5")), PgnPlyRequest::Ply(5));
+}
+
+#[test]
+fn pgn_ply_request_unparseable_falls_back_to_last() {
+    // Documented graceful fallback for an author typo: treat it the same as
+    // an absent/`"last"` attribute rather than erroring or panicking.
+    assert_eq!(pgn_ply_request(Some("not a number")), PgnPlyRequest::Last);
+}
+
+#[test]
+fn markdown_table_basic_header_and_rows() {
+    let columns = vec!["a".to_string(), "b".to_string()];
+    let rows = vec![
+        vec!["1".to_string(), "x".to_string()],
+        vec!["2".to_string(), "y".to_string()],
+    ];
+    let table = markdown_table(&columns, &rows);
+    assert_eq!(table, "| a | b |\n|---|---|\n| 1 | x |\n| 2 | y |\n");
+}
+
+#[test]
+fn markdown_table_empty_columns_sized_to_first_row() {
+    let columns: Vec<String> = Vec::new();
+    let rows = vec![vec!["1".to_string(), "2".to_string(), "3".to_string()]];
+    let table = markdown_table(&columns, &rows);
+    assert_eq!(table, "|  |  |  |\n|---|---|---|\n| 1 | 2 | 3 |\n");
+}
+
+#[test]
+fn markdown_table_escapes_pipes_in_cells() {
+    let columns = vec!["a".to_string()];
+    let rows = vec![vec!["1 | 2".to_string()]];
+    let table = markdown_table(&columns, &rows);
+    assert!(table.contains("1 \\| 2"));
+}
+
+#[test]
+fn markdown_table_empty_input_is_empty_string() {
+    let columns: Vec<String> = Vec::new();
+    let rows: Vec<Vec<String>> = Vec::new();
+    assert_eq!(markdown_table(&columns, &rows), "");
+}
+
+#[test]
+fn markdown_image_basic_format() {
+    assert_eq!(
+        markdown_image("Chess position", "bridge/fen/abc.svg"),
+        "![Chess position](bridge/fen/abc.svg)"
+    );
 }

@@ -86,6 +86,7 @@ mod tests;
 
 use std::collections::HashSet;
 
+use bytes::Bytes;
 use minijinja::Environment;
 use pulldown_cmark::{Options, Parser, html};
 use sea_orm::DatabaseConnection;
@@ -96,6 +97,12 @@ struct RenderCtx<'a> {
     logged_in: bool,
     /// Pages already on the transclusion stack — prevents infinite recursion.
     visited_pages: HashSet<String>,
+    /// `Some` in export mode (`render_for_export`): directives resolve to
+    /// plain markdown instead of browser HTML, and any SVG a directive
+    /// synthesizes on the fly (fen/pgn/mermaid — none of these have a
+    /// `file_blobs` row of their own) is pushed here for the caller to
+    /// resolve through an `AssetProvider` overlay (#66).
+    export: Option<&'a mut Vec<(String, Bytes)>>,
 }
 
 pub async fn render(
@@ -109,6 +116,7 @@ pub async fn render(
         tmpl,
         logged_in,
         visited_pages: HashSet::new(),
+        export: None,
     };
 
     let expanded = renderer::expand_directives(md, &mut ctx).await;
@@ -123,4 +131,40 @@ pub async fn render(
     html::push_html(&mut out, events.into_iter());
 
     links::rewrite_internal_links(&out)
+}
+
+/// Markdown ready for `mdcast`'s `PageSplitter`, plus any directive-rendered
+/// SVGs that need resolving through an `AssetProvider` overlay — they have no
+/// natural `file_blobs` row since they're synthesized on the fly.
+pub struct BridgedMarkdown {
+    pub markdown: String,
+    pub assets: Vec<(String, Bytes)>,
+}
+
+/// Resolve a page's directives to plain markdown for the mdcast export
+/// pipeline — no client-JS-dependent output, unlike `render()`'s browser
+/// HTML. See docs/architecture.md#export-mdcast for the markdown-in
+/// rationale (#66).
+///
+/// Deliberately stops after `expand_directives`: the pulldown-cmark parse,
+/// syntect highlighting, and `links::rewrite_internal_links` all operate on
+/// (or produce) HTML, which `mdcast`'s typst backend can't consume — plain
+/// non-directive markdown must pass through untouched.
+pub async fn render_for_export(
+    md: &str,
+    db: &DatabaseConnection,
+    tmpl: &Environment<'static>,
+    logged_in: bool,
+) -> BridgedMarkdown {
+    let mut assets = Vec::new();
+    let mut ctx = RenderCtx {
+        db,
+        tmpl,
+        logged_in,
+        visited_pages: HashSet::new(),
+        export: Some(&mut assets),
+    };
+
+    let markdown = renderer::expand_directives(md, &mut ctx).await;
+    BridgedMarkdown { markdown, assets }
 }
