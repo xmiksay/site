@@ -27,7 +27,7 @@ use serde_json::json;
 /// A scripted `Llm` for the `approves_a_page_writer_sub_agents_own_pending_
 /// tool_call` test: the root spawns `page-writer` with a task naming `path`;
 /// the `page-writer` child (system prompt carries `PAGE_WRITER_PROMPT_SUFFIX`)
-/// calls `edit_page` on its first round, then finishes on its second (after
+/// calls `page_edit` on its first round, then finishes on its second (after
 /// the approved call's tool result comes back).
 struct PageWriterScriptedLlm {
     calls: u32,
@@ -44,7 +44,7 @@ impl Llm for PageWriterScriptedLlm {
                     text: String::new(),
                     tool_calls: vec![ToolCall::new(
                         "edit-1",
-                        "edit_page",
+                        "page_edit",
                         format!(
                             r#"{{"path":"{}","markdown":"hello from a sub-agent"}}"#,
                             self.path
@@ -79,7 +79,7 @@ impl Llm for PageWriterScriptedLlm {
     }
 }
 
-/// #17: a `page-writer` sub-agent's own `edit_page` call needs approval (a
+/// #17: a `page-writer` sub-agent's own `page_edit` call needs approval (a
 /// fresh test user has no `tool_permissions` rows, so it defaults to `Ask`)
 /// — unlike `agent_spawn` itself, this *is* a permission-gated host tool, and
 /// it is gated inside the *child* session. This is the sharpest edge of the
@@ -131,7 +131,7 @@ async fn approves_a_page_writer_sub_agents_own_pending_tool_call() {
         "no agent_spawn/agent call: {resp:#}"
     );
 
-    // Poll until the page-writer child's own edit_page call shows up,
+    // Poll until the page-writer child's own page_edit call shows up,
     // pending approval, nested under the spawning turn.
     let mut call_id: Option<String> = None;
     let mut detail = resp;
@@ -162,7 +162,7 @@ async fn approves_a_page_writer_sub_agents_own_pending_tool_call() {
                     cm["content"]["requires_approval"] == json!(true)
                         && cm["content"]["tool_calls"]
                             .as_array()
-                            .is_some_and(|c| c.iter().any(|tc| tc["name"] == json!("edit_page")))
+                            .is_some_and(|c| c.iter().any(|tc| tc["name"] == json!("page_edit")))
                 }) {
                     call_id = cm["content"]["tool_calls"][0]["id"]
                         .as_str()
@@ -177,7 +177,7 @@ async fn approves_a_page_writer_sub_agents_own_pending_tool_call() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let call_id = call_id.unwrap_or_else(|| {
-        panic!("page-writer never reached a pending edit_page call: {detail:#}")
+        panic!("page-writer never reached a pending page_edit call: {detail:#}")
     });
 
     // Approve it — this is the routing fix: the waiter for this call lives
@@ -199,7 +199,7 @@ async fn approves_a_page_writer_sub_agents_own_pending_tool_call() {
         .expect("query pages");
     assert!(
         page.is_some(),
-        "page-writer's edit_page never created {path} after approval: {approved:#}"
+        "page-writer's page_edit never created {path} after approval: {approved:#}"
     );
     assert!(
         page.as_ref().is_some_and(|p| p.private),

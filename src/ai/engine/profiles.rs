@@ -31,22 +31,22 @@ pub const SWITCHABLE_PROFILES: &[&str] = &[BUILD_PROFILE, RESEARCHER_PROFILE, PA
 const RESEARCHER_TOOLS: &[&str] = &[
     "web_search",
     "web_fetch",
-    "read_page",
-    "search_pages",
-    "list_tags",
-    "list_files",
-    "list_galleries",
+    "page_read",
+    "page_search",
+    "tag_list",
+    "file_list",
+    "gallery_list",
 ];
 
 const PAGE_WRITER_TOOLS: &[&str] = &[
-    "read_page",
-    "search_pages",
-    "edit_page",
-    "create_tag",
-    "create_file",
-    "list_galleries",
-    "create_gallery",
-    "update_gallery",
+    "page_read",
+    "page_search",
+    "page_edit",
+    "tag_create",
+    "file_create",
+    "gallery_list",
+    "gallery_create",
+    "gallery_update",
 ];
 
 /// Appended to the site system prompt (`engine.rs`'s `system_prompt_resolver`)
@@ -150,19 +150,19 @@ mod tests {
 
         assert!(researcher.spawnable_as_subagent());
         assert!(!researcher.may_spawn(), "researcher must not itself spawn");
-        assert!(researcher.advertises_tool("read_page"));
+        assert!(researcher.advertises_tool("page_read"));
         assert!(researcher.advertises_tool("web_search"));
-        assert!(!researcher.advertises_tool("edit_page"));
-        assert!(!researcher.advertises_tool("create_file"));
+        assert!(!researcher.advertises_tool("page_edit"));
+        assert!(!researcher.advertises_tool("file_create"));
 
         assert!(page_writer.spawnable_as_subagent());
         assert!(
             !page_writer.may_spawn(),
             "page-writer must not itself spawn"
         );
-        assert!(page_writer.advertises_tool("edit_page"));
-        assert!(page_writer.advertises_tool("create_gallery"));
+        assert!(page_writer.advertises_tool("page_edit"));
+        assert!(page_writer.advertises_tool("gallery_create"));
         assert!(!page_writer.advertises_tool("web_search"));
-        assert!(!page_writer.advertises_tool("delete_page"));
+        assert!(!page_writer.advertises_tool("page_delete"));
     }
 }

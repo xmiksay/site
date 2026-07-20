@@ -124,16 +124,16 @@ async fn resolve_expands_a_bare_capability_rule_to_its_member_tools() {
 
     // Every `read` member tool (#39) is graded identically...
     assert_eq!(
-        policy.resolve(&session, "read_page", "").await,
+        policy.resolve(&session, "page_read", "").await,
         Permission::Allow
     );
     assert_eq!(
-        policy.resolve(&session, "search_pages", "").await,
+        policy.resolve(&session, "page_search", "").await,
         Permission::Allow
     );
     // ...but a `write` tool is untouched, falling through to the Ask default.
     assert_eq!(
-        policy.resolve(&session, "edit_page", "").await,
+        policy.resolve(&session, "page_edit", "").await,
         Permission::Ask
     );
 
@@ -150,18 +150,18 @@ async fn resolve_honors_an_argument_scoped_rule_over_the_tool_call_input() {
     let policy = SitePolicy::new(db.clone());
     let session = SiteEngine::session_id_for_user(user_id);
 
-    add_rule(&db, user_id, "edit_page(obsidian/*)", Effect::Deny, 10).await;
+    add_rule(&db, user_id, "page_edit(obsidian/*)", Effect::Deny, 10).await;
 
     assert_eq!(
         policy
-            .resolve(&session, "edit_page", r#"{"path":"obsidian/rust"}"#)
+            .resolve(&session, "page_edit", r#"{"path":"obsidian/rust"}"#)
             .await,
         Permission::Deny
     );
     // Outside the scoped path, falls through to the Ask default.
     assert_eq!(
         policy
-            .resolve(&session, "edit_page", r#"{"path":"projects/x"}"#)
+            .resolve(&session, "page_edit", r#"{"path":"projects/x"}"#)
             .await,
         Permission::Ask
     );
@@ -239,13 +239,13 @@ async fn always_grant_persists_a_row_and_is_granted_reflects_it() {
     let policy = SitePolicy::new(db.clone());
     let session = SiteEngine::session_id_for_user(user_id);
 
-    assert!(!policy.is_granted(&session, "create_tag", None));
+    assert!(!policy.is_granted(&session, "tag_create", None));
 
     policy
-        .record(&session, "create_tag", None, ApprovalScope::Always)
+        .record(&session, "tag_create", None, ApprovalScope::Always)
         .await;
 
-    assert!(policy.is_granted(&session, "create_tag", None));
+    assert!(policy.is_granted(&session, "tag_create", None));
 
     let rows = tool_permission::Entity::find()
         .all(&db)
@@ -253,7 +253,7 @@ async fn always_grant_persists_a_row_and_is_granted_reflects_it() {
         .expect("query tool_permissions");
     let row = rows
         .iter()
-        .find(|r| r.user_id == user_id && r.name == "create_tag")
+        .find(|r| r.user_id == user_id && r.name == "tag_create")
         .expect("Always grant did not persist a tool_permissions row");
     assert_eq!(row.effect, "allow");
 
@@ -271,10 +271,10 @@ async fn once_scope_is_not_persisted_as_a_grant() {
     let session = SiteEngine::session_id_for_user(user_id);
 
     policy
-        .record(&session, "delete_page", None, ApprovalScope::Once)
+        .record(&session, "page_delete", None, ApprovalScope::Once)
         .await;
 
-    assert!(!policy.is_granted(&session, "delete_page", None));
+    assert!(!policy.is_granted(&session, "page_delete", None));
     let rows = tool_permission::Entity::find()
         .all(&db)
         .await
@@ -289,7 +289,7 @@ async fn once_scope_is_not_persisted_as_a_grant() {
 /// tenant namespacing) — `SitePolicy::resolve` must still resolve it to the
 /// *spawning user's* own `tool_permissions` rules, clamp intact, rather than
 /// failing closed on the missing `u{user_id}:` prefix. This is the
-/// clamp + resolver interplay the issue calls out: a user's `deny edit_page`
+/// clamp + resolver interplay the issue calls out: a user's `deny page_edit`
 /// rule reaches into a `page-writer` child exactly as it would the root.
 #[tokio::test]
 async fn sub_agent_child_session_resolves_against_its_spawning_users_rules() {
@@ -307,22 +307,22 @@ async fn sub_agent_child_session_resolves_against_its_spawning_users_rules() {
     // this test needs no running `Holly`/`agent_spawn` round trip.
     engine::record_session_started(child.clone(), Some(root.clone()));
 
-    add_rule(&db, user_id, "edit_page", Effect::Deny, 10).await;
+    add_rule(&db, user_id, "page_edit", Effect::Deny, 10).await;
 
     // The clamp holds for both the child (bare uuid) and the root session —
     // same user, same rule, same effective grade.
     assert_eq!(
-        policy.resolve(&child, "edit_page", "").await,
+        policy.resolve(&child, "page_edit", "").await,
         Permission::Deny
     );
     assert_eq!(
-        policy.resolve(&root, "edit_page", "").await,
+        policy.resolve(&root, "page_edit", "").await,
         Permission::Deny
     );
     // A tool the rule doesn't cover still resolves normally through the
     // child, proving this isn't just an accidental blanket deny.
     assert_eq!(
-        policy.resolve(&child, "read_page", "").await,
+        policy.resolve(&child, "page_read", "").await,
         Permission::Ask
     );
 

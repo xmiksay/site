@@ -1,5 +1,5 @@
-//! MCP tools for the `galleries` family: `list_galleries`, `read_gallery`,
-//! `create_gallery`, `update_gallery`, `delete_gallery`.
+//! MCP tools for the `galleries` family: `gallery_list`, `gallery_read`,
+//! `gallery_create`, `gallery_update`, `gallery_delete`.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -38,7 +38,7 @@ struct UpdateGalleryArgs {
     file_ids: Vec<i32>,
 }
 
-pub(super) async fn tool_list_galleries(state: &AppState, id: Option<Value>) -> JsonRpcResponse {
+pub(super) async fn tool_gallery_list(state: &AppState, id: Option<Value>) -> JsonRpcResponse {
     match galleries_repo::list_all(&state.db).await {
         Ok(rows) if rows.is_empty() => tool_result(id, "No galleries.".into()),
         Ok(rows) => {
@@ -52,7 +52,7 @@ pub(super) async fn tool_list_galleries(state: &AppState, id: Option<Value>) -> 
     }
 }
 
-pub(super) async fn tool_read_gallery(
+pub(super) async fn tool_gallery_read(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,
@@ -77,7 +77,7 @@ pub(super) async fn tool_read_gallery(
     }
 }
 
-pub(super) async fn tool_create_gallery(
+pub(super) async fn tool_gallery_create(
     state: &AppState,
     user_id: i32,
     id: Option<Value>,
@@ -110,7 +110,7 @@ pub(super) async fn tool_create_gallery(
     }
 }
 
-pub(super) async fn tool_update_gallery(
+pub(super) async fn tool_gallery_update(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,
@@ -142,7 +142,7 @@ pub(super) async fn tool_update_gallery(
     }
 }
 
-pub(super) async fn tool_delete_gallery(
+pub(super) async fn tool_gallery_delete(
     state: &AppState,
     id: Option<Value>,
     arguments: Value,

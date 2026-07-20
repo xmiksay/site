@@ -38,7 +38,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 use site::entity::tag;
 
-/// First round: two parallel `create_tag` calls (both permission-gated,
+/// First round: two parallel `tag_create` calls (both permission-gated,
 /// defaulting to `Ask` for a fresh user with no `tool_permissions` rows) in
 /// one response — the model batching two independent writes into a single
 /// turn. Second round (after both are decided): a closing text reply, no
@@ -59,12 +59,12 @@ impl Llm for TwoTagsLlm {
                 tool_calls: vec![
                     ToolCall::new(
                         "tag-a",
-                        "create_tag",
+                        "tag_create",
                         format!(r#"{{"name":"{}"}}"#, self.tag_a),
                     ),
                     ToolCall::new(
                         "tag-b",
-                        "create_tag",
+                        "tag_create",
                         format!(r#"{{"name":"{}"}}"#, self.tag_b),
                     ),
                 ],
@@ -202,11 +202,11 @@ async fn approving_calls_one_at_a_time_settles_each_promptly_and_the_last_contin
     );
     assert!(
         tag_exists(&fx.db, &tag_a).await,
-        "approving call A should have run create_tag for it: {approved_a:#}"
+        "approving call A should have run tag_create for it: {approved_a:#}"
     );
     assert!(
         !tag_exists(&fx.db, &tag_b).await,
-        "call B hasn't been decided yet, its create_tag must not have run"
+        "call B hasn't been decided yet, its tag_create must not have run"
     );
 
     // Approve the second (last) call — this is what actually drains the
@@ -228,7 +228,7 @@ async fn approving_calls_one_at_a_time_settles_each_promptly_and_the_last_contin
     );
     assert!(
         tag_exists(&fx.db, &tag_b).await,
-        "approving call B should have run create_tag for it: {approved_b:#}"
+        "approving call B should have run tag_create for it: {approved_b:#}"
     );
 
     let messages = approved_b["messages"].as_array().expect("messages array");

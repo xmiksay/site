@@ -40,7 +40,7 @@ use serde_json::json;
 use site::ai::engine::SiteEngine;
 use site::entity::assistant_session;
 
-/// The `page-writer` child's continuation after its `edit_page` call is
+/// The `page-writer` child's continuation after its `page_edit` call is
 /// approved and executes — the only round this scripted `Llm` ever needs to
 /// answer, since the call itself (and everything before it) is pre-baked
 /// straight into `assistant_events`, never driven live.
@@ -194,8 +194,8 @@ async fn resume_replays_a_live_sub_agent_from_the_db_log_alone() {
     // The child's own log, filed under the *same* `root_session_id` (the
     // `DbSink`/persistence-tap convention `crate::ai::projection::project`
     // and the engine's own cascaded resume both depend on) — started, framed
-    // by its spawning prompt, and parked on a pending `edit_page` call (a
-    // fresh test user has no `tool_permissions` rows, so `edit_page` defaults
+    // by its spawning prompt, and parked on a pending `page_edit` call (a
+    // fresh test user has no `tool_permissions` rows, so `page_edit` defaults
     // to `Ask` — this is genuinely a **live**, unresolved sub-agent as of
     // where the log stops).
     insert(
@@ -238,7 +238,7 @@ async fn resume_replays_a_live_sub_agent_from_the_db_log_alone() {
                 session: child.clone(),
                 seq: 1,
                 request_id: "edit-1".into(),
-                tool: "edit_page".into(),
+                tool: "page_edit".into(),
                 input: format!(
                     r#"{{"path":"{path}","markdown":"hello from a resumed sub-agent"}}"#
                 ),
@@ -255,7 +255,7 @@ async fn resume_replays_a_live_sub_agent_from_the_db_log_alone() {
                 session: child.clone(),
                 seq: 2,
                 request_id: "edit-1".into(),
-                tool: "edit_page".into(),
+                tool: "page_edit".into(),
                 input: format!(
                     r#"{{"path":"{path}","markdown":"hello from a resumed sub-agent"}}"#
                 ),
@@ -291,14 +291,14 @@ async fn resume_replays_a_live_sub_agent_from_the_db_log_alone() {
                 cm["content"]["requires_approval"] == json!(true)
                     && cm["content"]["tool_calls"]
                         .as_array()
-                        .is_some_and(|c| c.iter().any(|tc| tc["name"] == json!("edit_page")))
+                        .is_some_and(|c| c.iter().any(|tc| tc["name"] == json!("page_edit")))
             })?;
             pending["content"]["tool_calls"][0]["id"]
                 .as_str()
                 .map(String::from)
         })
         .unwrap_or_else(|| {
-            panic!("resumed page-writer child never showed a pending edit_page call: {resp:#}")
+            panic!("resumed page-writer child never showed a pending page_edit call: {resp:#}")
         });
     assert_eq!(
         call_id, "edit-1",
@@ -307,7 +307,7 @@ async fn resume_replays_a_live_sub_agent_from_the_db_log_alone() {
 
     // The `GET` above only *starts* the resume (`ensure_live` sends
     // `InMsg::Resume` and returns); the resumed child's own session task then
-    // asynchronously re-offers its parked `edit_page` call as a fresh
+    // asynchronously re-offers its parked `page_edit` call as a fresh
     // `ToolExec`, which is what actually drives the permission resolution
     // this test exists to exercise (and registers the `PendingDecisions`
     // waiter the approve below needs). Give that a moment to land before
@@ -338,7 +338,7 @@ async fn resume_replays_a_live_sub_agent_from_the_db_log_alone() {
         .expect("query pages");
     assert!(
         page.is_some(),
-        "resumed page-writer's edit_page never created {path} after approval: {approved:#}"
+        "resumed page-writer's page_edit never created {path} after approval: {approved:#}"
     );
     if let Some(p) = page {
         let _ = site::entity::page::Entity::delete_by_id(p.id)

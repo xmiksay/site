@@ -14,7 +14,7 @@ pub fn parse_value<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T
 
 /// Parse a tool call's `input` string as a JSON object. Empty input (no
 /// arguments) is treated as `{}` rather than an error — the convention for
-/// zero-arg tools (e.g. `list_tags`).
+/// zero-arg tools (e.g. `tag_list`).
 pub fn parse_str(input: &str) -> Result<Value, String> {
     if input.trim().is_empty() {
         return Ok(Value::Object(serde_json::Map::new()));

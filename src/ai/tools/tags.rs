@@ -24,7 +24,7 @@ pub struct ListTagsTool {
 #[async_trait]
 impl Tool for ListTagsTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("list_tags")
+        Cow::Borrowed("tag_list")
     }
     fn description(&self) -> &str {
         "List every tag defined in the site."
@@ -33,7 +33,7 @@ impl Tool for ListTagsTool {
         json!({ "type": "object", "properties": {} })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("list_tags is session-scoped; use run_for_session")
+        anyhow::bail!("tag_list is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,
@@ -55,10 +55,10 @@ pub struct CreateTagTool {
 #[async_trait]
 impl Tool for CreateTagTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("create_tag")
+        Cow::Borrowed("tag_create")
     }
     fn description(&self) -> &str {
-        "Create a new tag. Tags must exist before they can be assigned to a page via edit_page."
+        "Create a new tag. Tags must exist before they can be assigned to a page via page_edit."
     }
     fn schema(&self) -> Value {
         json!({
@@ -71,7 +71,7 @@ impl Tool for CreateTagTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("create_tag is session-scoped; use run_for_session")
+        anyhow::bail!("tag_create is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,

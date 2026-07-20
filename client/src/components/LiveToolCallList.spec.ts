@@ -20,7 +20,7 @@ vi.mock('../stores/assistant', () => ({
 const useAssistantStoreMock = vi.mocked(useAssistantStore)
 
 function makeCall(id: string): LiveToolCall {
-  return { id, name: 'delete_page', argsText: '{"id":1}', args: { id: 1 }, status: 'requires_approval' }
+  return { id, name: 'page_delete', argsText: '{"id":1}', args: { id: 1 }, status: 'requires_approval' }
 }
 
 describe('LiveToolCallList', () => {

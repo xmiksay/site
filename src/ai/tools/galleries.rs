@@ -25,7 +25,7 @@ pub struct ListGalleriesTool {
 #[async_trait]
 impl Tool for ListGalleriesTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("list_galleries")
+        Cow::Borrowed("gallery_list")
     }
     fn description(&self) -> &str {
         "List every gallery defined in the site."
@@ -34,7 +34,7 @@ impl Tool for ListGalleriesTool {
         json!({ "type": "object", "properties": {} })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("list_galleries is session-scoped; use run_for_session")
+        anyhow::bail!("gallery_list is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,
@@ -75,7 +75,7 @@ pub struct CreateGalleryTool {
 #[async_trait]
 impl Tool for CreateGalleryTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("create_gallery")
+        Cow::Borrowed("gallery_create")
     }
     fn description(&self) -> &str {
         "Create a gallery from a list of file IDs. `path` is the unique URL slug (e.g. \
@@ -95,7 +95,7 @@ impl Tool for CreateGalleryTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("create_gallery is session-scoped; use run_for_session")
+        anyhow::bail!("gallery_create is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,
@@ -145,7 +145,7 @@ pub struct UpdateGalleryTool {
 #[async_trait]
 impl Tool for UpdateGalleryTool {
     fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("update_gallery")
+        Cow::Borrowed("gallery_update")
     }
     fn description(&self) -> &str {
         "Replace a gallery's title, description, and file list. All fields except id are \
@@ -165,7 +165,7 @@ impl Tool for UpdateGalleryTool {
         })
     }
     async fn run(&self, _input: &str) -> anyhow::Result<String> {
-        anyhow::bail!("update_gallery is session-scoped; use run_for_session")
+        anyhow::bail!("gallery_update is session-scoped; use run_for_session")
     }
     async fn run_for_session(
         &self,

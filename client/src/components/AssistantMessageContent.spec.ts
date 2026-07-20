@@ -33,8 +33,8 @@ describe('AssistantMessageContent', () => {
       text: null,
       requires_approval: true,
       tool_calls: [
-        { id: 'gated', name: 'edit_page', args: { path: 'x' }, requires_approval: true },
-        { id: 'auto', name: 'search_pages', args: { q: 'x' } },
+        { id: 'gated', name: 'page_edit', args: { path: 'x' }, requires_approval: true },
+        { id: 'auto', name: 'page_search', args: { q: 'x' } },
       ],
     }
     const wrapper = mount(AssistantMessageContent, {
@@ -51,7 +51,7 @@ describe('AssistantMessageContent', () => {
     const content = {
       text: null,
       requires_approval: true,
-      tool_calls: [{ id: 'a', name: 'edit_page', args: {}, requires_approval: true, resolved: true }],
+      tool_calls: [{ id: 'a', name: 'page_edit', args: {}, requires_approval: true, resolved: true }],
     }
     const wrapper = mount(AssistantMessageContent, {
       props: { role: 'assistant', content, messageId: 0 },
@@ -64,7 +64,7 @@ describe('AssistantMessageContent', () => {
     const content = {
       text: null,
       requires_approval: true,
-      tool_calls: [{ id: 'a', name: 'edit_page', args: {}, requires_approval: true }],
+      tool_calls: [{ id: 'a', name: 'page_edit', args: {}, requires_approval: true }],
     }
     const wrapper = mount(AssistantMessageContent, {
       props: { role: 'assistant', content, messageId: 0 },
@@ -79,9 +79,9 @@ describe('AssistantMessageContent', () => {
       text: null,
       requires_approval: true,
       tool_calls: [
-        { id: 'a', name: 'edit_page', args: {}, requires_approval: true },
-        { id: 'b', name: 'create_tag', args: {}, requires_approval: true },
-        { id: 'c', name: 'search_pages', args: {}, resolved: true },
+        { id: 'a', name: 'page_edit', args: {}, requires_approval: true },
+        { id: 'b', name: 'tag_create', args: {}, requires_approval: true },
+        { id: 'c', name: 'page_search', args: {}, resolved: true },
       ],
     }
     const wrapper = mount(AssistantMessageContent, {

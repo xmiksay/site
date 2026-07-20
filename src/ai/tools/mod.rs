@@ -25,8 +25,8 @@ use sea_orm::DatabaseConnection;
 use crate::routes::ws::WsHub;
 
 /// Build the registry of built-in (non-MCP) tools: the 14 site tools — a
-/// curated subset, not full CRUD (pages read/search/edit/delete, tags
-/// list/create, files list/create/read/update/delete, galleries
+/// curated subset, not full CRUD (page read/search/edit/delete, tag
+/// list/create, file list/create/read/update/delete, gallery
 /// list/create/update) — plus `web_search`/`web_fetch`. `engine.rs`
 /// builds this once at `SiteEngine` construction and layers per-session MCP
 /// routing tools on top (see `crate::ai::mcp`). Every mutating tool also

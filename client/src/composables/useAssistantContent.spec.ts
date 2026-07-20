@@ -14,8 +14,8 @@ describe('toolCalls', () => {
   it('maps requires_approval and resolved from the raw projected content', () => {
     const content = {
       tool_calls: [
-        { id: 'a', name: 'edit_page', args: {}, requires_approval: true, resolved: true },
-        { id: 'b', name: 'search_pages', args: {} },
+        { id: 'a', name: 'page_edit', args: {}, requires_approval: true, resolved: true },
+        { id: 'b', name: 'page_search', args: {} },
       ],
     }
     const calls = toolCalls(content)
@@ -26,7 +26,7 @@ describe('toolCalls', () => {
 
 describe('needsDecision', () => {
   it('is true only for a call still gated and not yet resolved', () => {
-    expect(needsDecision({ id: 'a', name: 'edit_page', args: {}, requiresApproval: true, resolved: false })).toBe(
+    expect(needsDecision({ id: 'a', name: 'page_edit', args: {}, requiresApproval: true, resolved: false })).toBe(
       true,
     )
   })
@@ -35,7 +35,7 @@ describe('needsDecision', () => {
     // `content.requires_approval` (the message-level flag) can be true
     // because a *sibling* call in the batch needs approval — this call's own
     // `requires_approval` stays false, so it must never show a prompt.
-    expect(needsDecision({ id: 'b', name: 'search_pages', args: {}, requiresApproval: false, resolved: false })).toBe(
+    expect(needsDecision({ id: 'b', name: 'page_search', args: {}, requiresApproval: false, resolved: false })).toBe(
       false,
     )
   })
@@ -48,7 +48,7 @@ describe('needsDecision', () => {
     // it; `needsDecision` must not.
     const content = { decisions: [] }
     expect(decisionFor(content, 'c')).toBeUndefined()
-    expect(needsDecision({ id: 'c', name: 'edit_page', args: {}, requiresApproval: true, resolved: true })).toBe(
+    expect(needsDecision({ id: 'c', name: 'page_edit', args: {}, requiresApproval: true, resolved: true })).toBe(
       false,
     )
   })
