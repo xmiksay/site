@@ -79,7 +79,7 @@ mod directives;
 mod handlers;
 mod highlight;
 mod links;
-mod lookup;
+pub(crate) mod lookup;
 mod renderer;
 #[cfg(test)]
 mod tests;
