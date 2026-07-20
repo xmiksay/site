@@ -143,6 +143,7 @@ async fn build_fixture(
         design: std::sync::Arc::new(site::design::DesignStore::new(None)),
         agent_engine: engine.clone(),
         ws_hub,
+        pandoc_available: false,
     };
     let app = site::routes::api::router(state.clone()).with_state(state);
 

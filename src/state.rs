@@ -15,6 +15,11 @@ pub struct AppState {
     pub design: Arc<DesignStore>,
     pub agent_engine: Arc<SiteEngine>,
     pub ws_hub: Arc<WsHub>,
+    /// Result of the startup `probe_pandoc` capability check (#64). `false`
+    /// means the pandoc-backed export targets (DOCX/ODT/PPTX/reveal.js
+    /// slides) must be refused with a clear error rather than attempted —
+    /// PDF export is unaffected, since typst runs in-process.
+    pub pandoc_available: bool,
 }
 
 pub async fn create_state(config: &Config) -> AppState {
@@ -38,11 +43,22 @@ pub async fn create_state(config: &Config) -> AppState {
     .expect("Failed to spawn assistant engine");
     crate::ai::ws_bridge::spawn(agent_engine.clone(), ws_hub.clone(), db.clone());
 
+    let pandoc_available = match crate::export::probe_pandoc(&config.mdcast_pandoc_path).await {
+        Ok(()) => true,
+        Err(err) => {
+            tracing::warn!(
+                "{err} — DOCX/ODT/PPTX/reveal.js-slides export will be unavailable until it is installed (set MDCAST_PANDOC_PATH to override the binary path)"
+            );
+            false
+        }
+    };
+
     AppState {
         db,
         tmpl,
         design,
         agent_engine,
         ws_hub,
+        pandoc_available,
     }
 }

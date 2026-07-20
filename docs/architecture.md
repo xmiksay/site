@@ -49,6 +49,10 @@ src/
                           # pages_search, pages_revisions, tags, files,
                           # galleries, menu, tokens, users, format (shared
                           # MCP/AI text formatters, #25)
+  export/                 # mod.rs: probe_pandoc — startup capability check
+                          # for mdcast's pandoc subprocess dependency (#64,
+                          # foundation for #63; routes/AssetProvider land in
+                          # follow-up issues)
   auth.rs config.rs design.rs files.rs
   markdown/              # mod.rs (entry + MARKDOWN_EXTENSIONS_DOC), directives.rs
                           # (tag parsing), renderer.rs (expansion pipeline),
@@ -516,6 +520,15 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
 
 Configured per user via the admin SPA: `/admin/{providers,models,assistant,mcp-servers,tool-permissions}`. Provider API keys live in `llm_providers.api_key` (set through the UI, never in `.env`).
 
+## Export (mdcast)
+
+Epic #63 integrates [`mdcast`](https://github.com/xmiksay/mdcast) (`Cargo.toml`, `features = ["typst-html"]` on top of its `default = ["pandoc", "typst", "rt-multi-thread", "mermaid"]`) to render pages to PDF and reveal.js slide decks. It has **two render backends with different runtime requirements**:
+
+- **typst** (`Target::Pdf`/`PdfPresentation`) compiles **in-process** via the `typst`/`typst-as-lib` crates — no external `typst` binary is ever spawned, and typst-kit's bundled fonts (`typst-kit-embed-fonts`) mean no host font install is required either. Nothing to provision, nothing that can go "missing" at runtime.
+- **pandoc** (`Target::Docx`/`Odt`/`Pptx`/`HtmlReveal` — the latter is the epic's slice-1 slide format) shells out to a `pandoc` subprocess. This *is* an external runtime dependency: the Docker runtime image installs it via `apt-get install pandoc`, and local dev needs `pandoc` on `PATH` (`brew install pandoc` / `apt install pandoc` / see pandoc.org).
+
+`src/export/mod.rs` (#64) provides `probe_pandoc(binary) -> Result<(), PandocUnavailable>`, a cheap subprocess spawn-and-check (`pandoc --version`) run once at startup from `state::create_state`. The result is cached on `AppState.pandoc_available: bool` rather than re-probed per request. A missing binary logs a `tracing::warn!` and leaves `pandoc_available = false` — it never panics and never blocks the rest of the site from starting; PDF export is unaffected either way, since typst needs no probe. Override the probed binary's path/name with `MDCAST_PANDOC_PATH` (e.g. a non-`PATH` install). The actual export routes, `AssetProvider`, and directive pre-render bridge that consume `pandoc_available` land in follow-up issues (#65–#69).
+
 ## WebSocket Hub (`src/routes/ws.rs`)
 
 `GET /api/ws` upgrades to a single per-tab WebSocket, authenticated the same way as the rest of `/api/*` (session cookie, checked before the upgrade). `WsHub` (in `AppState.ws_hub`) is a `DashMap<user_id, Vec<mpsc::Sender<Envelope>>>` registry; each open tab holds one entry.
@@ -537,3 +550,5 @@ docker run -e DATABASE_URL=... -p 3000:3000 site
 ```
 
 `docker-compose.yml`: `db` (Postgres 17-alpine, host port 5434) + `app` (gated behind `profiles: ["full"]`).
+
+The runtime stage installs `pandoc` alongside `ca-certificates` — see [Export (mdcast)](#export-mdcast) for why that's the only extra binary the image needs (typst renders in-process).
