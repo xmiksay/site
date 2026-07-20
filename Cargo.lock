@@ -3132,7 +3132,7 @@ dependencies = [
  "bytes",
  "clap",
  "futures",
- "mermaid-svg 0.7.0",
+ "mermaid-svg",
  "pulldown-cmark",
  "quick-xml 0.41.0",
  "regex",
@@ -3179,15 +3179,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "mermaid-svg"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdc883b00c6f9e6f385aa38e34f6d923c53ff141124cfdbe03e69b9513d0e44f"
-dependencies = [
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5217,7 +5208,7 @@ dependencies = [
  "jaq-json",
  "jaq-std",
  "mdcast",
- "mermaid-svg 0.5.0",
+ "mermaid-svg",
  "mime_guess",
  "minijinja",
  "parking_lot",
