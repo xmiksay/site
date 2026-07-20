@@ -6,14 +6,17 @@
 //! format) shell out to a `pandoc` subprocess, which *is* an external
 //! runtime dependency and can be absent. `probe_pandoc` is the cheap
 //! startup check that turns a missing binary into a typed, loggable error
-//! instead of a panic the first time an export route tries to spawn it
-//! (routes land in #67). `assets` (#65) provides the DB-backed
-//! `mdcast::AssetProvider` those routes will render through. `bridge` (#66)
+//! instead of a panic the first time an export route tries to spawn it. The
+//! public `/{*path}?format=...` and admin `/api/export/pages/{id}` routes
+//! (#67) render through it. `assets` (#65) provides the DB-backed
+//! `mdcast::AssetProvider` those routes render through. `bridge` (#66)
 //! layers `markdown::render_for_export`'s synthesized fen/pgn/mermaid SVGs
-//! over that provider.
+//! over that provider. `render` (#67) is the actual render entrypoint the
+//! routes call.
 
 mod assets;
 mod bridge;
+mod render;
 
 use std::fmt;
 
@@ -22,6 +25,7 @@ use tokio::process::Command;
 pub use crate::markdown::BridgedMarkdown;
 pub use assets::DbAssetProvider;
 pub use bridge::asset_provider;
+pub use render::{ExportFormat, render_page};
 
 /// The configured pandoc binary could not be spawned or reported a failing
 /// exit status. Never constructed from a panic — every path that can fail
@@ -62,9 +66,32 @@ pub async fn probe_pandoc(binary: &str) -> Result<(), PandocUnavailable> {
     }
 }
 
+/// Header-safe filename component shared by the public and admin export
+/// routes — anything outside ASCII alnum/-/_ becomes `-`, so a page path can
+/// never smuggle a CR/LF or quote into the `Content-Disposition` header
+/// value.
+pub(crate) fn sanitize_filename(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_filename_keeps_safe_chars_and_replaces_the_rest() {
+        assert_eq!(sanitize_filename("about/team"), "about-team");
+        assert_eq!(sanitize_filename("a_b-c123"), "a_b-c123");
+        assert_eq!(sanitize_filename("héllo\r\n\""), "h-llo---");
+    }
 
     #[tokio::test]
     async fn probe_pandoc_reports_missing_binary_without_panicking() {

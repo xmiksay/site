@@ -40,6 +40,7 @@ async fn main() {
         .nest("/tag", public::tags::router())
         .nest("/search", public::search::router())
         .merge(public::sitemap::router())
+        .merge(public::export::router())
         .nest("/api", api::router(state.clone()))
         .route("/admin", get(admin_index))
         .route("/admin/{*path}", get(admin_static))

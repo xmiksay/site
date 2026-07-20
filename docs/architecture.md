@@ -11,10 +11,12 @@ src/
     site_migration.rs     # Migration CLI (up/down/fresh/status)
     site_cli.rs           # create-user, change-password
   routes/
-    public/               # catch-all, images.rs (file serving), search,
+    public/               # catch-all, export.rs (GET /{*path}?format=...,
+                          # #67), images.rs (file serving), search,
                           # sitemap, tags
     api/                  # auth, users, pages, tags, files, galleries,
-                          # menu, tokens, markdown, paths — nests
+                          # menu, tokens, markdown, paths, export.rs
+                          # (GET /export/pages/{id}?format=..., #67) — nests
                           # ai::handlers::router() at /assistant and
                           # routes/ws.rs at /ws
     mcp/                  # MCP JSON-RPC endpoint: mod.rs (router/dispatch),
@@ -51,12 +53,16 @@ src/
                           # MCP/AI text formatters, #25)
   export/                 # mod.rs: probe_pandoc — startup capability check
                           # for mdcast's pandoc subprocess dependency (#64,
-                          # foundation for #63); assets.rs: DbAssetProvider,
-                          # the DB-backed mdcast::AssetProvider (#65);
-                          # bridge.rs: asset_provider, layering
+                          # foundation for #63) — plus sanitize_filename,
+                          # shared by both export routes; assets.rs:
+                          # DbAssetProvider, the DB-backed
+                          # mdcast::AssetProvider (#65); bridge.rs:
+                          # asset_provider, layering
                           # markdown::render_for_export's synthesized
-                          # fen/pgn/mermaid SVGs over DbAssetProvider (#66;
-                          # export routes land in follow-up issues)
+                          # fen/pgn/mermaid SVGs over a base provider (#66);
+                          # render.rs: ExportFormat + render_page, the
+                          # mdcast render entrypoint the public/admin export
+                          # routes call (#67)
   auth.rs config.rs design.rs files.rs
   markdown/              # mod.rs (entry + MARKDOWN_EXTENSIONS_DOC), directives.rs
                           # (tag parsing), renderer.rs (expansion pipeline),
@@ -168,6 +174,7 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 | `/sitemap.xml` | GET | Sitemap |
 | `/assets/{*path}` | GET | Static files (`DESIGN_DIR` override → baked `design/assets/{css,js,img}`) |
 | `/{*path}` | GET | Catch-all: menu → page → 404 |
+| `/{*path}?format=pdf\|slides` | GET | Export the resolved menu/page to PDF or reveal.js slides (see [Export (mdcast)](#export-mdcast)) — no `format` param passes straight through to the catch-all above |
 
 ### Admin SPA
 
@@ -178,11 +185,12 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 
 ### JSON API `/api/*` (session cookie required)
 
-`auth/{login,logout,me}`, `users` (`GET/POST /`, `DELETE /{id}`, `PUT /{id}/password`), `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve` + `sessions/{id}/compact` (manual context compaction, #40), `mcp-servers` CRUD, `providers` CRUD, `models` CRUD (`context_window` field, #40), `permissions` CRUD (tool-permission rules).
+`auth/{login,logout,me}`, `users` (`GET/POST /`, `DELETE /{id}`, `PUT /{id}/password`), `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, `export/pages/{id}` (below), and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve` + `sessions/{id}/compact` (manual context compaction, #40), `mcp-servers` CRUD, `providers` CRUD, `models` CRUD (`context_window` field, #40), `permissions` CRUD (tool-permission rules).
 
 | Path | Method | Description |
 |---|---|---|
 | `/api/ws` | GET (upgrade) | Global authenticated WebSocket — see below |
+| `/api/export/pages/{id}?format=pdf\|slides` | GET | Export any page by id to PDF or reveal.js slides (see [Export (mdcast)](#export-mdcast)) |
 
 ### OAuth2 + MCP
 
@@ -531,7 +539,7 @@ Epic #63 integrates [`mdcast`](https://github.com/xmiksay/mdcast) (`Cargo.toml`,
 - **typst** (`Target::Pdf`/`PdfPresentation`) compiles **in-process** via the `typst`/`typst-as-lib` crates — no external `typst` binary is ever spawned, and typst-kit's bundled fonts (`typst-kit-embed-fonts`) mean no host font install is required either. Nothing to provision, nothing that can go "missing" at runtime.
 - **pandoc** (`Target::Docx`/`Odt`/`Pptx`/`HtmlReveal` — the latter is the epic's slice-1 slide format) shells out to a `pandoc` subprocess. This *is* an external runtime dependency: the Docker runtime image installs it via `apt-get install pandoc`, and local dev needs `pandoc` on `PATH` (`brew install pandoc` / `apt install pandoc` / see pandoc.org).
 
-`src/export/mod.rs` (#64) provides `probe_pandoc(binary) -> Result<(), PandocUnavailable>`, a cheap subprocess spawn-and-check (`pandoc --version`) run once at startup from `state::create_state`. The result is cached on `AppState.pandoc_available: bool` rather than re-probed per request. A missing binary logs a `tracing::warn!` and leaves `pandoc_available = false` — it never panics and never blocks the rest of the site from starting; PDF export is unaffected either way, since typst needs no probe. Override the probed binary's path/name with `MDCAST_PANDOC_PATH` (e.g. a non-`PATH` install). The actual export routes and directive pre-render bridge land in follow-up issues (#66–#69).
+`src/export/mod.rs` (#64) provides `probe_pandoc(binary) -> Result<(), PandocUnavailable>`, a cheap subprocess spawn-and-check (`pandoc --version`) run once at startup from `state::create_state`. The result is cached on `AppState.pandoc_available: bool` rather than re-probed per request. A missing binary logs a `tracing::warn!` and leaves `pandoc_available = false` — it never panics and never blocks the rest of the site from starting; PDF export is unaffected either way, since typst needs no probe. Override the probed binary's path/name with `MDCAST_PANDOC_PATH` (e.g. a non-`PATH` install).
 
 `src/export/assets.rs` (#65) provides `DbAssetProvider`, the `mdcast::AssetProvider` impl those routes will render through — `mdcast` never touches `std::fs` itself, so every template/brand-config file and page-referenced image it needs is fetched through this trait instead. Two namespaces share the single `get`/`list` key space:
 
@@ -539,6 +547,15 @@ Epic #63 integrates [`mdcast`](https://github.com/xmiksay/mdcast) (`Cargo.toml`,
 - **page-authored content** — any other key (an image reference from a page body, or a `BrandSpec::logo` key) is a path into this site's own content tree, resolved through the content-addressed `file_blobs` table the same way the `<image>`/`<file>` markdown directives do — `markdown::lookup::{FileLookup, fetch_file}` (widened to `pub(crate)` for this reuse) + `files::read_blob`.
 
 **The directive pre-render bridge (#66):** `mdcast`'s `PageSplitter::split` (and its typst backend) takes real markdown, not HTML, and typst has no notion of a raw HTML block/table — so a page's `<page>`/`<file>`/`<image>`/`<gallery>`/`<fen>`/`<pgn>`/`<mermaid>`/`<json>` directives can't be handed the same HTML `render()` produces for the browser. `markdown::render_for_export(md, db, tmpl, logged_in) -> BridgedMarkdown` (`src/markdown/mod.rs`) resolves every directive to plain markdown instead: `<fen>`/`<pgn>` render a static chess diagram via the [`chess-diagram`](https://crates.io/crates/chess-diagram) crate (`chess_diagram::render_svg`/`chess_diagram::pgn::board_at` + `SvgRenderer`) and `<mermaid>` reuses the existing `mermaid-svg` render — none of these three have a `file_blobs` row of their own, so each synthesized SVG is spliced in as a `![alt](bridge/{fen,pgn,mermaid}/<hash>[-<ply>].svg)` markdown image reference and collected into `BridgedMarkdown.assets: Vec<(String, Bytes)>`; `<json>` renders a real markdown pipe table (`handlers::json::markdown_table`) instead of an HTML `<table>`; `<page>` splices the nested page's own directive-expanded markdown inline (trimmed, blank-line-separated) instead of wrapping it in a `page.html` template; `<file>`/`<image>`/`<gallery>` emit plain `![alt](file.path)` / `[desc](file.path)` references (by path, since `DbAssetProvider` resolves by path, not by hash). `render_for_export` deliberately stops after `renderer::expand_directives` — it never runs the pulldown-cmark parse, syntect highlighting, or `links::rewrite_internal_links` that `render()` does afterward, since all three operate on/produce HTML; plain non-directive markdown passes through completely untouched. `export::asset_provider(bridged: &BridgedMarkdown, base: B) -> LayeredAssets<impl AssetProvider, B>` (`src/export/bridge.rs`) wraps `bridged.assets` as an in-memory `AssetProvider` (via `mdcast::sync_provider`) layered over `base` (typically a `DbAssetProvider`) with `mdcast::LayeredAssets`, so mdcast's typst/pandoc backends resolve a synthesized diagram key exactly like any other asset. **Known limitation, explicitly out of scope for #66:** the alternate ` ```fen `/` ```pgn ` fenced-code-block authoring form (a second, independent path into the same chessboard.js client dependency, handled in `src/markdown/highlight.rs`) is *not* resolved by this bridge — only the `<fen>`/`<pgn>` directive-tag form is — so a page using the fenced form still exports as a plain, unrendered code block.
+
+**The render pipeline + HTTP routes (#67):** `src/export/render.rs` exposes `ExportFormat` (`Pdf` | `Slides`, `::parse`/`::target`/`::content_type`/`::requires_pandoc` — only `Slides` needs pandoc, since `Pdf` compiles via typst in-process) and the entrypoint `render_page(db, design, tmpl, markdown_src, title, logged_in, format) -> anyhow::Result<mdcast::RenderedArtifact>`: it runs `markdown::render_for_export`, splits the bridged markdown with `mdcast::DefaultSplitter` and classifies it into `mdcast::Page`s (`mdcast::pages::auto::classify`), builds a `ResolvedDoc` with a default `BrandSpec`, and dispatches through `mdcast::backends::Registry::with_defaults().render_to_bytes(...)` — bytes-first, no temp file ever touches disk. The asset provider it renders against is three layers deep: `export::asset_provider` (the #66 bridge, synthesized fen/pgn/mermaid SVGs) wraps `mdcast::LayeredAssets { over: DbAssetProvider, base: mdcast::EmbeddedAssets }`. That `EmbeddedAssets` base matters because `design/` (baked or `DESIGN_DIR`-overridden) has **no `design/mdcast/` mirror** of mdcast's own embedded typst layouts / reveal.js dist yet — without it, `DbAssetProvider` alone would fail every render with "fallback typst layout ... missing from asset provider" the moment a backend requests its default template. Mirroring mdcast's own CLI (`src/bin/mdcast/main.rs` in the mdcast repo), `EmbeddedAssets` (mdcast's baked-in catalog) is the base and `DbAssetProvider` sits `over` it, so a deployment that *does* populate `design/mdcast/...` can still override individual templates, but every export works out of the box either way.
+
+Two routes call `render_page`, both refusing `format=slides` with `503` up front when `!state.pandoc_available` (checked before any DB/render work):
+
+- **Public — `GET /{*path}?format=pdf|slides`** (`src/routes/public/export.rs`, registered as the wildcard `/{*path}`, so it's the effective fallback for every non-root path in the router). No `format` query param passes straight through to `public::catch_all` unchanged — plain page viewing is unaffected. With `format`, it reuses `public::lookup_content`/`PathContent` (`src/routes/public/mod.rs`, factored out of `catch_all` for exactly this reuse) for the identical menu → page → 404 lookup and `private && !logged_in` → 404 semantics `catch_all` already implements, then renders and returns the artifact with `Content-Type`/`Content-Disposition: attachment; filename="<slug>.<ext>"` (slug = the last path segment, sanitized by `export::sanitize_filename`).
+- **Admin — `GET /api/export/pages/{id}?format=pdf|slides`** (`src/routes/api/export.rs`, nested under the `protected` router so `require_login_api` gates it): looks up the page by id, renders the same way, and returns the same headers. No privacy check beyond the login gate — any logged-in user can export any page, matching the rest of the admin API's permission model.
+
+`export::sanitize_filename` (`src/export/mod.rs`) is shared by both routes: it maps every non-ASCII-alphanumeric/`-`/`_` character to `-`, so a page path can never smuggle a CR/LF or quote into the `Content-Disposition` header value.
 
 ## WebSocket Hub (`src/routes/ws.rs`)
 

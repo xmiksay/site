@@ -11,6 +11,7 @@ pub enum ApiError {
     NotFound,
     Conflict(String),
     Internal(String),
+    ServiceUnavailable(String),
 }
 
 impl ApiError {
@@ -21,12 +22,16 @@ impl ApiError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
     fn message(&self) -> String {
         match self {
-            Self::BadRequest(msg) | Self::Conflict(msg) | Self::Internal(msg) => msg.clone(),
+            Self::BadRequest(msg)
+            | Self::Conflict(msg)
+            | Self::Internal(msg)
+            | Self::ServiceUnavailable(msg) => msg.clone(),
             Self::Unauthorized => "unauthorized".to_string(),
             Self::NotFound => "not found".to_string(),
         }
