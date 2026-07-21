@@ -179,11 +179,19 @@ async fn resolves_a_template_from_the_design_bundle_and_lists_its_siblings() {
         .expect("template must resolve from the DESIGN_DIR override");
     assert_eq!(&bytes[..], b"#let brand = context.brand");
 
+    // `list_prefix` unions the DESIGN_DIR override with the always-present
+    // baked `design/mdcast/typst/layouts/pdf/` catalog (issue #68 populated
+    // it with real brand-aware layouts) — assert the override's own fixture
+    // entry is among the results rather than requiring an exact match, since
+    // the baked side is real site content, not a test fixture.
     let listed = provider
         .list("typst/layouts/pdf/")
         .await
         .expect("list must not error");
-    assert_eq!(listed, vec!["typst/layouts/pdf/default.typ".to_string()]);
+    assert!(
+        listed.contains(&"typst/layouts/pdf/default.typ".to_string()),
+        "expected the override fixture among {listed:?}"
+    );
 
     // A page-content prefix has no directory-listing semantics.
     let content_listed = provider.list("images/").await.expect("list must not error");

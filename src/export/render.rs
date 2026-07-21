@@ -3,15 +3,17 @@
 //! bytes-first render).
 //!
 //! mdcast ships its own embedded typst layouts / reveal.js dist
-//! (`mdcast::EmbeddedAssets`), but this site's `design/` bundle has no
-//! `design/mdcast/` mirror of that catalog yet — `DbAssetProvider` only
-//! resolves template-prefixed keys against the design bundle and falls
-//! through to `file_blobs` (which will never have them), so on its own it
-//! can't answer a fallback layout request. `render_page` layers
-//! `EmbeddedAssets` in as the base so every export works out of the box;
-//! `DbAssetProvider` sits `over` it so a deployment that *does* populate
-//! `design/mdcast/...` can still override individual templates, and the
-//! #66 bridge (`export::asset_provider`) layers on top of that so
+//! (`mdcast::EmbeddedAssets`); `render_page` layers `EmbeddedAssets` in as the
+//! base so every export works out of the box even where `design/mdcast/`
+//! (baked or `DESIGN_DIR`-overridden) has nothing to say, and `DbAssetProvider`
+//! sits `over` it so the site's own overrides win per key. `design/mdcast/`
+//! (#68) mirrors that catalog for the classes/keys this site's brand actually
+//! themes: `brand.toml` (the `BrandSpec` loaded below), the brand-aware
+//! `typst/layouts/pdf/{content,hero,callout,section-divider,thanks}.typ`
+//! (`image-full.typ` has no themeable text/color, so it falls through to
+//! mdcast's embedded default untouched), and a `revealjs/brand.css` escape
+//! hatch layered onto mdcast's own palette/font → reveal.js CSS projection.
+//! The #66 bridge (`export::asset_provider`) layers on top of all of that so
 //! synthesized fen/pgn/mermaid SVGs always win.
 
 use std::sync::Arc;
@@ -83,7 +85,7 @@ pub async fn render_page(
 ) -> anyhow::Result<RenderedArtifact> {
     let bridged = markdown::render_for_export(markdown_src, db, tmpl, logged_in).await;
 
-    let brand = BrandSpec::default();
+    let brand = load_brand(design);
     let raw = DefaultSplitter.split(&bridged.markdown);
     let pages = classify(raw, &brand.auto_layout);
 
@@ -109,6 +111,31 @@ pub async fn render_page(
     Registry::with_defaults()
         .render_to_bytes(format.target(), &doc, &assets)
         .await
+}
+
+/// Load the site's `BrandSpec` (#68) from `design/mdcast/brand.toml` —
+/// resolved through `DesignStore::load`, so a `DESIGN_DIR` override applies
+/// to it exactly like it does to templates. Unlike mdcast's own catalog keys
+/// (`typst/…`, `revealjs/…`), this isn't fetched through the `AssetProvider`:
+/// `BrandSpec` is caller-owned config handed to `ResolvedDoc` up front, not
+/// something a backend requests mid-render. A missing, non-UTF-8, or
+/// malformed file logs a warning and degrades to `BrandSpec::default()`
+/// rather than failing the export.
+fn load_brand(design: &DesignStore) -> BrandSpec {
+    let Some(bytes) = design.load("mdcast/brand.toml") else {
+        return BrandSpec::default();
+    };
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        tracing::warn!("mdcast/brand.toml is not valid UTF-8; using default BrandSpec");
+        return BrandSpec::default();
+    };
+    match BrandSpec::from_toml(text) {
+        Ok(spec) => spec,
+        Err(err) => {
+            tracing::warn!(%err, "invalid mdcast/brand.toml; using default BrandSpec");
+            BrandSpec::default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -138,5 +165,75 @@ mod tests {
     fn only_slides_requires_pandoc() {
         assert!(!ExportFormat::Pdf.requires_pandoc());
         assert!(ExportFormat::Slides.requires_pandoc());
+    }
+
+    #[test]
+    fn load_brand_parses_a_valid_override() {
+        let dir = std::env::temp_dir().join("export_render_load_brand_valid_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("mdcast")).unwrap();
+        std::fs::write(
+            dir.join("mdcast/brand.toml"),
+            br##"
+                name = "Test Brand"
+
+                [palette]
+                accent = "#123456"
+
+                [fonts]
+                sans = "Test Sans"
+            "##,
+        )
+        .unwrap();
+
+        let design = DesignStore::new(Some(dir.clone()));
+        let brand = load_brand(&design);
+
+        assert_eq!(brand.name, "Test Brand");
+        assert_eq!(
+            brand.palette.get("accent").map(String::as_str),
+            Some("#123456")
+        );
+        assert_eq!(
+            brand.fonts.get("sans").map(String::as_str),
+            Some("Test Sans")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_brand_falls_back_to_default_on_malformed_toml() {
+        let dir = std::env::temp_dir().join("export_render_load_brand_malformed_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("mdcast")).unwrap();
+        std::fs::write(dir.join("mdcast/brand.toml"), b"not = [valid toml").unwrap();
+
+        let design = DesignStore::new(Some(dir.clone()));
+        let brand = load_brand(&design);
+
+        assert!(brand.palette.is_empty());
+        assert!(brand.fonts.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn baked_brand_toml_parses_and_matches_the_site_palette() {
+        let design = DesignStore::new(None);
+        let brand = load_brand(&design);
+
+        assert_eq!(
+            brand.palette.get("background").map(String::as_str),
+            Some("#f5f5f5")
+        );
+        assert_eq!(
+            brand.palette.get("accent").map(String::as_str),
+            Some("#2563eb")
+        );
+        assert_eq!(
+            brand.fonts.get("sans").map(String::as_str),
+            Some("New Computer Modern")
+        );
     }
 }
