@@ -23,6 +23,9 @@ const isPrivate = ref(false)
 const error = ref('')
 const revisions = ref<Array<{ id: number; created_at: string }>>([])
 
+const exportError = ref('')
+const exporting = ref(false)
+
 // Diff modal state
 const diffOpen = ref(false)
 const diffLoading = ref(false)
@@ -75,6 +78,28 @@ function toggleTag(id: number) {
   else tagIds.value.splice(idx, 1)
 }
 
+async function exportAs(format: 'pdf' | 'slides') {
+  const id = numericId()
+  if (!id) return
+  exportError.value = ''
+  exporting.value = true
+  try {
+    const { blob, filename } = await pages.exportPage(id, format)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    exportError.value = e instanceof Error ? e.message : 'Export failed'
+  } finally {
+    exporting.value = false
+  }
+}
+
 async function openDiff(rev: { id: number; created_at: string }) {
   const id = numericId()
   if (!id) return
@@ -120,6 +145,24 @@ async function restore(revId: number) {
       </h1>
       <div class="space-x-2">
         <router-link to="/pages" class="text-gray-600 hover:underline text-sm">Cancel</router-link>
+        <button
+          v-if="!props.create"
+          type="button"
+          class="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100 disabled:opacity-50"
+          :disabled="exporting"
+          @click="exportAs('pdf')"
+        >
+          Export PDF
+        </button>
+        <button
+          v-if="!props.create"
+          type="button"
+          class="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100 disabled:opacity-50"
+          :disabled="exporting"
+          @click="exportAs('slides')"
+        >
+          Export slides
+        </button>
         <button class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 text-sm" @click="save">
           Save
         </button>
@@ -127,6 +170,7 @@ async function restore(revId: number) {
     </div>
 
     <p v-if="error" class="text-red-600 text-sm">{{ error }}</p>
+    <p v-if="exportError" class="text-red-600 text-sm">{{ exportError }}</p>
 
     <div class="bg-white rounded-lg shadow p-4 space-y-4">
       <label class="block">
