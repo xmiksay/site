@@ -1,0 +1,27 @@
+/* reveal.js brand escape hatch (issue #68) — raw CSS appended after mdcast's
+ * own palette/font projection (`reveal_brand::brand_css`) in the same
+ * generated `<style data-brand>` block, so it can freely reference the
+ * `--brand-<key>` custom properties that projection emits for every
+ * `brand.toml` palette key (`--brand-border`, `--brand-muted`, …) alongside
+ * the standard reveal.js `--r-*` variables it also sets.
+ */
+.reveal pre,
+.reveal code {
+  font-family: var(--r-code-font, monospace);
+}
+
+.reveal pre code {
+  border: 1px solid var(--brand-border, #ddd);
+  border-radius: 4px;
+}
+
+.reveal blockquote {
+  border-left: 4px solid var(--brand-accent, var(--r-link-color));
+  padding-left: 0.6em;
+  font-style: italic;
+}
+
+.reveal section.section-divider h1,
+.reveal section.section-divider h2 {
+  color: var(--brand-heading, var(--r-heading-color));
+}

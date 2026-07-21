@@ -268,10 +268,15 @@ mod tests {
         std::fs::create_dir_all(dir.join("assets/img")).unwrap();
         std::fs::write(dir.join("assets/img/unrelated.png"), b"y").unwrap();
 
+        // The baked `design/mdcast/typst/layouts/pdf/` catalog itself has
+        // real content since #68 (site-brand layout overrides), so this
+        // asserts the override fixture is included in the (unioned) walk
+        // rather than requiring it to be the only entry.
         let store = DesignStore::new(Some(dir.clone()));
-        assert_eq!(
-            store.list_prefix("mdcast/typst/layouts/pdf/"),
-            vec!["mdcast/typst/layouts/pdf/default.typ".to_string()]
+        assert!(
+            store
+                .list_prefix("mdcast/typst/layouts/pdf/")
+                .contains(&"mdcast/typst/layouts/pdf/default.typ".to_string())
         );
 
         let _ = std::fs::remove_dir_all(&dir);

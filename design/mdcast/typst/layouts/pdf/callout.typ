@@ -1,0 +1,18 @@
+// Callout / quote page — brand-driven background/text/font (issue #68).
+// Overrides mdcast's embedded default of the same name; every accessor below
+// falls back to that prior hardcoded value, so a brand with no matching key
+// renders identically to the un-overridden layout.
+#import "/context.typ": brand-color, brand-font
+
+#let layout(body) = [
+  #set page(margin: 3cm, fill: brand-color("background", default: rgb("#fafafa")))
+  #set text(
+    font: brand-font("sans", default: "New Computer Modern"),
+    size: 16pt,
+    style: "italic",
+    fill: brand-color("text", default: black),
+  )
+  #align(center + horizon)[
+    #eval(body, mode: "markup")
+  ]
+]
