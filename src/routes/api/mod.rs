@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod error;
+pub mod export;
 pub mod files;
 pub mod galleries;
 pub mod markdown;
@@ -26,6 +27,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .nest("/paths", paths::router())
         .nest("/tokens", tokens::router())
         .nest("/users", users::router())
+        .nest("/export", export::router())
         .nest("/assistant", crate::ai::handlers::router())
         .nest("/ws", crate::routes::ws::router())
         .route_layer(from_fn_with_state(state, crate::auth::require_login_api));
