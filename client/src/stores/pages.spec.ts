@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { usePagesStore } from './pages'
-import { api, apiVoid } from '../api'
+import { api, apiBlob, apiVoid } from '../api'
 import type { PageSummary, WsEnvelope } from '../types'
 
 vi.mock('../api', async (importActual) => {
   const actual = await importActual<typeof import('../api')>()
-  return { ...actual, api: vi.fn(), apiVoid: vi.fn() }
+  return { ...actual, api: vi.fn(), apiVoid: vi.fn(), apiBlob: vi.fn() }
 })
 
 // `pages.ts` wires `useListSync('pages', items)` at store-creation time, which
@@ -25,6 +25,7 @@ vi.mock('./ws', () => ({
 
 const apiMock = vi.mocked(api)
 const apiVoidMock = vi.mocked(apiVoid)
+const apiBlobMock = vi.mocked(apiBlob)
 
 function page(id: number, path: string): PageSummary {
   return {
@@ -111,5 +112,14 @@ describe('pages store', () => {
 
     wsHandler!({ topic: 'pages', event: 'deleted', payload: { id: 1 } })
     expect(store.items.map((p) => p.id)).toEqual([2])
+  })
+
+  it('exportPage requests the export endpoint and returns the blob + filename', async () => {
+    const blob = new Blob(['pdf-bytes'])
+    apiBlobMock.mockResolvedValueOnce({ blob, filename: 'my-page.pdf' })
+    const store = usePagesStore()
+    const result = await store.exportPage(1, 'pdf')
+    expect(apiBlobMock).toHaveBeenCalledWith('/api/export/pages/1?format=pdf')
+    expect(result).toEqual({ blob, filename: 'my-page.pdf' })
   })
 })

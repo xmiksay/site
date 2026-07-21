@@ -34,3 +34,17 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 export function apiVoid(path: string, init: RequestInit = {}): Promise<void> {
   return api<void>(path, init)
 }
+
+export async function apiBlob(
+  path: string,
+  init: RequestInit = {},
+): Promise<{ blob: Blob; filename: string }> {
+  const resp = await fetch(path, { ...init, credentials: 'include' })
+  if (!resp.ok) {
+    throw new ApiError(resp.status, await parseError(resp))
+  }
+  const disposition = resp.headers.get('Content-Disposition')
+  const match = disposition ? /filename="?([^"]+)"?/.exec(disposition) : null
+  const filename = match?.[1] ?? 'download'
+  return { blob: await resp.blob(), filename }
+}

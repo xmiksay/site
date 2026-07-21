@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { api, apiVoid } from '../api'
+import { api, apiBlob, apiVoid } from '../api'
 import { useListSync } from '../composables/useListSync'
 import type { PageDetail, PageInput, PageSummary, RevisionDetail } from '../types'
 
@@ -53,5 +53,20 @@ export const usePagesStore = defineStore('pages', () => {
     })
   }
 
-  return { items, load, loadPaths, read, readRevision, create, update, remove, restoreRevision }
+  async function exportPage(id: number, format: 'pdf' | 'slides') {
+    return await apiBlob(`/api/export/pages/${id}?format=${format}`)
+  }
+
+  return {
+    items,
+    load,
+    loadPaths,
+    read,
+    readRevision,
+    create,
+    update,
+    remove,
+    restoreRevision,
+    exportPage,
+  }
 })
