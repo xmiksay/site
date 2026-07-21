@@ -288,6 +288,7 @@ impl Tool for McpRoutedTool {
     async fn run_for_session(
         &self,
         session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let user_id = user_id_from_session(session)?;

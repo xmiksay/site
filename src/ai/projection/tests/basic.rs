@@ -433,3 +433,55 @@ fn error_event_flushes_open_turn_and_projects_error_message() {
         ]
     );
 }
+
+/// An in-place ambiguous-stop retry (entanglement-core 0.4, ADR-0118) must not
+/// corrupt turn folding: `AmbiguousRetry` falls into `project`'s `_ => {}` arm
+/// (the projected transcript has no concept of a "retry", only the final
+/// text), so the pre- and post-retry `TextDelta`s coalesce into one assistant
+/// message and the synthetic `nudge` never surfaces as its own message.
+#[test]
+fn ambiguous_retry_is_ignored_and_text_deltas_around_it_still_coalesce() {
+    let s = SessionId::new("u1:test");
+    let records = vec![
+        rec(
+            &s,
+            out(OutEvent::TextDelta {
+                session: s.clone(),
+                seq: 1,
+                text: "partial answer".into(),
+            }),
+        ),
+        rec(
+            &s,
+            out(OutEvent::AmbiguousRetry {
+                session: s.clone(),
+                seq: 2,
+                nudge: "please continue or call a tool".into(),
+            }),
+        ),
+        rec(
+            &s,
+            out(OutEvent::TextDelta {
+                session: s.clone(),
+                seq: 3,
+                text: " continued".into(),
+            }),
+        ),
+        rec(
+            &s,
+            out(OutEvent::Done {
+                session: s.clone(),
+                seq: 4,
+            }),
+        ),
+    ];
+
+    let projected = project(&records);
+    assert_eq!(
+        projected,
+        vec![ProjectedMessage {
+            role: "assistant",
+            content: json!({ "text": "partial answer continued", "tool_calls": [] }),
+        }]
+    );
+}

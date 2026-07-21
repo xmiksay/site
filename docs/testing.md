@@ -183,7 +183,7 @@ executes on every PR rather than self-skipping.
     turn, so this process's in-memory `SESSION_PARENTS` cache
     (`ai::engine::session_tree`) starts genuinely cold for the child. The
     first `GET` triggers `ensure_live`/`resume_session`, and approving the
-    still-pending call afterward only succeeds because entanglement 0.3.0's
+    still-pending call afterward only succeeds because entanglement 0.4.0's
     resume cascades over the whole spawn sub-tree (ADR-0112) and this site's
     generic `SessionStarted` watcher re-populates the cache from that
     cascade — proving the sub-agent replays correctly without ever having

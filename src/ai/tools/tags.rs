@@ -38,6 +38,7 @@ impl Tool for ListTagsTool {
     async fn run_for_session(
         &self,
         _session: &SessionId,
+        _request_id: &str,
         _input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let tags = tags_repo::list_all(&self.db)
@@ -76,6 +77,7 @@ impl Tool for CreateTagTool {
     async fn run_for_session(
         &self,
         _session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let args = parse_args(input)?;

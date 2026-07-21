@@ -285,6 +285,40 @@ mod tests {
         assert_eq!(records.len(), 1);
     }
 
+    /// entanglement-core 0.4's `OutEvent::AmbiguousRetry` (ADR-0118) must
+    /// round-trip through the same `serde_json::to_value`/`from_value` pair
+    /// `append`/`resume_session` use against `assistant_events.payload`, so a
+    /// row written by 0.4.0 can never choke `InMsg::ReplayFrom` on resume.
+    #[test]
+    fn ambiguous_retry_out_event_round_trips_through_json() {
+        let session = SessionId::new("root");
+        let record = LogRecord::new(
+            session.clone(),
+            LogPayload::Out(OutEvent::AmbiguousRetry {
+                session: session.clone(),
+                seq: 7,
+                nudge: "please continue or call a tool".into(),
+            }),
+        );
+
+        let value = serde_json::to_value(&record).expect("serializing LogRecord");
+        let round_tripped: LogRecord =
+            serde_json::from_value(value).expect("deserializing LogRecord");
+
+        match round_tripped.payload {
+            LogPayload::Out(OutEvent::AmbiguousRetry {
+                session: got_session,
+                seq,
+                nudge,
+            }) => {
+                assert_eq!(got_session, session);
+                assert_eq!(seq, 7);
+                assert_eq!(nudge, "please continue or call a tool");
+            }
+            other => panic!("expected AmbiguousRetry, got {other:?}"),
+        }
+    }
+
     #[test]
     fn a_dropped_append_is_tallied_per_root_and_flushed_as_one_gap_tombstone() {
         let dropped: HashMap<SessionId, u64> = HashMap::new();
