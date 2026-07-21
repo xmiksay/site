@@ -54,6 +54,7 @@ impl Tool for ReadPageTool {
     async fn run_for_session(
         &self,
         _session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let args = parse_args(input)?;
@@ -98,6 +99,7 @@ impl Tool for SearchPagesTool {
     async fn run_for_session(
         &self,
         _session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let args = parse_args(input)?;
@@ -165,6 +167,7 @@ impl Tool for EditPageTool {
     async fn run_for_session(
         &self,
         session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let user_id = user_id_from_session(session)?;
@@ -250,6 +253,7 @@ impl Tool for DeletePageTool {
     async fn run_for_session(
         &self,
         _session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let args = parse_args(input)?;

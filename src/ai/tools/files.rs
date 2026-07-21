@@ -42,6 +42,7 @@ impl Tool for ListFilesTool {
     async fn run_for_session(
         &self,
         _session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let args = parse_args(input)?;
@@ -107,6 +108,7 @@ impl Tool for CreateFileTool {
     async fn run_for_session(
         &self,
         session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let user_id = user_id_from_session(session)?;
@@ -193,6 +195,7 @@ impl Tool for ReadFileTool {
     async fn run_for_session(
         &self,
         _session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let args = parse_args(input)?;
@@ -279,6 +282,7 @@ impl Tool for UpdateFileTool {
     async fn run_for_session(
         &self,
         _session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let args = parse_args(input)?;
@@ -357,6 +361,7 @@ impl Tool for DeleteFileTool {
     async fn run_for_session(
         &self,
         _session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let args = parse_args(input)?;

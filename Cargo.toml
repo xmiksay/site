@@ -56,9 +56,9 @@ bytes         = "1"
 jaq-core      = "2"
 jaq-std       = "2"
 jaq-json      = { version = "1", features = ["serde_json"] }
-entanglement-core     = "0.3"
-entanglement-runtime  = { version = "0.3", default-features = false, features = ["mcp-http", "provider"] }
-entanglement-provider = "0.3"
+entanglement-core     = "0.4"
+entanglement-runtime  = { version = "0.4", default-features = false, features = ["mcp-http", "provider"] }
+entanglement-provider = "0.4"
 
 [dev-dependencies]
 tower           = { version = "0.5", features = ["util"] }

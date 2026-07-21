@@ -316,7 +316,7 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     a few times to close a TOCTOU window: `SESSION_PARENTS` is written by this
     watcher's own `holly.subscribe()`r, an independent broadcast subscriber
     racing against whoever else needs the same child's link. Reassessed for
-    #43 against entanglement 0.3.0's cascading `resume` (ADR-0112, which
+    #43 against entanglement 0.4.0's cascading `resume` (ADR-0112, which
     re-materializes a root's whole spawn sub-tree and re-announces each
     child's `SessionStarted` exactly like a live spawn): this cache's resume
     population needs no extra code — the same generic watcher already covers
@@ -388,7 +388,7 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   instead of every future `ensure_live` failing. `resume_session` passes
   `assistant_events`' whole root file (root + any sub-agent children, since
   they share one `root_session_id`) to `Holly::resume` in one call —
-  entanglement 0.3.0's `resume` cascades over the *whole* spawn sub-tree
+  entanglement 0.4.0's `resume` cascades over the *whole* spawn sub-tree
   itself (ADR-0112), re-materializing a child that was still live as of where
   the log stopped, so no per-child loop is needed here.
   `handlers/sessions/turn/collect.rs`'s `send_and_collect` builds its own response
@@ -415,7 +415,7 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   own child, so log order between them doesn't matter). `content.is_error` on
   a `tool_result` is a text-prefix heuristic (`looks_like_tool_error`), not a
   structural flag — `OutEvent::ToolOutput` carries none, re-checked against
-  entanglement-core 0.3.0 for #43 and still true.
+  entanglement-core 0.4.0 for #43/#87 and still true.
 - `tools/` — the built-in (non-MCP) tool vocabulary, ported to
   `entanglement_runtime::tools::Tool`. A curated subset of the site API (not
   full CRUD): pages `read`/`search`/`edit`/`delete`, tags `list`/`create`,

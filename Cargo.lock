@@ -1354,9 +1354,9 @@ dependencies = [
 
 [[package]]
 name = "entanglement-core"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9be94811c7401b161b85d685407b4ecd5b42bf463e268039c2fea953a247cb48"
+checksum = "5c78f4dffc85bacad7df86f6447fcfebf5d96a8ad70be0790125408a9d2c90da"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1372,9 +1372,9 @@ dependencies = [
 
 [[package]]
 name = "entanglement-provider"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6abf61acf84a38c0a41e50ea58b6a68fd5d4ef040e9865f2f4e848f51d9a9dc"
+checksum = "6d573512c9c5d440c11f10bb004a1becbee3942e06d2e1dc81928f201c93cfe9"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1395,9 +1395,9 @@ dependencies = [
 
 [[package]]
 name = "entanglement-runtime"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9159d291e311106cf9cd13a9f0ec652aca1ce6578c6fcb64f559e9f623594bd5"
+checksum = "2c48c77382c5082f02460cfc70e077ba38148f592df63b3554e538ab673e6d93"
 dependencies = [
  "anyhow",
  "async-trait",

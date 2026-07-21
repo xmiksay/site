@@ -21,9 +21,9 @@
 //! watcher) and only then parses the `u{user_id}:` prefix — so every existing
 //! call site keeps working unchanged for sub-agent sessions too.
 //!
-//! ## Reassessed against entanglement 0.3.0 (issue #43)
+//! ## Reassessed against entanglement 0.4.0 (issues #43, #87)
 //!
-//! 0.3.0's `Holly::resume` now cascades over a root's whole spawn sub-tree
+//! 0.3.0's `Holly::resume` cascades over a root's whole spawn sub-tree
 //! (ADR-0112): a live-at-persistence-time child is re-materialized alongside
 //! the root, re-emitting its own `SessionStarted { parent: Some(root), .. }`
 //! exactly like a fresh live spawn does. This cache's population needs no

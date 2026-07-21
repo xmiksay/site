@@ -39,6 +39,7 @@ impl Tool for ListGalleriesTool {
     async fn run_for_session(
         &self,
         _session: &SessionId,
+        _request_id: &str,
         _input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let rows = galleries_repo::list_all(&self.db)
@@ -100,6 +101,7 @@ impl Tool for CreateGalleryTool {
     async fn run_for_session(
         &self,
         session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let user_id = user_id_from_session(session)?;
@@ -170,6 +172,7 @@ impl Tool for UpdateGalleryTool {
     async fn run_for_session(
         &self,
         _session: &SessionId,
+        _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
         let args = parse_args(input)?;

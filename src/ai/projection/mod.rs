@@ -20,7 +20,7 @@
 //! failure path (`Deny`, reject, spawn-mask, unknown tool, or the executor's
 //! `tool `{name}` failed: {e}` wrap) always starts with `"tool `"` or
 //! `"unknown tool:"` — [`looks_like_tool_error`] keys off that. Re-checked
-//! against entanglement-core 0.3.0 (issue #43): `ToolOutput` still carries
+//! against entanglement-core 0.4.0 (issue #87): `ToolOutput` still carries
 //! only `output`/`content`, no error flag, so the heuristic stands. It's a
 //! heuristic, not a structural guarantee; a future engine release exposing a
 //! real flag on `ToolOutput` should replace it.
