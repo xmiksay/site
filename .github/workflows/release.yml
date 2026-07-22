@@ -1,7 +1,8 @@
 name: Release
 
-# Runs on version-tag pushes (e.g. v1.2.3): measure coverage, and only if both
-# suites pass, build and push the Docker image tagged from the version.
+# Runs on version-tag pushes — CalVer date tags (e.g. v2026.07.22): measure
+# coverage, and only if both suites pass, build and push the Docker image
+# tagged from the version.
 on:
   push:
     tags: ['v*']
@@ -95,9 +96,11 @@ jobs:
         id: meta
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # CalVer tags (v2026.07.22) are not semver (leading zeros), so
+          # extract the image tags by regex: full date + year.month + latest.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=match,pattern=v(.+),group=1
+            type=match,pattern=v(\d+\.\d+),group=1
             type=raw,value=latest
 
       - uses: docker/build-push-action@v6
