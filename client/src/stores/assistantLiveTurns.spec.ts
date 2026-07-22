@@ -184,6 +184,34 @@ describe('useLiveTurns', () => {
     expect(live.value).toBeNull()
   })
 
+  // ---- #88: ambiguous-stop retry chip ----
+
+  it('ambiguous_retry sets retrying, cleared by the next text_delta', () => {
+    const { live } = setup()
+    wsHandler!(envelope('text_delta', { db_session_id: 1, text: 'hi' }))
+    wsHandler!(envelope('ambiguous_retry', { db_session_id: 1, nudge: 'please continue' }))
+    expect(live.value).toMatchObject({ sessionId: 1, retrying: true })
+
+    wsHandler!(envelope('text_delta', { db_session_id: 1, text: ' there' }))
+    expect(live.value).toMatchObject({ sessionId: 1, text: 'hi there', retrying: false })
+  })
+
+  it('ambiguous_retry followed by done clears the whole live turn, retrying included', () => {
+    const { live } = setup()
+    wsHandler!(envelope('ambiguous_retry', { db_session_id: 1, nudge: 'please continue' }))
+    expect(live.value?.retrying).toBe(true)
+
+    wsHandler!(envelope('done', { db_session_id: 1 }))
+    expect(live.value).toBeNull()
+  })
+
+  it('ambiguous_retry followed by error clears the whole live turn', () => {
+    const { live } = setup()
+    wsHandler!(envelope('ambiguous_retry', { db_session_id: 1, nudge: 'please continue' }))
+    wsHandler!(envelope('error', { db_session_id: 1 }))
+    expect(live.value).toBeNull()
+  })
+
   it('a settle event does not clear a live turn belonging to a different session', () => {
     const { live } = setup()
     wsHandler!(envelope('text_delta', { db_session_id: 1, text: 'hi' }))

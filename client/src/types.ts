@@ -142,12 +142,20 @@ export interface LiveToolCall {
  * `text_delta`/`reasoning_delta`/`tool_call*`/`tool_output` envelopes on the
  * `assistant` WS topic. Cleared once the turn settles (`done`/`error`), at
  * which point the authoritative message list comes from a REST refetch.
+ *
+ * `retrying` (#88): set by an `ambiguous_retry` envelope (ADR-0118 — an
+ * ollama "stream died" stop with no tool calls) and cleared by the next
+ * `text_delta`/`done`/`error`, so the UI shows a transient "retrying…" chip
+ * instead of dead air while core silently re-requests within the same turn.
+ * WS-only — never persisted, since the transcript projection ignores
+ * `AmbiguousRetry` (it's a round boundary, not content).
  */
 export interface LiveTurn {
   sessionId: number
   text: string
   reasoning: string
   toolCalls: LiveToolCall[]
+  retrying: boolean
 }
 
 /**

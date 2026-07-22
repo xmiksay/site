@@ -87,13 +87,16 @@ pub fn spawn(engine: Arc<SiteEngine>, hub: Arc<WsHub>, db: DatabaseConnection) {
 /// hibernated) plus, for #17, a **child** session's own `SessionStarted` (a
 /// root's is never forwarded — nothing for the client to nest it under, and
 /// `AssistantView.vue` already knows about its own root session from REST),
-/// and, for #42, `ModelChanged`/`GenerationChanged`/`AgentChanged` — a live
+/// for #42, `ModelChanged`/`GenerationChanged`/`AgentChanged` — a live
 /// `/model`/generation/profile switch from *another* tab must be visible
-/// without a manual reload. Everything else (`SessionList`, `History`,
-/// `Plan`, `TaskList`, `Usage`, `Compacted`, `UserQuestion`, file-change
-/// records, `SessionEnded`) has no consumer in `AssistantView.vue` today; add
-/// a case here (and a client handler) when one needs it rather than
-/// forwarding everything speculatively.
+/// without a manual reload — and, for #88, `AmbiguousRetry` (ADR-0118): an
+/// ollama "stream died" stop with no tool calls silently re-requests inside
+/// the same turn unless the client is told, leaving the user staring at dead
+/// air. Everything else (`SessionList`, `History`, `Plan`, `TaskList`,
+/// `Usage`, `Compacted`, `UserQuestion`, file-change records, `SessionEnded`)
+/// has no consumer in `AssistantView.vue` today; add a case here (and a
+/// client handler) when one needs it rather than forwarding everything
+/// speculatively.
 fn is_forwarded(ev: &OutEvent) -> bool {
     match ev {
         OutEvent::Status { .. }
@@ -108,7 +111,8 @@ fn is_forwarded(ev: &OutEvent) -> bool {
         | OutEvent::SessionHibernated { .. }
         | OutEvent::ModelChanged { .. }
         | OutEvent::GenerationChanged { .. }
-        | OutEvent::AgentChanged { .. } => true,
+        | OutEvent::AgentChanged { .. }
+        | OutEvent::AmbiguousRetry { .. } => true,
         OutEvent::SessionStarted { parent, .. } => parent.is_some(),
         _ => false,
     }
@@ -279,6 +283,18 @@ mod tests {
             session,
             agent: "researcher".into(),
             profile_detail: None,
+        }));
+    }
+
+    /// #88: an ambiguous-stop retry (ADR-0118) must reach the client or a
+    /// stalled ollama turn looks like dead air instead of a visible retry.
+    #[test]
+    fn forwards_ambiguous_retry() {
+        let session = SiteEngine::session_id_for_user(1);
+        assert!(is_forwarded(&OutEvent::AmbiguousRetry {
+            session,
+            seq: 1,
+            nudge: "please continue or call a tool".into(),
         }));
     }
 

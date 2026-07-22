@@ -31,7 +31,7 @@ export function useLiveTurns(
 
   function ensureLive(sessionId: number): LiveTurn {
     if (!live.value || live.value.sessionId !== sessionId) {
-      live.value = { sessionId, text: '', reasoning: '', toolCalls: [] }
+      live.value = { sessionId, text: '', reasoning: '', toolCalls: [], retrying: false }
     }
     return live.value
   }
@@ -189,11 +189,21 @@ export function useLiveTurns(
           sending.value = true
         }
         break
-      case 'text_delta':
-        ensureLive(sessionId).text += payload.text ?? ''
+      case 'text_delta': {
+        const turn = ensureLive(sessionId)
+        turn.text += payload.text ?? ''
+        turn.retrying = false
         break
+      }
       case 'reasoning_delta':
         ensureLive(sessionId).reasoning += payload.text ?? ''
+        break
+      case 'ambiguous_retry':
+        // #88 (ADR-0118): core committed whatever partial text streamed and
+        // is silently re-requesting within the same turn — surface it as a
+        // transient chip rather than leaving the user staring at dead air.
+        // Cleared by the next `text_delta`/`done`/`error` above/below.
+        ensureLive(sessionId).retrying = true
         break
       case 'tool_call_delta': {
         const call = ensureLiveToolCall(sessionId, payload.request_id, payload.tool)

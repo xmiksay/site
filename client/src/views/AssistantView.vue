@@ -180,6 +180,12 @@ watch(
         />
         <div v-if="liveTurn" class="space-y-1">
           <div
+            v-if="liveTurn.retrying"
+            class="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 text-xs px-2 py-0.5"
+          >
+            model stalled — retrying…
+          </div>
+          <div
             v-if="liveTurn.reasoning"
             class="max-w-2xl rounded-lg px-3 py-2 bg-gray-50 text-gray-500 text-xs italic whitespace-pre-wrap"
           >
