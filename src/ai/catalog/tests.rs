@@ -308,6 +308,7 @@ async fn dynamic_default_factory_tracks_the_current_default_across_refresh() {
             (2, ollama_catalog_model(2, &url_b, &http)),
         ]),
         default_model_id: Some(1),
+        ..Default::default()
     }));
 
     // Resolved once — the exact handle the engine would freeze into its config.
@@ -327,4 +328,158 @@ async fn dynamic_default_factory_tracks_the_current_default_across_refresh() {
         "the same factory handle must follow the new default to endpoint B"
     );
     assert_eq!(hits_a.load(Ordering::SeqCst), 1, "endpoint A not hit again");
+}
+
+#[test]
+fn provider_endpoint_label_ollama_without_base_url_uses_default() {
+    let p = provider("ollama", None, None);
+    assert_eq!(provider_endpoint_label(&p), OLLAMA_BASE);
+}
+
+#[test]
+fn provider_endpoint_label_ollama_with_base_url_uses_it() {
+    let p = provider("ollama", None, Some("http://example.internal:1234/v1"));
+    assert_eq!(
+        provider_endpoint_label(&p),
+        "http://example.internal:1234/v1"
+    );
+}
+
+#[test]
+fn provider_endpoint_label_gemini_is_the_gemini_base() {
+    let p = provider("gemini", Some("key"), None);
+    assert_eq!(provider_endpoint_label(&p), GEMINI_BASE);
+}
+
+#[test]
+fn provider_endpoint_label_anthropic_is_the_anthropic_base() {
+    let p = provider("anthropic", Some("key"), None);
+    assert_eq!(provider_endpoint_label(&p), "https://api.anthropic.com");
+}
+
+#[test]
+fn provider_endpoint_label_openai_uses_its_base_url() {
+    let p = provider("openai", None, Some("http://example.internal:1234/v1"));
+    assert_eq!(
+        provider_endpoint_label(&p),
+        "http://example.internal:1234/v1"
+    );
+}
+
+/// Idle synthesis path: a provider whose `HttpClient` has never made a
+/// request yet still gets a `ProviderThrottleStatus` entry (from
+/// `ProviderHandle`'s own label/cap, not the live pool), so the admin view
+/// always has a row per provider instead of only ones that have misbehaved.
+#[test]
+fn throttle_statuses_reports_idle_providers_sorted_by_id() {
+    let catalog = SiteCatalog::new_for_test(CatalogInner {
+        by_provider_id: HashMap::from([
+            (
+                2,
+                ProviderHandle {
+                    endpoint: "http://b.internal".to_string(),
+                    cap: 5,
+                    http: HttpClient::new(),
+                },
+            ),
+            (
+                1,
+                ProviderHandle {
+                    endpoint: "http://a.internal".to_string(),
+                    cap: DEFAULT_CONCURRENCY_FALLBACK,
+                    http: HttpClient::new(),
+                },
+            ),
+        ]),
+        ..Default::default()
+    });
+
+    let statuses = catalog.throttle_statuses();
+    assert_eq!(statuses.len(), 2);
+
+    assert_eq!(statuses[0].provider_id, 1);
+    assert_eq!(statuses[0].endpoint, "http://a.internal");
+    assert_eq!(statuses[0].cap, DEFAULT_CONCURRENCY_FALLBACK);
+    assert_eq!(statuses[0].in_flight, 0);
+    assert!(!statuses[0].penalized);
+    assert_eq!(statuses[0].backoff_remaining_ms, None);
+
+    assert_eq!(statuses[1].provider_id, 2);
+    assert_eq!(statuses[1].endpoint, "http://b.internal");
+    assert_eq!(statuses[1].cap, 5);
+    assert_eq!(statuses[1].in_flight, 0);
+}
+
+/// Proves `throttle_statuses()` reflects genuinely live pool state (an
+/// in-flight permit held by a real request), not just the idle synthesis path
+/// above. `HttpClient::endpoint()` (and the per-endpoint semaphore it hands
+/// out) is private to `entanglement_provider`, so there is no way to hold or
+/// inspect a permit directly from here — driving one real (mocked) request
+/// through the factory is the only way to populate the pool at all. Polls
+/// `throttle_statuses()` rather than sleeping a guessed delay, so this can't
+/// flake by racing the probe's own connection accept.
+#[tokio::test]
+async fn throttle_statuses_reflects_a_live_in_flight_request() {
+    let (base_url, _max_seen) =
+        spawn_concurrency_probe(std::time::Duration::from_millis(300)).await;
+    let busy_http = HttpClient::new();
+    let p = provider_with_limits("ollama", None, Some(&base_url), Some(1), Some(1_000_000));
+    let factory = build_factory(&p, "model", &busy_http).expect("build factory");
+
+    let catalog = Arc::new(SiteCatalog::new_for_test(CatalogInner {
+        by_provider_id: HashMap::from([
+            (
+                1,
+                ProviderHandle {
+                    endpoint: "unused".to_string(),
+                    cap: 1,
+                    http: busy_http,
+                },
+            ),
+            (
+                2,
+                ProviderHandle {
+                    endpoint: "http://sibling.internal".to_string(),
+                    cap: DEFAULT_CONCURRENCY_FALLBACK,
+                    http: HttpClient::new(),
+                },
+            ),
+        ]),
+        ..Default::default()
+    }));
+
+    let driven = tokio::spawn(async move { drive_one_stream(&factory).await });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut observed = None;
+    while std::time::Instant::now() < deadline {
+        let statuses = catalog.throttle_statuses();
+        if statuses
+            .iter()
+            .any(|s| s.provider_id == 1 && s.in_flight == 1)
+        {
+            observed = Some(statuses);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let statuses = observed.expect("never observed the in-flight request via throttle_statuses()");
+
+    let provider_1 = statuses
+        .iter()
+        .find(|s| s.provider_id == 1)
+        .expect("provider 1 present");
+    assert_eq!(provider_1.in_flight, 1);
+    assert_eq!(provider_1.cap, 1);
+
+    let provider_2 = statuses
+        .iter()
+        .find(|s| s.provider_id == 2)
+        .expect("sibling provider present");
+    assert_eq!(
+        provider_2.in_flight, 0,
+        "sibling provider's own client must be untouched by provider 1's request"
+    );
+
+    driven.await.expect("driven stream task should not panic");
 }

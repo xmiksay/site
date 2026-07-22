@@ -23,6 +23,10 @@ use sea_orm::{DatabaseConnection, EntityTrait};
 
 use crate::entity::{llm_model, llm_provider};
 
+mod throttle;
+pub use throttle::ProviderThrottleStatus;
+use throttle::{DEFAULT_CONCURRENCY_FALLBACK, ProviderHandle, provider_endpoint_label};
+
 /// One usable (provider row, model row) pairing, with its ready-to-call LLM
 /// factory closure baked in.
 #[derive(Clone)]
@@ -50,6 +54,10 @@ pub struct CatalogModel {
 struct CatalogInner {
     by_model_id: HashMap<i32, CatalogModel>,
     default_model_id: Option<i32>,
+    /// One dedicated `HttpClient` per provider row (see `refresh()`) — what
+    /// makes `throttle_statuses()` (#89) addressable per provider instead of
+    /// one shared client's unattributable global worst-offender reading.
+    by_provider_id: HashMap<i32, ProviderHandle>,
 }
 
 pub struct SiteCatalog {
@@ -73,20 +81,26 @@ impl SiteCatalog {
     }
 
     /// Re-read `llm_providers`/`llm_models` and rebuild every factory
-    /// closure, including a **fresh** `HttpClient` to build them against.
-    /// `entanglement_provider::HttpClient`'s per-endpoint rpm/concurrency
-    /// state is created lazily on an endpoint's *first* request and then
-    /// locked in for that `HttpClient`'s lifetime (see its own `endpoint()`
-    /// doc: "Only the first caller for a key sets the bucket size"). Reusing
-    /// one long-lived `HttpClient` across every `refresh()` would mean an
-    /// admin's `concurrency`/`rpm` edit (#41/ADR-0111) never takes effect
-    /// once *any* session had already hit that provider's endpoint —
-    /// rebuilding here costs nothing until first use (no eager connections)
-    /// and only affects *new* sessions/turns resolved after this refresh,
-    /// matching this method's existing "next new session" contract. Each
-    /// `LlmFactory` closure clones this `http` into itself (`build_factory`),
-    /// which is what keeps its `Arc`-shared pool alive — nothing here needs
-    /// to hold onto `http` past this function returning.
+    /// closure, including a **fresh** `HttpClient` per provider row to build
+    /// them against. `entanglement_provider::HttpClient`'s per-endpoint
+    /// rpm/concurrency state is created lazily on an endpoint's *first*
+    /// request and then locked in for that `HttpClient`'s lifetime (see its
+    /// own `endpoint()` doc: "Only the first caller for a key sets the bucket
+    /// size"). Reusing one long-lived `HttpClient` across every `refresh()`
+    /// would mean an admin's `concurrency`/`rpm` edit (#41/ADR-0111) never
+    /// takes effect once *any* session had already hit that provider's
+    /// endpoint — rebuilding here costs nothing until first use (no eager
+    /// connections) and only affects *new* sessions/turns resolved after this
+    /// refresh, matching this method's existing "next new session" contract.
+    /// Each `LlmFactory` closure clones its provider's `http` into itself
+    /// (`build_factory`), which is what keeps its `Arc`-shared pool alive —
+    /// the per-provider handle stashed in `by_provider_id` is what actually
+    /// keeps that `HttpClient` alive past this function returning, so it can
+    /// still answer `throttle_status()` later. One dedicated client per
+    /// provider row (rather than one shared client for every provider) is
+    /// also what makes `throttle_statuses()` (#89) addressable per provider —
+    /// a single shared client's `throttle_status()` can only ever report one
+    /// global worst-offender reading, unattributable to a `provider_id`.
     ///
     /// Call after provider/model CRUD so live sessions pick up the change on
     /// their next `SetModel`/new-session resolve.
@@ -100,7 +114,19 @@ impl SiteCatalog {
             .await
             .context("loading llm_models")?;
 
-        let http = HttpClient::new();
+        let mut by_provider_id = HashMap::with_capacity(providers.len());
+        for provider in &providers {
+            by_provider_id.insert(
+                provider.id,
+                ProviderHandle {
+                    endpoint: provider_endpoint_label(provider),
+                    cap: positive_usize(provider.concurrency)
+                        .unwrap_or(DEFAULT_CONCURRENCY_FALLBACK),
+                    http: HttpClient::new(),
+                },
+            );
+        }
+
         let mut by_model_id = HashMap::with_capacity(models.len());
         let mut default_model_id = None;
         for model in &models {
@@ -111,7 +137,12 @@ impl SiteCatalog {
                 );
                 continue;
             };
-            let llm_factory = match build_factory(provider, &model.model, &http) {
+            let Some(handle) = by_provider_id.get(&provider.id) else {
+                // Unreachable in practice — `by_provider_id` was just built
+                // from the same `providers` list `provider` came from above.
+                continue;
+            };
+            let llm_factory = match build_factory(provider, &model.model, &handle.http) {
                 Ok(f) => f,
                 Err(e) => {
                     tracing::warn!(model_id = model.id, error = %e, "skipping unbuildable model");
@@ -145,6 +176,7 @@ impl SiteCatalog {
         *self.inner.write() = CatalogInner {
             by_model_id,
             default_model_id,
+            by_provider_id,
         };
         Ok(())
     }

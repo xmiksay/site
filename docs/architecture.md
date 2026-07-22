@@ -187,7 +187,7 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
 
 ### JSON API `/api/*` (session cookie required)
 
-`auth/{login,logout,me}`, `users` (`GET/POST /`, `DELETE /{id}`, `PUT /{id}/password`), `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, `export/pages/{id}` (below), and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve` + `sessions/{id}/compact` (manual context compaction, #40), `mcp-servers` CRUD, `providers` CRUD, `models` CRUD (`context_window` field, #40), `permissions` CRUD (tool-permission rules).
+`auth/{login,logout,me}`, `users` (`GET/POST /`, `DELETE /{id}`, `PUT /{id}/password`), `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, `export/pages/{id}` (below), and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve` + `sessions/{id}/compact` (manual context compaction, #40), `mcp-servers` CRUD, `providers` CRUD + `providers/status` (live per-provider throttle posture, #89), `models` CRUD (`context_window` field, #40), `permissions` CRUD (tool-permission rules).
 
 | Path | Method | Description |
 |---|---|---|
@@ -333,20 +333,31 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   generic fallback (`entanglement_core::context::CONTEXT_LIMIT_TOKENS`).
   `build_factory` also threads each row's `concurrency`/`rpm` (m_026) into the
   `*_factory` calls (ADR-0111 in `entanglement_provider`, #41): every session
-  built from that row shares one per-endpoint `HttpClient` state keyed by
-  (base URL, api key), so `concurrency` caps simultaneously in-flight
-  requests (held across the whole streamed turn — the storm guard for many
-  spawned sub-agents) and `rpm` sets the adaptive pacing gate; a 429 backs
-  the gate off and a success relaxes it. Both are nullable — `None` falls
-  back to the library's own client defaults (3 concurrent / 50 rpm). The
-  values are also exposed on `CatalogModel.concurrency`/`.rpm` for
+  built from that row shares its provider's own per-endpoint `HttpClient`
+  state keyed by (base URL, api key), so `concurrency` caps simultaneously
+  in-flight requests (held across the whole streamed turn — the storm guard
+  for many spawned sub-agents) and `rpm` sets the adaptive pacing gate; a 429
+  backs the gate off and a success relaxes it. Both are nullable — `None`
+  falls back to the library's own client defaults (3 concurrent / 50 rpm).
+  The values are also exposed on `CatalogModel.concurrency`/`.rpm` for
   introspection, even though they're already baked into the `llm_factory`
-  closure. `refresh()` builds a **fresh** `HttpClient` every call rather than
-  reusing one long-lived instance — `entanglement_provider`'s `HttpClient`
-  locks in an endpoint's rpm/concurrency on that endpoint's *first* request
-  and ignores later values for the same key, so a stale client would make an
-  admin's `concurrency`/`rpm` edit silently have no effect once any turn had
-  already gone through that provider. `generation_resolver()` builds the
+  closure. `refresh()` builds a **fresh `HttpClient` per provider row** every
+  call — `src/ai/catalog/throttle.rs`'s `by_provider_id: HashMap<i32,
+  ProviderHandle>` (split out to keep `catalog.rs` under the 400-line cap) —
+  rather than reusing one long-lived instance shared across every provider:
+  `entanglement_provider`'s `HttpClient` locks in an endpoint's rpm/concurrency
+  on that endpoint's *first* request and ignores later values for the same
+  key, so a stale client would make an admin's `concurrency`/`rpm` edit
+  silently have no effect once any turn had already gone through that
+  provider. Splitting the client per provider (instead of one shared across
+  all of them) is also what makes `SiteCatalog::throttle_statuses()` (#89)
+  addressable *per provider* — `HttpClient::throttle_status()` only ever
+  reports the single most-throttled endpoint on whatever pool it owns, with no
+  way to attribute it to a `provider_id` if several providers shared one
+  client. `GET /api/assistant/providers/status` polls `throttle_statuses()` to
+  show the admin providers view each provider's live posture (idle / in-flight
+  count vs. cap / backing-off countdown / pacing-penalized) instead of
+  guessing why the assistant is slow. `generation_resolver()` builds the
   `GenerationResolver` closure for `EngineConfig.generation_resolver` (#42) —
   the generation-parameter analogue of `model_resolver`, resolving a named
   agent profile's *persisted* generation override (ADR-0094). This site has
@@ -443,8 +454,9 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
 - `handlers/` — `/api/assistant/*`: `sessions/` (CRUD + `messages`/`approve`,
   which drive a turn through `Holly` and project `assistant_events` on the
   way out, plus `compact.rs`'s `sessions/{id}/compact`, #40 — see below),
-  `mcp_servers.rs`, `providers.rs`, `models.rs` (`context_window` field,
-  #40), `permissions.rs`.
+  `mcp_servers.rs`, `providers.rs` (CRUD + `providers/status`, live
+  per-provider throttle posture from `SiteCatalog::throttle_statuses()`,
+  #89), `models.rs` (`context_window` field, #40), `permissions.rs`.
   - **Live model/generation/profile switching (`sessions/mod.rs`,
     `sessions/mutate/generation.rs`, #42):** `POST /sessions` and
     `PATCH /sessions/{id}` accept optional `temperature`/`reasoning_effort`/

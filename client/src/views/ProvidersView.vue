@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useAssistantStore } from '../stores/assistant'
-import type { LlmProvider, LlmProviderInput } from '../types'
+import type { LlmProvider, LlmProviderInput, ProviderThrottleStatus } from '../types'
 
 const assistant = useAssistantStore()
 
@@ -46,7 +46,44 @@ function wholePositive(n: number | undefined): number | undefined {
   return Math.round(n)
 }
 
-onMounted(assistant.loadProviders)
+// Throttle status is polled only while this view is mounted (#89) — it's a
+// live snapshot, not stored state, so there's no store-level subscription to
+// tear down elsewhere.
+const POLL_INTERVAL_MS = 5000
+let pollHandle: ReturnType<typeof setInterval> | undefined
+
+onMounted(async () => {
+  await assistant.loadProviders()
+  await assistant.loadThrottleStatuses()
+  pollHandle = setInterval(assistant.loadThrottleStatuses, POLL_INTERVAL_MS)
+})
+
+onUnmounted(() => {
+  if (pollHandle) clearInterval(pollHandle)
+})
+
+function throttleFor(providerId: number): ProviderThrottleStatus | undefined {
+  return assistant.throttleStatuses.find((s) => s.provider_id === providerId)
+}
+
+function throttleLabel(status: ProviderThrottleStatus | undefined): string {
+  if (!status) return 'idle'
+  if (status.backoff_remaining_ms != null) {
+    return `backing off ${Math.ceil(status.backoff_remaining_ms / 1000)}s`
+  }
+  if (status.penalized) return 'slowed'
+  if (status.cap > 0 && status.in_flight >= status.cap) {
+    return `at capacity (${status.in_flight}/${status.cap})`
+  }
+  return 'idle'
+}
+
+function throttleColorClass(status: ProviderThrottleStatus | undefined): string {
+  if (!status) return 'text-gray-400'
+  if (status.backoff_remaining_ms != null) return 'text-red-600'
+  if (status.penalized || (status.cap > 0 && status.in_flight >= status.cap)) return 'text-amber-600'
+  return 'text-gray-400'
+}
 
 const presets: Record<string, { needsKey: boolean; needsUrl: boolean; defaultUrl?: string }> = {
   anthropic: { needsKey: true, needsUrl: false },
@@ -245,6 +282,7 @@ async function remove(id: number, label: string) {
             <th class="text-left px-4 py-2">Kind</th>
             <th class="text-left px-4 py-2">Configured</th>
             <th class="text-left px-4 py-2">Limits</th>
+            <th class="text-left px-4 py-2">Status</th>
             <th class="px-4 py-2"></th>
           </tr>
         </thead>
@@ -267,6 +305,9 @@ async function remove(id: number, label: string) {
                 <span v-if="p.concurrency == null && p.rpm == null" class="text-gray-400">default</span>
                 <span v-else>{{ p.concurrency ?? 'default' }} conc / {{ p.rpm ?? 'default' }} rpm</span>
               </td>
+              <td class="px-4 py-2" :class="throttleColorClass(throttleFor(p.id))">
+                {{ throttleLabel(throttleFor(p.id)) }}
+              </td>
               <td class="px-4 py-2 text-right space-x-3">
                 <button
                   v-if="editingId !== p.id"
@@ -288,7 +329,7 @@ async function remove(id: number, label: string) {
               </td>
             </tr>
             <tr v-if="editingId === p.id" class="border-t border-gray-100 bg-gray-50">
-              <td colspan="5" class="px-4 py-3">
+              <td colspan="6" class="px-4 py-3">
                 <div class="space-y-3">
                   <div>
                     <label class="block text-xs font-medium mb-1">Label</label>
@@ -353,7 +394,7 @@ async function remove(id: number, label: string) {
             </tr>
           </template>
           <tr v-if="assistant.providers.length === 0">
-            <td colspan="5" class="px-4 py-6 text-center text-gray-400">
+            <td colspan="6" class="px-4 py-6 text-center text-gray-400">
               No providers yet. Add one to start.
             </td>
           </tr>
