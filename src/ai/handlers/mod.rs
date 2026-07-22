@@ -33,6 +33,7 @@ pub fn router() -> Router<AppState> {
             patch(mcp_servers::update).delete(mcp_servers::delete_one),
         )
         .route("/providers", get(providers::list).post(providers::create))
+        .route("/providers/status", get(providers::status))
         .route(
             "/providers/{id}",
             get(providers::read)

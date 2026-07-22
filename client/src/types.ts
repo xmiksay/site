@@ -251,6 +251,20 @@ export interface LlmProviderInput {
   rpm?: number | null
 }
 
+/** Live throttle snapshot for one provider, from `GET /api/assistant/providers/status` (#89).
+ * The engine can only ever report idle or throttled — never partial utilization
+ * (e.g. "2 of 5 in flight") — so don't infer anything beyond these fields. */
+export interface ProviderThrottleStatus {
+  provider_id: number
+  endpoint: string
+  in_flight: number
+  cap: number
+  /** Non-null while an active cool-down window is running; `null` otherwise. */
+  backoff_remaining_ms: number | null
+  /** Adaptive pacing gate engaged, independent of an active cool-down. */
+  penalized: boolean
+}
+
 export interface LlmModel {
   id: number
   provider_id: number

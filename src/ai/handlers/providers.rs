@@ -247,6 +247,15 @@ pub async fn delete_one(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Live throttle posture for every provider (#89) — polled by the admin
+/// providers view so it can show *why* the assistant is slow instead of
+/// guessing. Pure in-memory read over the catalog; can't fail.
+pub async fn status(
+    State(state): State<AppState>,
+) -> Json<Vec<crate::ai::catalog::ProviderThrottleStatus>> {
+    Json(state.agent_engine.catalog.throttle_statuses())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

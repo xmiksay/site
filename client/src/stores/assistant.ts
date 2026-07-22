@@ -11,6 +11,7 @@ import type {
   LlmProviderInput,
   McpServer,
   McpServerListResponse,
+  ProviderThrottleStatus,
   ToolPermission,
   ToolPermissionInput,
 } from '../types'
@@ -212,6 +213,12 @@ export const useAssistantStore = defineStore('assistant', () => {
     providers.value = providers.value.filter((p) => p.id !== id)
   }
 
+  const throttleStatuses = ref<ProviderThrottleStatus[]>([])
+
+  async function loadThrottleStatuses() {
+    throttleStatuses.value = await api<ProviderThrottleStatus[]>('/api/assistant/providers/status')
+  }
+
   // ---- Models ----
   const models = ref<LlmModel[]>([])
 
@@ -298,6 +305,8 @@ export const useAssistantStore = defineStore('assistant', () => {
     createProvider,
     updateProvider,
     deleteProvider,
+    throttleStatuses,
+    loadThrottleStatuses,
     models,
     loadModels,
     createModel,
