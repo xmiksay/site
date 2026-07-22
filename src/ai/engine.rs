@@ -237,6 +237,13 @@ impl SiteEngine {
             // place (ADR-0103) instead of the lossy placeholder-prune this
             // site ran with before `context_window` above was ever populated.
             auto_compact: true,
+            // Explicit despite matching `EngineConfig::default()` (#88): this
+            // is the retry ceiling `ws_bridge.rs`'s `AmbiguousRetry` forward
+            // (and the client's "retrying…" chip) is tuned against — pinning
+            // it means a future entanglement-core default change can't
+            // silently change how many times an ollama "stream died" stop
+            // retries before the turn gives up.
+            max_ambiguous_stop_retries: 2,
             ..EngineConfig::default()
         };
         cfg.validate().map_err(|e| anyhow::anyhow!(e.to_string()))?;
