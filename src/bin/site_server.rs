@@ -6,7 +6,6 @@ use axum::routing::get;
 use rust_embed::Embed;
 use site::config::Config;
 use site::design::build_static_response;
-use site::migration::{Migrator, MigratorTrait};
 use site::state::AppState;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
@@ -26,10 +25,9 @@ async fn main() {
         .init();
 
     let config = Config::from_env();
+    // Migrations run inside create_state, before the assistant engine reads
+    // the schema.
     let state = site::state::create_state(&config).await;
-    Migrator::up(&state.db, None)
-        .await
-        .expect("Migrations failed");
 
     use site::routes::{api, mcp, oauth, public};
 

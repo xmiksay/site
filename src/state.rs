@@ -5,6 +5,7 @@ use crate::ai::AiConfig;
 use crate::ai::engine::SiteEngine;
 use crate::config::Config;
 use crate::design::DesignStore;
+use crate::migration::{Migrator, MigratorTrait};
 use crate::routes::ws::WsHub;
 use crate::templates::Templates;
 
@@ -26,6 +27,12 @@ pub async fn create_state(config: &Config) -> AppState {
     let db = sea_orm::Database::connect(&config.database_url)
         .await
         .expect("Failed to connect to database");
+
+    // Migrate before anything reads the schema: `SiteEngine::spawn` below
+    // hydrates the model catalog from `llm_providers`, so running migrations
+    // after state creation (as site_server once did) crashloops on any
+    // migration that state hydration depends on.
+    Migrator::up(&db, None).await.expect("Migrations failed");
 
     let design = Arc::new(DesignStore::new(config.design_dir.clone()));
     let tmpl = Templates::new(design.clone());
