@@ -261,9 +261,9 @@ async function restore(revId: number) {
 
       <div
         v-if="chatOpen && !props.create && pageContext"
-        class="w-96 shrink-0"
+        class="w-96 shrink-0 relative"
       >
-        <ChatPanel class="h-full" :page-context="pageContext" />
+        <ChatPanel class="absolute inset-0" :page-context="pageContext" />
       </div>
     </div>
 
