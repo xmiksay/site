@@ -11,9 +11,9 @@ const draft = ref('')
 
 // Pre-fill draft with page path context when a brand-new (empty) page session opens
 watch(
-  () => assistant.current?.id,
-  () => {
-    if (props.pageContext && assistant.current && assistant.current.messages.length === 0) {
+  () => assistant.current,
+  (current) => {
+    if (props.pageContext && current?.messages.length === 0) {
       draft.value = `Page /${props.pageContext.path}: `
     }
   },
@@ -21,8 +21,10 @@ watch(
 
 async function send() {
   const text = draft.value.trim()
-  if (!text || !assistant.current) return
-  await assistant.sendMessage(assistant.current.id, text)
+  const id = assistant.current?.id
+  if (!text || !id) return
+
+  await assistant.sendMessage(id, text)
   draft.value = ''
 }
 

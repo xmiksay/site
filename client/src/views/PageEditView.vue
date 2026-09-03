@@ -6,6 +6,7 @@ import { useTagsStore } from '../stores/tags'
 import PathPicker from '../components/PathPicker.vue'
 import MarkdownEditor from '../components/MarkdownEditor.vue'
 import ChatPanel from '../components/ChatPanel.vue'
+import ChatIcon from '../components/icons/ChatIcon.vue'
 import { html as diff2htmlHtml } from 'diff2html'
 import 'diff2html/bundles/css/diff2html.min.css'
 import type { PageInput } from '../types'
@@ -160,9 +161,7 @@ async function restore(revId: number) {
           @click="chatOpen = !chatOpen"
           title="Toggle AI assistant"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-3 3-3-3z" />
-          </svg>
+          <ChatIcon />
           AI
         </button>
         <router-link to="/pages" class="text-gray-600 hover:underline text-sm">Cancel</router-link>

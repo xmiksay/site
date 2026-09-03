@@ -16,13 +16,7 @@ const assistant = useAssistantStore()
 
 const pageSessionKey = (id: number) => `assistant_page_session_${id}`
 
-onMounted(async () => {
-  await Promise.all([
-    assistant.loadModels(),
-    assistant.loadPermissions(),
-    assistant.loadMcpServers(),
-  ])
-
+async function loadOrInitPageSession() {
   if (props.pageContext) {
     const key = pageSessionKey(props.pageContext.id)
     const savedId = localStorage.getItem(key)
@@ -36,6 +30,16 @@ onMounted(async () => {
       await initPageSession()
     }
   }
+}
+
+onMounted(async () => {
+  await Promise.all([
+    assistant.loadModels(),
+    assistant.loadPermissions(),
+    assistant.loadMcpServers(),
+  ])
+
+  await loadOrInitPageSession()
 })
 
 async function initPageSession() {

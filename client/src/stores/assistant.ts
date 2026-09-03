@@ -113,6 +113,13 @@ export const useAssistantStore = defineStore('assistant', () => {
     await loadSessions()
   }
 
+  async function updateTitle(title: string) {
+    const session = current.value
+    if (!session) return
+    await updateSession(session.id, { title })
+    session.title = title
+  }
+
   function sendMessage(id: number, text: string) {
     return forSession(id, () =>
       api<AssistantSessionDetail>(`/api/assistant/sessions/${id}/messages`, {
@@ -308,6 +315,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     loadSession,
     updateSession,
     deleteSession,
+    updateTitle,
     sendMessage,
     compactSession,
     approveToolCalls,

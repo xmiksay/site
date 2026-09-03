@@ -15,13 +15,13 @@ async function changeModel(modelId: number) {
   await assistant.loadSession(assistant.current.id)
 }
 
-async function updateTitle() {
-  if (!assistant.current) return
-  const newTitle = prompt('New title', assistant.current.title)
-  if (newTitle && newTitle !== assistant.current.title) {
-    await assistant.updateSession(assistant.current.id, { title: newTitle })
-    if (assistant.current) assistant.current.title = newTitle
-  }
+async function promptToChangeTitle() {
+  const current = assistant.current
+  if (!current) return
+  const newTitle = prompt('New title', current.title)
+  if (!newTitle || newTitle === current.title) return
+
+  await assistant.updateTitle(newTitle)
 }
 
 async function toggleMcpServer(serverId: number, on: boolean) {
@@ -55,7 +55,7 @@ const showMcpPicker = ref(false)
       </button>
       <button
         class="text-left hover:underline truncate font-semibold text-sm"
-        @click="updateTitle"
+        @click="promptToChangeTitle"
         :title="assistant.current.title"
       >
         {{ assistant.current.title }}
