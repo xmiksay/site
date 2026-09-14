@@ -82,17 +82,17 @@ function move(idx: number, dir: -1 | 1) {
         {{ props.create ? 'New gallery' : 'Edit gallery' }}
       </h1>
       <div class="space-x-2 text-sm">
-        <router-link to="/galleries" class="text-gray-600 hover:underline">Cancel</router-link>
-        <button class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5" @click="save">
+        <router-link to="/galleries" class="text-fg-2 hover:underline">Cancel</router-link>
+        <button class="rounded button-primary px-3 py-1.5" @click="save">
           Save
         </button>
       </div>
     </div>
-    <p v-if="error" class="text-red-600 text-sm">{{ error }}</p>
+    <p v-if="error" class="text-danger text-sm">{{ error }}</p>
 
-    <div class="bg-white shadow rounded p-4 space-y-3 max-w-2xl">
+    <div class="bg-surface shadow rounded p-4 space-y-3 max-w-2xl">
       <label class="block">
-        <span class="text-sm text-gray-600">Path</span>
+        <span class="text-sm text-fg-2">Path</span>
         <PathPicker
           v-model="path"
           namespace="all"
@@ -101,30 +101,30 @@ function move(idx: number, dir: -1 | 1) {
         />
       </label>
       <label class="block">
-        <span class="text-sm text-gray-600">Title</span>
-        <input v-model="title" class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5" />
+        <span class="text-sm text-fg-2">Title</span>
+        <input v-model="title" class="mt-1 w-full rounded border border-line-1 px-2 py-1.5" />
       </label>
       <label class="block">
-        <span class="text-sm text-gray-600">Description</span>
+        <span class="text-sm text-fg-2">Description</span>
         <textarea
           v-model="description"
           rows="2"
-          class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5"
+          class="mt-1 w-full rounded border border-line-1 px-2 py-1.5"
         ></textarea>
       </label>
     </div>
 
-    <div class="bg-white shadow rounded p-4">
+    <div class="bg-surface shadow rounded p-4">
       <div class="flex items-center justify-between mb-2">
         <h2 class="font-medium">Files in this gallery</h2>
         <button
-          class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 text-sm"
+          class="rounded button-primary px-3 py-1.5 text-sm"
           @click="showPicker = true"
         >
           Add file
         </button>
       </div>
-      <ul class="divide-y divide-gray-100">
+      <ul class="divide-y divide-line-3">
         <li
           v-for="(id, idx) in fileIds"
           :key="`${id}-${idx}`"
@@ -133,25 +133,25 @@ function move(idx: number, dir: -1 | 1) {
           <img
             v-if="lookup(id)?.has_thumbnail"
             :src="`/files/${lookup(id)?.hash}/nahled`"
-            class="w-12 h-12 object-cover bg-gray-100 rounded"
+            class="w-12 h-12 object-cover bg-surface-raised rounded"
           />
-          <div v-else class="w-12 h-12 bg-gray-100 rounded flex items-center justify-center text-xs text-gray-400">
+          <div v-else class="w-12 h-12 bg-surface-raised rounded flex items-center justify-center text-xs text-fg-4">
             ?
           </div>
           <span class="flex-1 text-sm">{{ lookup(id)?.title ?? `File ${id}` }}</span>
-          <button class="text-xs text-gray-600 hover:underline" @click="move(idx, -1)" :disabled="idx === 0">
+          <button class="text-xs text-fg-2 hover:underline" @click="move(idx, -1)" :disabled="idx === 0">
             ↑
           </button>
           <button
-            class="text-xs text-gray-600 hover:underline"
+            class="text-xs text-fg-2 hover:underline"
             @click="move(idx, 1)"
             :disabled="idx === fileIds.length - 1"
           >
             ↓
           </button>
-          <button class="text-xs text-red-600 hover:underline" @click="removeFile(id)">Remove</button>
+          <button class="text-xs text-danger hover:underline" @click="removeFile(id)">Remove</button>
         </li>
-        <li v-if="fileIds.length === 0" class="py-4 text-gray-400 text-sm text-center">
+        <li v-if="fileIds.length === 0" class="py-4 text-fg-4 text-sm text-center">
           No files yet.
         </li>
       </ul>

@@ -45,7 +45,7 @@ async function send() {
       ></textarea>
       <button
         type="submit"
-        class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-2 text-sm disabled:opacity-50"
+        class="rounded button-primary px-3 py-2 text-sm disabled:opacity-50"
         :disabled="assistant.sending || draft.trim() === ''"
       >
         Send

@@ -30,15 +30,15 @@ async function handleLogout() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-50 text-gray-900">
+  <div class="min-h-screen bg-surface-alt text-fg-1">
     <div v-if="auth.isLoggedIn" class="md:flex md:min-h-screen">
       <header
-        class="md:hidden flex items-center justify-between bg-gray-800 text-gray-100 px-4 py-3"
+        class="md:hidden flex items-center justify-between bg-surface-dark text-fg-on-dark px-4 py-3"
       >
         <a href="/" class="font-semibold">Site</a>
         <button
           type="button"
-          class="p-2 rounded hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500"
+          class="p-2 rounded hover:bg-surface-dark-hover focus:outline-none focus:ring-2 focus:ring-focus"
           aria-label="Toggle navigation"
           :aria-expanded="mobileOpen"
           @click="mobileOpen = !mobileOpen"
@@ -68,21 +68,21 @@ async function handleLogout() {
 
       <div
         v-if="mobileOpen"
-        class="md:hidden fixed inset-0 z-30 bg-black/40"
+        class="md:hidden fixed inset-0 z-30 bg-overlay"
         @click="mobileOpen = false"
       ></div>
 
       <aside
-        class="bg-gray-800 text-gray-100 flex flex-col z-40
+        class="bg-surface-dark text-fg-on-dark flex flex-col z-40
                fixed inset-y-0 left-0 w-64 transform transition-transform duration-200 ease-out
                md:static md:w-56 md:translate-x-0"
         :class="mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'"
       >
-        <div class="px-4 py-4 border-b border-gray-700 font-semibold flex items-center justify-between">
+        <div class="px-4 py-4 border-b border-line-on-dark font-semibold flex items-center justify-between">
           <a href="/">Site</a>
           <button
             type="button"
-            class="md:hidden p-1 rounded hover:bg-gray-700"
+            class="md:hidden p-1 rounded hover:bg-surface-dark-hover"
             aria-label="Close navigation"
             @click="mobileOpen = false"
           >
@@ -96,15 +96,15 @@ async function handleLogout() {
             v-for="item in nav"
             :key="item.to"
             :to="item.to"
-            class="block px-3 py-2 rounded hover:bg-gray-700"
-            active-class="bg-gray-700 font-medium"
+            class="block px-3 py-2 rounded hover:bg-surface-dark-hover"
+            active-class="bg-surface-dark-hover font-medium"
           >
             {{ item.label }}
           </router-link>
         </nav>
-        <div class="px-4 py-3 border-t border-gray-700 text-xs text-gray-400">
+        <div class="px-4 py-3 border-t border-line-on-dark text-xs text-fg-4">
           <div class="mb-2">{{ auth.user?.username }}</div>
-          <button class="hover:text-red-400" @click="handleLogout">Log out</button>
+          <button class="hover:text-danger-on-dark" @click="handleLogout">Log out</button>
         </div>
       </aside>
       <main class="flex-1 p-4 md:p-6 overflow-auto">

@@ -125,14 +125,14 @@ async function remove(id: number, name: string) {
     <div class="flex items-center justify-between">
       <h1 class="text-xl font-semibold">MCP servers</h1>
       <button
-        class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 text-sm"
+        class="rounded button-primary px-3 py-1.5 text-sm"
         @click="showCreate = !showCreate"
       >
         {{ showCreate ? 'Cancel' : 'Add server' }}
       </button>
     </div>
 
-    <div v-if="showCreate" class="bg-white rounded-lg shadow p-4 space-y-3">
+    <div v-if="showCreate" class="bg-surface rounded-lg shadow p-4 space-y-3">
       <div>
         <label class="block text-sm font-medium mb-1">Name</label>
         <input
@@ -157,7 +157,7 @@ async function remove(id: number, name: string) {
           class="w-full border rounded p-2 text-sm font-mono"
           placeholder="Authorization: Bearer xyz&#10;X-Custom: value"
         ></textarea>
-        <p class="text-xs text-gray-500 mt-1">One header per line, in <code>Name: value</code> form.</p>
+        <p class="text-xs text-fg-3 mt-1">One header per line, in <code>Name: value</code> form.</p>
       </div>
       <div>
         <label class="block text-sm font-medium mb-1">Capabilities</label>
@@ -167,7 +167,7 @@ async function remove(id: number, name: string) {
           class="w-full border rounded p-2 text-sm font-mono"
           placeholder="search: read&#10;delete_item: write"
         ></textarea>
-        <p class="text-xs text-gray-500 mt-1">
+        <p class="text-xs text-fg-3 mt-1">
           One remote tool per line, in <code>tool_name: read|write|call</code> form — lets a
           <code>tool_permissions</code> capability rule fan out to this server's tools.
         </p>
@@ -182,7 +182,7 @@ async function remove(id: number, name: string) {
       </div>
       <div class="flex justify-end">
         <button
-          class="rounded bg-gray-800 text-white px-4 py-2 text-sm"
+          class="rounded bg-primary text-fg-inverse px-4 py-2 text-sm"
           @click="create"
         >
           Save
@@ -190,9 +190,9 @@ async function remove(id: number, name: string) {
       </div>
     </div>
 
-    <div class="bg-white rounded-lg shadow overflow-x-auto">
+    <div class="bg-surface rounded-lg shadow overflow-x-auto">
       <table class="min-w-full text-sm">
-        <thead class="bg-gray-100 text-gray-600">
+        <thead class="bg-surface-raised text-fg-2">
           <tr>
             <th class="text-left px-4 py-2">Name</th>
             <th class="text-left px-4 py-2">URL</th>
@@ -203,9 +203,9 @@ async function remove(id: number, name: string) {
         </thead>
         <tbody>
           <template v-for="s in assistant.mcpServers" :key="s.id">
-            <tr class="border-t border-gray-100">
+            <tr class="border-t border-line-3">
               <td class="px-4 py-2 font-medium">{{ s.name }}</td>
-              <td class="px-4 py-2 truncate max-w-md text-gray-600">{{ s.url }}</td>
+              <td class="px-4 py-2 truncate max-w-md text-fg-2">{{ s.url }}</td>
               <td class="px-4 py-2">
                 <input
                   type="checkbox"
@@ -213,33 +213,33 @@ async function remove(id: number, name: string) {
                   @change="toggle(s.id, ($event.target as HTMLInputElement).checked)"
                 />
               </td>
-              <td class="px-4 py-2 text-gray-600">
+              <td class="px-4 py-2 text-fg-2">
                 {{ s.forward_user_token ? 'yes' : 'no' }}
               </td>
               <td class="px-4 py-2 text-right space-x-3">
                 <button
                   v-if="editingId !== s.id"
-                  class="text-blue-600 hover:underline text-xs"
+                  class="text-accent hover:underline text-xs"
                   @click="startEdit(s)"
                 >
                   edit
                 </button>
                 <button
                   v-else
-                  class="text-gray-600 hover:underline text-xs"
+                  class="text-fg-2 hover:underline text-xs"
                   @click="cancelEdit"
                 >
                   cancel
                 </button>
                 <button
-                  class="text-red-500 hover:underline text-xs"
+                  class="text-danger hover:underline text-xs"
                   @click="remove(s.id, s.name)"
                 >
                   delete
                 </button>
               </td>
             </tr>
-            <tr v-if="editingId === s.id" class="border-t border-gray-100 bg-gray-50">
+            <tr v-if="editingId === s.id" class="border-t border-line-3 bg-surface-alt">
               <td colspan="5" class="px-4 py-3">
                 <div class="space-y-3">
                   <div class="grid grid-cols-2 gap-3">
@@ -260,7 +260,7 @@ async function remove(id: number, name: string) {
                       class="w-full border rounded p-2 text-sm font-mono"
                       placeholder="Authorization: Bearer xyz"
                     ></textarea>
-                    <p class="text-xs text-gray-500 mt-1">One header per line, in <code>Name: value</code> form.</p>
+                    <p class="text-xs text-fg-3 mt-1">One header per line, in <code>Name: value</code> form.</p>
                   </div>
                   <div>
                     <label class="block text-xs font-medium mb-1">Capabilities</label>
@@ -270,7 +270,7 @@ async function remove(id: number, name: string) {
                       class="w-full border rounded p-2 text-sm font-mono"
                       placeholder="search: read"
                     ></textarea>
-                    <p class="text-xs text-gray-500 mt-1">
+                    <p class="text-xs text-fg-3 mt-1">
                       One remote tool per line, in <code>tool_name: read|write|call</code> form.
                     </p>
                   </div>
@@ -284,7 +284,7 @@ async function remove(id: number, name: string) {
                   </div>
                   <div class="flex justify-end">
                     <button
-                      class="rounded bg-gray-800 text-white px-4 py-2 text-sm"
+                      class="rounded bg-primary text-fg-inverse px-4 py-2 text-sm"
                       @click="saveEdit(s.id)"
                     >
                       Save changes
@@ -295,7 +295,7 @@ async function remove(id: number, name: string) {
             </tr>
           </template>
           <tr v-if="assistant.mcpServers.length === 0">
-            <td colspan="5" class="px-4 py-6 text-center text-gray-400">
+            <td colspan="5" class="px-4 py-6 text-center text-fg-4">
               No MCP servers registered.
             </td>
           </tr>
@@ -308,26 +308,26 @@ async function remove(id: number, name: string) {
       <div
         v-for="server in assistant.discovered"
         :key="server.name"
-        class="bg-white rounded-lg shadow p-4"
+        class="bg-surface rounded-lg shadow p-4"
       >
         <div class="flex items-center justify-between mb-2">
           <div>
             <span class="font-medium">{{ server.name }}</span>
-            <span class="text-xs text-gray-500 ml-2">{{ server.url }}</span>
+            <span class="text-xs text-fg-3 ml-2">{{ server.url }}</span>
           </div>
           <span
             class="text-xs px-2 py-0.5 rounded"
-            :class="server.connected ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-700'"
+            :class="server.connected ? 'bg-success-bg text-success-strong' : 'bg-danger-bg text-danger-strong'"
           >
             {{ server.connected ? 'connected' : 'unreachable' }}
           </span>
         </div>
         <ul class="text-sm space-y-1">
           <li v-for="t in server.tools" :key="t.prefixed_name" class="flex gap-2">
-            <code class="text-gray-700 shrink-0">{{ t.prefixed_name }}</code>
-            <span class="text-gray-500 truncate">{{ t.description }}</span>
+            <code class="text-fg-2 shrink-0">{{ t.prefixed_name }}</code>
+            <span class="text-fg-3 truncate">{{ t.description }}</span>
           </li>
-          <li v-if="server.tools.length === 0" class="text-gray-400 italic">
+          <li v-if="server.tools.length === 0" class="text-fg-4 italic">
             no tools discovered
           </li>
         </ul>

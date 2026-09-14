@@ -71,19 +71,19 @@ watch(
     <div v-if="liveTurn" class="space-y-1">
       <div
         v-if="liveTurn.retrying"
-        class="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-800 text-xs px-2 py-0.5"
+        class="inline-flex items-center gap-1 rounded-full bg-warning-bg text-warning text-xs px-2 py-0.5"
       >
         model stalled — retrying…
       </div>
       <div
         v-if="liveTurn.reasoning"
-        class="max-w-2xl rounded-lg px-3 py-2 bg-gray-50 text-gray-500 text-xs italic whitespace-pre-wrap"
+        class="max-w-2xl rounded-lg px-3 py-2 bg-surface-alt text-fg-3 text-xs italic whitespace-pre-wrap"
       >
         {{ liveTurn.reasoning }}
       </div>
       <div
         v-if="liveTurn.text"
-        class="assistant-markdown max-w-2xl rounded-lg px-3 py-2 bg-gray-100 text-gray-900"
+        class="assistant-markdown max-w-2xl rounded-lg px-3 py-2 bg-surface-raised text-fg-1"
         v-html="renderMarkdown(liveTurn.text)"
       ></div>
       <LiveToolCallList
@@ -98,6 +98,6 @@ watch(
       :turn="turn"
       @decided="scrollToBottom"
     />
-    <div v-if="assistant.sending && !liveTurn" class="text-xs text-gray-500">thinking…</div>
+    <div v-if="assistant.sending && !liveTurn" class="text-xs text-fg-3">thinking…</div>
   </div>
 </template>

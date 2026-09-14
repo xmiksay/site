@@ -156,19 +156,19 @@ async function restore(revId: number) {
         <button
           v-if="!props.create"
           type="button"
-          class="rounded border border-gray-300 hover:bg-gray-100 px-3 py-1.5 text-sm flex items-center gap-1.5"
-          :class="chatOpen ? 'bg-gray-100' : ''"
+          class="rounded border border-line-1 hover:bg-surface-raised px-3 py-1.5 text-sm flex items-center gap-1.5"
+          :class="chatOpen ? 'bg-surface-raised' : ''"
           @click="chatOpen = !chatOpen"
           title="Toggle AI assistant"
         >
           <ChatIcon />
           AI
         </button>
-        <router-link to="/pages" class="text-gray-600 hover:underline text-sm">Cancel</router-link>
+        <router-link to="/pages" class="text-fg-2 hover:underline text-sm">Cancel</router-link>
         <button
           v-if="!props.create"
           type="button"
-          class="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100 disabled:opacity-50"
+          class="rounded border border-line-1 px-3 py-1.5 text-sm hover:bg-surface-raised disabled:opacity-50"
           :disabled="exporting"
           @click="exportAs('pdf')"
         >
@@ -177,26 +177,26 @@ async function restore(revId: number) {
         <button
           v-if="!props.create"
           type="button"
-          class="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100 disabled:opacity-50"
+          class="rounded border border-line-1 px-3 py-1.5 text-sm hover:bg-surface-raised disabled:opacity-50"
           :disabled="exporting"
           @click="exportAs('slides')"
         >
           Export slides
         </button>
-        <button class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 text-sm" @click="save">
+        <button class="rounded button-primary px-3 py-1.5 text-sm" @click="save">
           Save
         </button>
       </div>
     </div>
 
-    <p v-if="error" class="text-red-600 text-sm">{{ error }}</p>
-    <p v-if="exportError" class="text-red-600 text-sm">{{ exportError }}</p>
+    <p v-if="error" class="text-danger text-sm">{{ error }}</p>
+    <p v-if="exportError" class="text-danger text-sm">{{ exportError }}</p>
 
     <div class="flex gap-4 items-stretch">
       <div class="flex-1 min-w-0 space-y-4">
-        <div class="bg-white rounded-lg shadow p-4 space-y-4">
+        <div class="bg-surface rounded-lg shadow p-4 space-y-4">
           <label class="block">
-            <span class="text-sm text-gray-600">Path</span>
+            <span class="text-sm text-fg-2">Path</span>
             <PathPicker
               v-model="path"
               namespace="all"
@@ -205,14 +205,14 @@ async function restore(revId: number) {
             />
           </label>
           <label class="block">
-            <span class="text-sm text-gray-600">Summary</span>
+            <span class="text-sm text-fg-2">Summary</span>
             <input
               v-model="summary"
-              class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5"
+              class="mt-1 w-full rounded border border-line-1 px-2 py-1.5"
             />
           </label>
           <div>
-            <span class="text-sm text-gray-600">Tags</span>
+            <span class="text-sm text-fg-2">Tags</span>
             <div class="mt-1 flex flex-wrap gap-1">
               <button
                 v-for="tag in tags.items"
@@ -221,8 +221,8 @@ async function restore(revId: number) {
                 class="rounded-full px-2 py-0.5 text-xs border"
                 :class="
                   tagIds.includes(tag.id)
-                    ? 'bg-blue-600 border-blue-600 text-white'
-                    : 'border-gray-300 text-gray-700 hover:bg-gray-100'
+                    ? 'bg-accent border-accent text-fg-inverse'
+                    : 'border-line-1 text-fg-2 hover:bg-surface-raised'
                 "
                 @click="toggleTag(tag.id)"
               >
@@ -237,22 +237,22 @@ async function restore(revId: number) {
           <MarkdownEditor v-model="markdown" :rows="24" />
         </div>
 
-        <div v-if="!props.create && revisions.length" class="bg-white rounded-lg shadow p-4">
+        <div v-if="!props.create && revisions.length" class="bg-surface rounded-lg shadow p-4">
           <h2 class="font-medium mb-2">Revisions</h2>
           <ul class="text-sm space-y-1">
             <li
               v-for="r in revisions"
               :key="r.id"
-              class="flex justify-between border-b border-gray-100 py-1"
+              class="flex justify-between border-b border-line-3 py-1"
             >
               <button
                 type="button"
-                class="flex-1 text-left text-gray-600 hover:text-gray-900 hover:underline"
+                class="flex-1 text-left text-fg-2 hover:text-fg-1 hover:underline"
                 @click="openDiff(r)"
               >
                 {{ r.created_at }}
               </button>
-              <button class="text-blue-600 hover:underline" @click.stop="restore(r.id)">Restore</button>
+              <button class="text-accent hover:underline" @click.stop="restore(r.id)">Restore</button>
             </li>
           </ul>
         </div>
@@ -268,17 +268,17 @@ async function restore(revId: number) {
 
     <div
       v-if="diffOpen"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-overlay"
       @click.self="closeDiff"
     >
-      <div class="flex max-h-[85vh] w-[min(900px,94vw)] flex-col overflow-hidden rounded-lg bg-white shadow-lg">
-        <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+      <div class="flex max-h-[85vh] w-[min(900px,94vw)] flex-col overflow-hidden rounded-lg bg-surface shadow-lg">
+        <div class="flex items-center justify-between border-b border-line-2 px-4 py-3">
           <h2 class="font-medium">Revision {{ diffRevDate }}</h2>
-          <button class="text-gray-500 hover:text-gray-900" @click="closeDiff">×</button>
+          <button class="text-fg-3 hover:text-fg-1" @click="closeDiff">×</button>
         </div>
         <div class="overflow-auto p-4">
-          <p v-if="diffLoading" class="text-sm text-gray-500">Loading…</p>
-          <p v-else-if="diffError" class="text-sm text-red-600">{{ diffError }}</p>
+          <p v-if="diffLoading" class="text-sm text-fg-3">Loading…</p>
+          <p v-else-if="diffError" class="text-sm text-danger">{{ diffError }}</p>
           <div v-else class="text-sm" v-html="diffHtml"></div>
         </div>
       </div>

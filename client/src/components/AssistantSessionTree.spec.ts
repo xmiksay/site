@@ -75,7 +75,7 @@ describe('AssistantSessionTree', () => {
     expect(rowTitles(wrapper)).toEqual(['root', '🔎 kid', '✎ grandkid', 'other root'])
     const selected = wrapper.findAll('[role="treeitem"]')[2]
     expect(selected.attributes('aria-selected')).toBe('true')
-    expect(selected.classes()).toContain('bg-gray-100')
+    expect(selected.classes()).toContain('bg-surface-raised')
   })
 
   it('emits select with the clicked row id', async () => {

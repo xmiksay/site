@@ -47,13 +47,13 @@ async function deleteSession(id: number) {
 <template>
   <div class="flex h-[calc(100vh-8rem)] md:h-[calc(100vh-3rem)] gap-4">
     <aside
-      class="w-full md:w-64 bg-white rounded-lg shadow flex-col"
+      class="w-full md:w-64 bg-surface rounded-lg shadow flex-col"
       :class="assistant.current ? 'hidden md:flex' : 'flex'"
     >
       <div class="p-3 border-b flex items-center justify-between">
         <h2 class="font-semibold">Chats</h2>
         <button
-          class="text-sm rounded bg-gray-800 hover:bg-gray-700 text-white px-2 py-1"
+          class="text-sm rounded button-primary px-2 py-1"
           @click="newSession"
         >
           New
@@ -77,7 +77,7 @@ async function deleteSession(id: number) {
         :show-back="true"
         @back="assistant.current = null"
       />
-      <div v-else class="flex-1 flex items-center justify-center text-gray-500">
+      <div v-else class="flex-1 flex items-center justify-center text-fg-3">
         Pick a chat or start a new one.
       </div>
     </section>

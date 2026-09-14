@@ -79,10 +79,10 @@ function throttleLabel(status: ProviderThrottleStatus | undefined): string {
 }
 
 function throttleColorClass(status: ProviderThrottleStatus | undefined): string {
-  if (!status) return 'text-gray-400'
-  if (status.backoff_remaining_ms != null) return 'text-red-600'
-  if (status.penalized || (status.cap > 0 && status.in_flight >= status.cap)) return 'text-amber-600'
-  return 'text-gray-400'
+  if (!status) return 'text-fg-4'
+  if (status.backoff_remaining_ms != null) return 'text-danger'
+  if (status.penalized || (status.cap > 0 && status.in_flight >= status.cap)) return 'text-warning'
+  return 'text-fg-4'
 }
 
 const presets: Record<string, { needsKey: boolean; needsUrl: boolean; defaultUrl?: string }> = {
@@ -193,19 +193,19 @@ async function remove(id: number, label: string) {
     <div class="flex items-center justify-between">
       <h1 class="text-xl font-semibold">LLM providers</h1>
       <button
-        class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 text-sm"
+        class="rounded button-primary px-3 py-1.5 text-sm"
         @click="showCreate = !showCreate"
       >
         {{ showCreate ? 'Cancel' : 'Add provider' }}
       </button>
     </div>
 
-    <p class="text-sm text-gray-600">
+    <p class="text-sm text-fg-2">
       A provider is just the connection (API key or local URL). Add models for it under
-      <router-link to="/models" class="text-blue-600 hover:underline">LLM models</router-link>.
+      <router-link to="/models" class="text-accent hover:underline">LLM models</router-link>.
     </p>
 
-    <div v-if="showCreate" class="bg-white rounded-lg shadow p-4 space-y-3">
+    <div v-if="showCreate" class="bg-surface rounded-lg shadow p-4 space-y-3">
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="block text-sm font-medium mb-1">Label</label>
@@ -270,13 +270,13 @@ async function remove(id: number, label: string) {
         </div>
       </div>
       <div class="flex justify-end">
-        <button class="rounded bg-gray-800 text-white px-4 py-2 text-sm" @click="create">Save</button>
+        <button class="rounded bg-primary text-fg-inverse px-4 py-2 text-sm" @click="create">Save</button>
       </div>
     </div>
 
-    <div class="bg-white rounded-lg shadow overflow-x-auto">
+    <div class="bg-surface rounded-lg shadow overflow-x-auto">
       <table class="min-w-full text-sm">
-        <thead class="bg-gray-100 text-gray-600">
+        <thead class="bg-surface-raised text-fg-2">
           <tr>
             <th class="text-left px-4 py-2">Label</th>
             <th class="text-left px-4 py-2">Kind</th>
@@ -288,21 +288,21 @@ async function remove(id: number, label: string) {
         </thead>
         <tbody>
           <template v-for="p in assistant.providers" :key="p.id">
-            <tr class="border-t border-gray-100">
+            <tr class="border-t border-line-3">
               <td class="px-4 py-2 font-medium">{{ p.label }}</td>
-              <td class="px-4 py-2 text-gray-600">{{ p.kind }}</td>
-              <td class="px-4 py-2 text-gray-600">
+              <td class="px-4 py-2 text-fg-2">{{ p.kind }}</td>
+              <td class="px-4 py-2 text-fg-2">
                 <span v-if="p.kind === 'ollama'">{{ p.base_url || '—' }}</span>
                 <span v-else-if="p.kind === 'openai'">
                   {{ p.base_url || '—' }} ·
                   <span v-if="p.has_api_key">key set</span>
-                  <span v-else class="text-amber-600">no key</span>
+                  <span v-else class="text-warning">no key</span>
                 </span>
                 <span v-else-if="p.has_api_key">key set</span>
-                <span v-else class="text-red-600">no api key</span>
+                <span v-else class="text-danger">no api key</span>
               </td>
-              <td class="px-4 py-2 text-gray-600">
-                <span v-if="p.concurrency == null && p.rpm == null" class="text-gray-400">default</span>
+              <td class="px-4 py-2 text-fg-2">
+                <span v-if="p.concurrency == null && p.rpm == null" class="text-fg-4">default</span>
                 <span v-else>{{ p.concurrency ?? 'default' }} conc / {{ p.rpm ?? 'default' }} rpm</span>
               </td>
               <td class="px-4 py-2" :class="throttleColorClass(throttleFor(p.id))">
@@ -311,24 +311,24 @@ async function remove(id: number, label: string) {
               <td class="px-4 py-2 text-right space-x-3">
                 <button
                   v-if="editingId !== p.id"
-                  class="text-xs text-blue-600 hover:underline"
+                  class="text-xs text-accent hover:underline"
                   @click="startEdit(p)"
                 >
                   edit
                 </button>
                 <button
                   v-else
-                  class="text-xs text-gray-600 hover:underline"
+                  class="text-xs text-fg-2 hover:underline"
                   @click="cancelEdit"
                 >
                   cancel
                 </button>
-                <button class="text-xs text-red-500 hover:underline" @click="remove(p.id, p.label)">
+                <button class="text-xs text-danger hover:underline" @click="remove(p.id, p.label)">
                   delete
                 </button>
               </td>
             </tr>
-            <tr v-if="editingId === p.id" class="border-t border-gray-100 bg-gray-50">
+            <tr v-if="editingId === p.id" class="border-t border-line-3 bg-surface-alt">
               <td colspan="6" class="px-4 py-3">
                 <div class="space-y-3">
                   <div>
@@ -348,7 +348,7 @@ async function remove(id: number, label: string) {
                       :placeholder="p.has_api_key ? 'leave blank to keep current key' : 'sk-...'"
                       @input="editDraft.api_key_dirty = true"
                     />
-                    <p class="text-xs text-gray-500 mt-1">
+                    <p class="text-xs text-fg-3 mt-1">
                       Submit empty to clear the stored key.
                     </p>
                   </div>
@@ -378,12 +378,12 @@ async function remove(id: number, label: string) {
                       />
                     </div>
                   </div>
-                  <p class="text-xs text-gray-500">
+                  <p class="text-xs text-fg-3">
                     Clear a limit and save to reset it back to the default.
                   </p>
                   <div class="flex justify-end">
                     <button
-                      class="rounded bg-gray-800 text-white px-4 py-2 text-sm"
+                      class="rounded bg-primary text-fg-inverse px-4 py-2 text-sm"
                       @click="saveEdit(p)"
                     >
                       Save changes
@@ -394,7 +394,7 @@ async function remove(id: number, label: string) {
             </tr>
           </template>
           <tr v-if="assistant.providers.length === 0">
-            <td colspan="6" class="px-4 py-6 text-center text-gray-400">
+            <td colspan="6" class="px-4 py-6 text-center text-fg-4">
               No providers yet. Add one to start.
             </td>
           </tr>

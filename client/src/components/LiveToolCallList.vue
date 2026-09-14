@@ -53,19 +53,19 @@ async function decide(callId: string, approve: boolean, remember = false) {
     v-for="tc in toolCalls"
     :key="tc.id"
     class="text-xs border-l-2 pl-2 ml-2 font-mono space-y-1"
-    :class="tc.status === 'done' ? 'border-emerald-300 text-emerald-700' : 'border-amber-300 text-gray-500'"
+    :class="tc.status === 'done' ? 'border-success-soft text-success-strong' : 'border-warning-soft text-fg-3'"
   >
     <div>→ {{ tc.name }}({{ tc.argsText }})</div>
     <div v-if="tc.status === 'requires_approval'" class="flex gap-2 not-italic">
       <button
-        class="px-2 py-0.5 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500"
+        class="px-2 py-0.5 rounded button-success text-xs"
         :disabled="deciding.has(tc.id)"
         @click="decide(tc.id, true)"
       >
         Approve
       </button>
       <button
-        class="px-2 py-0.5 rounded border border-emerald-600 text-emerald-700 text-xs hover:bg-emerald-50"
+        class="px-2 py-0.5 rounded button-outline-success text-xs"
         :disabled="deciding.has(tc.id)"
         :title="`Always allow ${tc.name} — creates a permission rule`"
         @click="decide(tc.id, true, true)"
@@ -73,14 +73,14 @@ async function decide(callId: string, approve: boolean, remember = false) {
         Always allow
       </button>
       <button
-        class="px-2 py-0.5 rounded bg-red-600 text-white text-xs hover:bg-red-500"
+        class="px-2 py-0.5 rounded button-danger text-xs"
         :disabled="deciding.has(tc.id)"
         @click="decide(tc.id, false)"
       >
         Reject
       </button>
       <button
-        class="px-2 py-0.5 rounded border border-red-600 text-red-700 text-xs hover:bg-red-50"
+        class="px-2 py-0.5 rounded button-outline-danger text-xs"
         :disabled="deciding.has(tc.id)"
         :title="`Always reject ${tc.name} — creates a deny rule`"
         @click="decide(tc.id, false, true)"
@@ -88,7 +88,7 @@ async function decide(callId: string, approve: boolean, remember = false) {
         Always reject
       </button>
     </div>
-    <div v-if="errors[tc.id]" class="text-red-600">{{ errors[tc.id] }}</div>
+    <div v-if="errors[tc.id]" class="text-danger">{{ errors[tc.id] }}</div>
     <div v-else-if="tc.status === 'done'">✓ {{ messageText(tc.output) }}</div>
   </div>
 </template>

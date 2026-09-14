@@ -80,13 +80,13 @@ async function submit() {
 </script>
 
 <template>
-  <form class="bg-white shadow rounded p-3 space-y-2" @submit.prevent="submit">
+  <form class="bg-surface shadow rounded p-3 space-y-2" @submit.prevent="submit">
     <div class="flex gap-1 text-sm">
       <button
         type="button"
         :class="[
           'px-2 py-1 rounded',
-          mode === 'file' ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-700',
+          mode === 'file' ? 'bg-primary text-fg-inverse' : 'bg-surface-raised text-fg-2',
         ]"
         @click="mode = 'file'"
       >
@@ -96,7 +96,7 @@ async function submit() {
         type="button"
         :class="[
           'px-2 py-1 rounded',
-          mode === 'text' ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-700',
+          mode === 'text' ? 'bg-primary text-fg-inverse' : 'bg-surface-raised text-fg-2',
         ]"
         @click="mode = 'text'"
       >
@@ -108,26 +108,26 @@ async function submit() {
       <input
         v-model="filename"
         placeholder="Filename (e.g. game.pgn, position.fen)"
-        class="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+        class="w-full rounded border border-line-1 px-2 py-1.5 text-sm"
         @input="onFilenameInput"
       />
       <textarea
         v-model="text"
         placeholder="Paste content here…"
         rows="8"
-        class="w-full rounded border border-gray-300 px-2 py-1.5 text-sm font-mono"
+        class="w-full rounded border border-line-1 px-2 py-1.5 text-sm font-mono"
       ></textarea>
     </template>
     <PathPicker v-model="path" namespace="file" placeholder="Path (e.g. notes/2026/game.pgn)" />
     <input
       v-model="description"
       placeholder="Description (optional)"
-      class="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+      class="w-full rounded border border-line-1 px-2 py-1.5 text-sm"
     />
-    <p v-if="error" class="text-red-600 text-sm">{{ error }}</p>
+    <p v-if="error" class="text-danger text-sm">{{ error }}</p>
     <button
       :disabled="!canSubmit"
-      class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 text-sm disabled:opacity-50"
+      class="rounded button-primary px-3 py-1.5 text-sm disabled:opacity-50"
     >
       {{ submitting ? 'Uploading…' : 'Upload' }}
     </button>

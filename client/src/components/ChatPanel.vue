@@ -13,8 +13,17 @@ const props = defineProps<{
 const emit = defineEmits<{ back: [] }>()
 
 const assistant = useAssistantStore()
-
 const pageSessionKey = (id: number) => `assistant_page_session_${id}`
+
+onMounted(async () => {
+  await Promise.all([
+    assistant.loadModels(),
+    assistant.loadPermissions(),
+    assistant.loadMcpServers(),
+  ])
+
+  await loadOrInitPageSession()
+})
 
 async function loadOrInitPageSession() {
   if (props.pageContext) {
@@ -32,16 +41,6 @@ async function loadOrInitPageSession() {
   }
 }
 
-onMounted(async () => {
-  await Promise.all([
-    assistant.loadModels(),
-    assistant.loadPermissions(),
-    assistant.loadMcpServers(),
-  ])
-
-  await loadOrInitPageSession()
-})
-
 async function initPageSession() {
   if (!props.pageContext) return
   const s = await assistant.createSession({ title: `Page: ${props.pageContext.path}` })
@@ -52,14 +51,14 @@ async function initPageSession() {
 </script>
 
 <template>
-  <div class="flex flex-col bg-white rounded-lg shadow overflow-hidden">
+  <div class="flex flex-col bg-surface rounded-lg shadow overflow-hidden">
     <ChatPanelHeader :show-back="showBack" @back="emit('back')" />
     
     <ChatMessageList />
 
     <ChatComposer :page-context="pageContext" />
 
-    <div v-if="!assistant.current" class="flex-1 flex items-center justify-center text-sm text-gray-500">
+    <div v-if="!assistant.current" class="flex-1 flex items-center justify-center text-sm text-fg-3">
       {{ assistant.models.length === 0 ? 'No models configured.' : 'Loading…' }}
     </div>
   </div>

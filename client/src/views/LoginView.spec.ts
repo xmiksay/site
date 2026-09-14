@@ -41,7 +41,7 @@ describe('LoginView', () => {
     })
     expect(useAuthStore().isLoggedIn).toBe(true)
     expect(pushMock).toHaveBeenCalledWith('/pages')
-    expect(wrapper.find('p.text-red-600').exists()).toBe(false)
+    expect(wrapper.find('p.text-danger').exists()).toBe(false)
   })
 
   it('shows the error message and does not redirect when login fails', async () => {
@@ -54,7 +54,7 @@ describe('LoginView', () => {
     await flushPromises()
 
     expect(pushMock).not.toHaveBeenCalled()
-    expect(wrapper.find('p.text-red-600').text()).toBe('bad credentials')
+    expect(wrapper.find('p.text-danger').text()).toBe('bad credentials')
     expect(useAuthStore().isLoggedIn).toBe(false)
   })
 

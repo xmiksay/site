@@ -97,7 +97,7 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
 
 <template>
   <div v-if="role === 'user'" class="flex justify-end">
-    <div class="max-w-2xl whitespace-pre-wrap rounded-lg px-3 py-2 bg-blue-600 text-white">
+    <div class="max-w-2xl whitespace-pre-wrap rounded-lg px-3 py-2 bg-accent text-fg-inverse">
       {{ messageText(content) }}
     </div>
   </div>
@@ -107,14 +107,14 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
          match the live reasoning bubble in `AssistantView.vue`. -->
     <details
       v-if="messageReasoning(content)"
-      class="max-w-2xl rounded-lg px-3 py-2 bg-gray-50 text-gray-500 text-xs italic"
+      class="max-w-2xl rounded-lg px-3 py-2 bg-surface-alt text-fg-3 text-xs italic"
     >
       <summary class="cursor-pointer not-italic">Thinking</summary>
       <div class="mt-1 whitespace-pre-wrap">{{ messageReasoning(content) }}</div>
     </details>
     <div
       v-if="messageText(content)"
-      class="assistant-markdown max-w-2xl rounded-lg px-3 py-2 bg-gray-100 text-gray-900"
+      class="assistant-markdown max-w-2xl rounded-lg px-3 py-2 bg-surface-raised text-fg-1"
       v-html="renderMarkdown(messageText(content))"
     ></div>
     <div
@@ -123,23 +123,23 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
       class="text-xs border-l-2 pl-2 ml-2 font-mono space-y-1"
       :class="
         decisionFor(content, tc.id) === false
-          ? 'border-red-300 text-red-700'
+          ? 'border-danger-soft text-danger-strong'
           : decisionFor(content, tc.id) === true || tc.resolved
-          ? 'border-emerald-300 text-emerald-700'
-          : 'border-amber-300 text-gray-500'
+          ? 'border-success-soft text-success-strong'
+          : 'border-warning-soft text-fg-3'
       "
     >
       <div>→ {{ tc.name }}({{ JSON.stringify(tc.args) }})</div>
       <div v-if="needsDecision(tc)" class="flex gap-2 not-italic">
         <button
-          class="px-2 py-0.5 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500"
+          class="px-2 py-0.5 rounded button-success text-xs"
           :disabled="deciding.has(tc.id)"
           @click="decide(tc.id, true)"
         >
           Approve
         </button>
         <button
-          class="px-2 py-0.5 rounded border border-emerald-600 text-emerald-700 text-xs hover:bg-emerald-50"
+          class="px-2 py-0.5 rounded button-outline-success text-xs"
           :disabled="deciding.has(tc.id)"
           :title="`Always allow ${tc.name} — creates a permission rule`"
           @click="decide(tc.id, true, true)"
@@ -147,14 +147,14 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
           Always allow
         </button>
         <button
-          class="px-2 py-0.5 rounded bg-red-600 text-white text-xs hover:bg-red-500"
+          class="px-2 py-0.5 rounded button-danger text-xs"
           :disabled="deciding.has(tc.id)"
           @click="decide(tc.id, false)"
         >
           Reject
         </button>
         <button
-          class="px-2 py-0.5 rounded border border-red-600 text-red-700 text-xs hover:bg-red-50"
+          class="px-2 py-0.5 rounded button-outline-danger text-xs"
           :disabled="deciding.has(tc.id)"
           :title="`Always reject ${tc.name} — creates a deny rule`"
           @click="decide(tc.id, false, true)"
@@ -162,18 +162,18 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
           Always reject
         </button>
       </div>
-      <div v-if="errors[tc.id]" class="text-red-600">{{ errors[tc.id] }}</div>
+      <div v-if="errors[tc.id]" class="text-danger">{{ errors[tc.id] }}</div>
     </div>
     <div v-if="pendingCalls.length > 1" class="ml-2 mt-1 flex gap-2">
       <button
-        class="text-xs px-2 py-0.5 rounded border border-emerald-600 text-emerald-700 hover:bg-emerald-50"
+        class="text-xs px-2 py-0.5 rounded border border-success text-success-strong hover:bg-success-bg"
         :disabled="pendingCalls.some((c) => deciding.has(c.id))"
         @click="decideAll(pendingCalls, true)"
       >
         Approve all
       </button>
       <button
-        class="text-xs px-2 py-0.5 rounded border border-emerald-700 text-emerald-800 hover:bg-emerald-50"
+        class="text-xs px-2 py-0.5 rounded border border-success text-success-strong hover:bg-success-bg"
         :disabled="pendingCalls.some((c) => deciding.has(c.id))"
         title="Always allow every tool in this batch — creates permission rules"
         @click="decideAll(pendingCalls, true, true)"
@@ -181,14 +181,14 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
         Always allow all
       </button>
       <button
-        class="text-xs px-2 py-0.5 rounded border border-red-600 text-red-700 hover:bg-red-50"
+        class="text-xs px-2 py-0.5 rounded border border-danger text-danger-strong hover:bg-danger-bg"
         :disabled="pendingCalls.some((c) => deciding.has(c.id))"
         @click="decideAll(pendingCalls, false)"
       >
         Reject all
       </button>
       <button
-        class="text-xs px-2 py-0.5 rounded border border-red-700 text-red-800 hover:bg-red-50"
+        class="text-xs px-2 py-0.5 rounded border border-danger text-danger-strong hover:bg-danger-bg"
         :disabled="pendingCalls.some((c) => deciding.has(c.id))"
         title="Always reject every tool in this batch — creates deny rules"
         @click="decideAll(pendingCalls, false, true)"
@@ -206,10 +206,10 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
       v-for="sa in subAgents"
       :key="sa.agent_id"
       :type="sa.child_db_session_id != null ? 'button' : undefined"
-      class="ml-2 border-l-2 border-gray-200 pl-2 py-1 text-xs text-gray-500 space-y-0.5 block w-full text-left"
+      class="ml-2 border-l-2 border-line-2 pl-2 py-1 text-xs text-fg-3 space-y-0.5 block w-full text-left"
       :class="
         sa.child_db_session_id != null
-          ? 'cursor-pointer hover:border-gray-400 hover:bg-gray-50'
+          ? 'cursor-pointer hover:border-line-strong hover:bg-surface-alt'
           : ''
       "
       :title="sa.child_db_session_id != null ? 'Open this sub-agent’s chat' : undefined"
@@ -217,17 +217,17 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
     >
       <div>
         {{ profileIcon(sa.profile) }} {{ sa.profile }}
-        <span v-if="sa.task" class="text-gray-400">— {{ sa.task }}</span>
-        <span class="text-gray-400">({{ sa.message_count }} messages)</span>
+        <span v-if="sa.task" class="text-fg-4">— {{ sa.task }}</span>
+        <span class="text-fg-4">({{ sa.message_count }} messages)</span>
       </div>
-      <div v-if="sa.preview" class="text-gray-600 italic">{{ sa.preview }}</div>
+      <div v-if="sa.preview" class="text-fg-2 italic">{{ sa.preview }}</div>
     </component>
   </div>
   <div v-else-if="role === 'tool_result'" class="text-xs ml-2">
     <details
       :open="toolResult(content).is_error"
       class="border-l-2 pl-2 font-mono whitespace-pre-wrap"
-      :class="toolResult(content).is_error ? 'border-red-400 text-red-700' : 'border-emerald-400 text-gray-600'"
+      :class="toolResult(content).is_error ? 'border-danger-soft text-danger-strong' : 'border-success-soft text-fg-2'"
     >
       <summary class="cursor-pointer">
         {{ toolResult(content).is_error ? '✗ tool error' : '✓ tool result' }}
@@ -235,7 +235,7 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
       <pre class="mt-1">{{ messageText(toolResult(content).output) }}</pre>
     </details>
   </div>
-  <div v-else-if="role === 'error'" class="text-sm text-red-600">
+  <div v-else-if="role === 'error'" class="text-sm text-danger">
     error: {{ messageText(content) }}
   </div>
 </template>

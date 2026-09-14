@@ -150,10 +150,10 @@ async function applyThinkingBudget() {
 </script>
 
 <template>
-  <div v-if="assistant.current" class="text-xs text-gray-500 flex flex-wrap items-center gap-2">
+  <div v-if="assistant.current" class="text-xs text-fg-3 flex flex-wrap items-center gap-2">
     <span
       v-if="readOnly"
-      class="rounded bg-gray-100 px-2 py-1 whitespace-nowrap"
+      class="rounded bg-surface-raised px-2 py-1 whitespace-nowrap"
       :title="`Sub-agent of chat #${assistant.current.parent_session_id} — its model, profile, MCP servers and generation settings are fixed by its parent`"
     >
       {{ profileIcon(assistant.current.agent_profile) }} {{ assistant.current.agent_profile }} ·
@@ -187,7 +187,7 @@ async function applyThinkingBudget() {
     <button
       v-if="!readOnly"
       type="button"
-      class="border rounded px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-50"
+      class="border rounded px-2 py-1 text-xs hover:bg-surface-raised disabled:opacity-50"
       title="Summarize this chat's history into a fresh session"
       :disabled="assistant.sending || assistant.current.messages.length === 0"
       @click="compactSession"
@@ -197,12 +197,12 @@ async function applyThinkingBudget() {
     <div v-if="!readOnly" class="relative">
       <button
         type="button"
-        class="border rounded px-2 py-1 text-xs hover:bg-gray-50"
+        class="border rounded px-2 py-1 text-xs hover:bg-surface-raised"
         @click="showMcpPicker = !showMcpPicker"
         :title="'MCP servers active in this chat'"
       >
         MCP
-        <span class="ml-1 inline-block min-w-[1rem] text-center rounded bg-gray-100 px-1">
+        <span class="ml-1 inline-block min-w-[1rem] text-center rounded bg-surface-raised px-1">
           {{ (assistant.current.enabled_mcp_server_ids ?? []).length }}/{{
             assistant.mcpServers.length
           }}
@@ -210,15 +210,15 @@ async function applyThinkingBudget() {
       </button>
       <div
         v-if="showMcpPicker"
-        class="absolute right-0 mt-1 w-64 bg-white border rounded shadow-lg z-10 p-2 space-y-1"
+        class="absolute right-0 mt-1 w-64 bg-surface border rounded shadow-lg z-10 p-2 space-y-1"
       >
-        <div v-if="assistant.mcpServers.length === 0" class="text-xs text-gray-500 p-1">
+        <div v-if="assistant.mcpServers.length === 0" class="text-xs text-fg-3 p-1">
           No MCP servers registered.
         </div>
         <label
           v-for="srv in assistant.mcpServers"
           :key="srv.id"
-          class="flex items-center gap-2 text-xs p-1 hover:bg-gray-50 rounded cursor-pointer"
+          class="flex items-center gap-2 text-xs p-1 hover:bg-surface-raised rounded cursor-pointer"
           :class="srv.enabled ? '' : 'opacity-50'"
         >
           <input
@@ -228,14 +228,14 @@ async function applyThinkingBudget() {
             @change="toggleMcpServer(srv.id, ($event.target as HTMLInputElement).checked)"
           />
           <span class="flex-1 truncate">{{ srv.name }}</span>
-          <span v-if="!srv.enabled" class="text-gray-400">(off)</span>
+          <span v-if="!srv.enabled" class="text-fg-4">(off)</span>
         </label>
       </div>
     </div>
     <div v-if="!readOnly" class="relative">
       <button
         type="button"
-        class="border rounded px-2 py-1 text-xs hover:bg-gray-50"
+        class="border rounded px-2 py-1 text-xs hover:bg-surface-raised"
         @click="showGenPicker = !showGenPicker"
         title="Generation settings (temperature, reasoning effort, max output tokens, thinking budget)"
       >
@@ -243,10 +243,10 @@ async function applyThinkingBudget() {
       </button>
       <div
         v-if="showGenPicker"
-        class="absolute right-0 mt-1 w-56 bg-white border rounded shadow-lg z-10 p-2 space-y-2"
+        class="absolute right-0 mt-1 w-56 bg-surface border rounded shadow-lg z-10 p-2 space-y-2"
       >
         <label v-if="currentModel?.supports_temperature ?? true" class="block text-xs">
-          <span class="block text-gray-500 mb-1">Temperature</span>
+          <span class="block text-fg-3 mb-1">Temperature</span>
           <input
             type="number"
             step="0.1"
@@ -259,7 +259,7 @@ async function applyThinkingBudget() {
           />
         </label>
         <label v-if="currentModel?.supports_reasoning_effort ?? true" class="block text-xs">
-          <span class="block text-gray-500 mb-1">Reasoning effort</span>
+          <span class="block text-fg-3 mb-1">Reasoning effort</span>
           <select
             class="w-full border rounded px-2 py-1 text-xs"
             v-model="reasoningDraft"
@@ -272,7 +272,7 @@ async function applyThinkingBudget() {
           </select>
         </label>
         <label class="block text-xs">
-          <span class="block text-gray-500 mb-1">Max output tokens</span>
+          <span class="block text-fg-3 mb-1">Max output tokens</span>
           <input
             type="number"
             step="1"
@@ -284,7 +284,7 @@ async function applyThinkingBudget() {
           />
         </label>
         <label v-if="currentModel?.supports_thinking ?? true" class="block text-xs">
-          <span class="block text-gray-500 mb-1">Thinking budget (tokens)</span>
+          <span class="block text-fg-3 mb-1">Thinking budget (tokens)</span>
           <input
             type="number"
             step="1"
@@ -301,7 +301,7 @@ async function applyThinkingBudget() {
             !(currentModel?.supports_reasoning_effort ?? true) &&
             !(currentModel?.supports_thinking ?? true)
           "
-          class="text-xs text-gray-400"
+          class="text-xs text-fg-4"
         >
           This model has no adjustable generation knobs besides max output tokens.
         </p>

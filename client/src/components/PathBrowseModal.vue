@@ -67,18 +67,18 @@ function browsePickLeaf(leaf: LeafEntry) {
 
 <template>
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-overlay"
     @click.self="emit('close')"
   >
     <div
-      class="flex max-h-[80vh] w-[min(640px,92vw)] flex-col overflow-hidden rounded-lg border border-gray-200 bg-white"
+      class="flex max-h-[80vh] w-[min(640px,92vw)] flex-col overflow-hidden rounded-lg border border-line-2 bg-surface"
       role="dialog"
       aria-label="Browse paths"
     >
-      <header class="flex items-center justify-between border-b border-gray-200 px-4 py-2">
+      <header class="flex items-center justify-between border-b border-line-2 px-4 py-2">
         <h3 class="text-base font-medium">Browse</h3>
         <button
-          class="text-2xl leading-none text-gray-500 hover:text-gray-800"
+          class="text-2xl leading-none text-fg-3 hover:text-fg-1"
           type="button"
           @click="emit('close')"
         >
@@ -86,21 +86,21 @@ function browsePickLeaf(leaf: LeafEntry) {
         </button>
       </header>
 
-      <nav class="flex flex-wrap items-center gap-1 border-b border-gray-200 px-4 py-2 text-sm">
+      <nav class="flex flex-wrap items-center gap-1 border-b border-line-2 px-4 py-2 text-sm">
         <template v-for="(c, i) in breadcrumb" :key="c.prefix">
           <button
             type="button"
-            class="px-1 text-blue-600 hover:underline"
-            :class="{ 'cursor-default font-semibold text-gray-800 hover:no-underline': c.prefix === browsePrefix }"
+            class="px-1 text-accent hover:underline"
+            :class="{ 'cursor-default font-semibold text-fg-1 hover:no-underline': c.prefix === browsePrefix }"
             @click="loadBrowse(c.prefix)"
           >
             {{ c.label }}
           </button>
-          <span v-if="i < breadcrumb.length - 1" class="text-gray-400">/</span>
+          <span v-if="i < breadcrumb.length - 1" class="text-fg-4">/</span>
         </template>
         <button
           type="button"
-          class="ml-auto rounded border border-blue-600 px-2 py-0.5 text-xs text-blue-600 hover:bg-blue-600 hover:text-white"
+          class="ml-auto rounded border border-accent px-2 py-0.5 text-xs text-accent hover:bg-accent hover:text-fg-inverse"
           :title="'Use ' + (browsePrefix || '/') + ' as the prefix'"
           @click="browsePickFolder"
         >
@@ -109,10 +109,10 @@ function browsePickLeaf(leaf: LeafEntry) {
       </nav>
 
       <div class="overflow-y-auto p-2">
-        <p v-if="browseLoading" class="px-2 py-2 text-sm text-gray-500">Loading…</p>
+        <p v-if="browseLoading" class="px-2 py-2 text-sm text-fg-3">Loading…</p>
         <p
           v-else-if="browseFolders.length === 0 && browseLeaves.length === 0"
-          class="px-2 py-2 text-sm text-gray-500"
+          class="px-2 py-2 text-sm text-fg-3"
         >
           Empty folder.
         </p>
@@ -120,29 +120,29 @@ function browsePickLeaf(leaf: LeafEntry) {
           <li
             v-for="f in browseFolders"
             :key="'f:' + f.name"
-            class="grid cursor-pointer grid-cols-[1.2rem_1fr_auto] items-center gap-2 rounded px-2 py-1.5 hover:bg-gray-100"
+            class="grid cursor-pointer grid-cols-[1.2rem_1fr_auto] items-center gap-2 rounded px-2 py-1.5 hover:bg-surface-raised"
             @click="browseDrill(f)"
           >
-            <span class="text-center text-gray-400">▸</span>
+            <span class="text-center text-fg-4">▸</span>
             <span class="truncate">
-              {{ f.name }}<span class="text-gray-400">/</span>
+              {{ f.name }}<span class="text-fg-4">/</span>
             </span>
-            <span class="flex items-center gap-1 whitespace-nowrap text-xs text-gray-500">
+            <span class="flex items-center gap-1 whitespace-nowrap text-xs text-fg-3">
               <span
                 v-if="f.page_count"
-                class="rounded-full border border-gray-300 px-1.5 text-[0.65rem] uppercase"
+                class="rounded-full border border-line-1 px-1.5 text-[0.65rem] uppercase"
               >
                 p {{ f.page_count }}
               </span>
               <span
                 v-if="f.gallery_count"
-                class="rounded-full border border-gray-300 px-1.5 text-[0.65rem] uppercase"
+                class="rounded-full border border-line-1 px-1.5 text-[0.65rem] uppercase"
               >
                 g {{ f.gallery_count }}
               </span>
               <span
                 v-if="f.file_count"
-                class="rounded-full border border-gray-300 px-1.5 text-[0.65rem] uppercase"
+                class="rounded-full border border-line-1 px-1.5 text-[0.65rem] uppercase"
               >
                 f {{ f.file_count }}
               </span>
@@ -151,16 +151,16 @@ function browsePickLeaf(leaf: LeafEntry) {
           <li
             v-for="l in browseLeaves"
             :key="'l:' + l.namespace + ':' + l.name"
-            class="grid cursor-pointer grid-cols-[1.2rem_1fr_auto] items-center gap-2 rounded px-2 py-1.5 hover:bg-gray-100"
+            class="grid cursor-pointer grid-cols-[1.2rem_1fr_auto] items-center gap-2 rounded px-2 py-1.5 hover:bg-surface-raised"
             @click="browsePickLeaf(l)"
           >
-            <span class="text-center text-gray-400">·</span>
+            <span class="text-center text-fg-4">·</span>
             <span class="truncate">{{ l.name }}</span>
-            <span class="flex items-center gap-1 whitespace-nowrap text-xs text-gray-500">
-              <span class="rounded-full border border-gray-300 px-1.5 text-[0.65rem] uppercase">
+            <span class="flex items-center gap-1 whitespace-nowrap text-xs text-fg-3">
+              <span class="rounded-full border border-line-1 px-1.5 text-[0.65rem] uppercase">
                 {{ l.namespace }}
               </span>
-              <span v-if="l.title" class="text-gray-400">{{ l.title }}</span>
+              <span v-if="l.title" class="text-fg-4">{{ l.title }}</span>
             </span>
           </li>
         </ul>

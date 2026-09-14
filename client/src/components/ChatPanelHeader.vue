@@ -5,7 +5,6 @@ import AssistantSessionToolbar from './AssistantSessionToolbar.vue'
 defineProps<{
   showBack?: boolean
 }>()
-
 const emit = defineEmits<{ back: [] }>()
 
 const assistant = useAssistantStore()
@@ -26,7 +25,7 @@ async function promptToChangeTitle() {
       <button
         v-if="showBack"
         type="button"
-        class="md:hidden p-1 rounded hover:bg-gray-100 text-gray-600 shrink-0"
+        class="md:hidden p-1 rounded hover:bg-surface-raised text-fg-2 shrink-0"
         aria-label="Back to chats"
         @click="emit('back')"
       >

@@ -93,7 +93,7 @@ describe('PageEditView export buttons', () => {
     expect(createObjectURLSpy).toHaveBeenCalledWith(blob)
     expect(clickSpy).toHaveBeenCalled()
     expect(revokeObjectURLSpy).toHaveBeenCalledWith('blob:mock-url')
-    expect(wrapper.find('p.text-red-600').exists()).toBe(false)
+    expect(wrapper.find('p.text-danger').exists()).toBe(false)
 
     clickSpy.mockRestore()
     vi.unstubAllGlobals()
@@ -136,6 +136,6 @@ describe('PageEditView export buttons', () => {
     await exportButton!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('p.text-red-600').text()).toBe('export unavailable')
+    expect(wrapper.find('p.text-danger').text()).toBe('export unavailable')
   })
 })
