@@ -1,0 +1,35 @@
+:root[data-scheme='light'] {
+  --hover-l-delta: -0.08;
+}
+:root[data-scheme='dark'] {
+  --hover-l-delta: 0.08;
+}
+
+@theme {
+  --button-bg-primary: var(--color-primary);
+  --button-fg-primary: var(--color-fg-inverse);
+  --button-bg-danger:  var(--color-danger);
+  --button-fg-danger:  var(--color-fg-inverse);
+  --button-bg-success: var(--color-success);
+  --button-fg-success: var(--color-fg-inverse);
+}
+
+@utility button-* {
+  background-color: --value(--button-bg-*);
+  color: --value(--button-fg-*);
+
+  &:hover {
+    background-color: oklch(from --value(--button-bg-*) calc(l + var(--hover-l-delta)) c h / alpha);
+  }
+}
+
+@utility button-outline-* {
+  background-color: transparent;
+  color: --value(--button-bg-*);
+  border: 1px solid --value(--button-bg-*);
+
+  &:hover {
+    background-color: oklch(from --value(--button-bg-*) l c h / 0.1);
+    color: oklch(from --value(--button-bg-*) calc(l + var(--hover-l-delta) * 2) c h);
+  }
+}
