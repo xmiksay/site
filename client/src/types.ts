@@ -1,3 +1,5 @@
+export type DataScheme = 'light' | 'dark'
+
 export type WsTopic = 'assistant' | 'pages' | 'files' | 'galleries' | 'tags' | 'design'
 
 export interface WsEnvelope<T = any> {
