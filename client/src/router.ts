@@ -8,6 +8,7 @@ import FileEditView from './views/FileEditView.vue'
 import GalleriesView from './views/GalleriesView.vue'
 import GalleryEditView from './views/GalleryEditView.vue'
 import MenuView from './views/MenuView.vue'
+import DesignView from './views/DesignView.vue'
 import TokensView from './views/TokensView.vue'
 import UsersView from './views/UsersView.vue'
 import AssistantView from './views/AssistantView.vue'
@@ -31,6 +32,7 @@ const routes = [
   { path: '/galleries/:id/edit', component: GalleryEditView, props: true },
   { path: '/menu', component: MenuView },
   { path: '/menu/:id/edit', component: MenuView, props: true },
+  { path: '/design', component: DesignView },
   { path: '/tokens', component: TokensView },
   { path: '/users', component: UsersView },
   { path: '/assistant', component: AssistantView },

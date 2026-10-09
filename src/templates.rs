@@ -2,22 +2,25 @@ use std::sync::Arc;
 
 use minijinja::Environment;
 use minijinja::value::Value;
+use parking_lot::RwLock;
 
 use crate::design::DesignStore;
 
 /// MiniJinja templates resolved through a [`DesignStore`].
 ///
 /// Release builds compile every template once at startup and share the
-/// resulting environment read-only. Debug builds rebuild the environment from
-/// the design on every render, so editing a template file takes effect on the
+/// resulting environment read-only until a design reload recompiles it
+/// ([`Templates::refresh`]). Debug builds rebuild the environment from the
+/// design on every render, so editing a template file takes effect on the
 /// next request (live reload).
 #[derive(Clone)]
 pub struct Templates(Source);
 
 #[derive(Clone)]
 enum Source {
-    /// Release: all templates compiled up front, shared via `Arc`.
-    Frozen(Arc<Environment<'static>>),
+    /// Release: all templates compiled up front, shared via `Arc`, swapped
+    /// on refresh.
+    Frozen(Arc<DesignStore>, Arc<RwLock<Arc<Environment<'static>>>>),
     /// Debug: rebuilt from the assets on every render.
     Live(Arc<DesignStore>),
 }
@@ -29,7 +32,8 @@ impl Templates {
         if cfg!(debug_assertions) {
             Templates(Source::Live(design))
         } else {
-            Templates(Source::Frozen(Arc::new(compile_all(&design))))
+            let env = Arc::new(compile_all(&design));
+            Templates(Source::Frozen(design, Arc::new(RwLock::new(env))))
         }
     }
 
@@ -37,8 +41,16 @@ impl Templates {
     /// instance; Live builds a fresh one so on-disk edits are picked up.
     pub fn env(&self) -> Arc<Environment<'static>> {
         match &self.0 {
-            Source::Frozen(env) => env.clone(),
+            Source::Frozen(_, env) => env.read().clone(),
             Source::Live(design) => Arc::new(build_environment(design.clone())),
+        }
+    }
+
+    /// Recompile after the design's overrides changed. Live environments
+    /// already read the design per render.
+    pub fn refresh(&self) {
+        if let Source::Frozen(design, env) = &self.0 {
+            *env.write() = Arc::new(compile_all(design));
         }
     }
 }

@@ -2,6 +2,7 @@
 import { onMounted } from 'vue'
 import { useFilesStore } from '../stores/files'
 import FileUploader from '../components/FileUploader.vue'
+import { formatBytes } from '../lib/format'
 
 const files = useFilesStore()
 onMounted(() => files.load())
@@ -38,7 +39,7 @@ async function remove(id: number, title: string) {
         </div>
         <div class="p-2 text-sm">
           <div class="truncate font-medium" :title="f.title">{{ f.title }}</div>
-          <div class="text-xs text-gray-500 truncate">{{ formatSize(f.size_bytes) }}</div>
+          <div class="text-xs text-gray-500 truncate">{{ formatBytes(f.size_bytes) }}</div>
           <div class="mt-2 flex justify-between text-xs">
             <router-link :to="`/files/${f.id}/edit`" class="text-blue-600 hover:underline">
               Edit
@@ -55,10 +56,5 @@ async function remove(id: number, title: string) {
 </template>
 
 <script lang="ts">
-function formatSize(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
-}
 export default { name: 'FilesView' }
 </script>

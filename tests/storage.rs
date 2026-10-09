@@ -290,17 +290,20 @@ async fn throwaway_user(db: &DatabaseConnection, tag: &str) -> i32 {
 }
 
 /// `GET /files/{hash}` (and its thumbnail) through the public router over a
-/// full `AppState` on `storage`.
-async fn get_public(storage: StorageConfig, uri: &str) -> (StatusCode, Vec<u8>) {
+/// full `AppState` whose blobs come from `storage`. The state starts on `db`
+/// and gets `storage` swapped in: startup itself refuses an unreachable
+/// storage (design overrides), and this tests serving, not startup.
+async fn get_public(storage: Storage, uri: &str) -> (StatusCode, Vec<u8>) {
     let config = Config {
         database_url: test_db_url().expect("DATABASE_URL"),
         design_dir: None,
         serper_api_key: None,
         mdcast_url: None,
         mdcast_token: None,
-        storage,
+        storage: StorageConfig::Db,
     };
-    let state = site::state::create_state(&config).await;
+    let mut state = site::state::create_state(&config).await;
+    state.storage = storage;
     let app = axum::Router::new()
         .nest("/files", site::routes::public::images::router())
         .with_state(state);
@@ -322,15 +325,18 @@ async fn public_route_serves_from_fs_and_answers_503_when_s3_is_down() {
     };
     let ts = TestStorage::fs(&db);
     let user_id = throwaway_user(&db, "public").await;
+    // Random pixels: both the image and its JPEG thumbnail hash are this
+    // run's own, so cleanup never races another run over a shared blob.
     let png = {
+        let seed = uuid::Uuid::new_v4().into_bytes();
         let mut buf = std::io::Cursor::new(Vec::new());
-        image::RgbImage::from_pixel(4, 4, image::Rgb([200, 10, 10]))
-            .write_to(&mut buf, image::ImageFormat::Png)
-            .expect("encode png");
-        // Unique content so the hash is this test's own.
-        let mut bytes = buf.into_inner();
-        bytes.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
-        bytes
+        image::RgbImage::from_fn(4, 4, |x, y| {
+            let i = (y * 4 + x) as usize;
+            image::Rgb([seed[i], seed[(i + 5) % 16], seed[(i + 11) % 16]])
+        })
+        .write_to(&mut buf, image::ImageFormat::Png)
+        .expect("encode png");
+        buf.into_inner()
     };
     let created = files_repo::create_file(
         &db,
@@ -348,15 +354,15 @@ async fn public_route_serves_from_fs_and_answers_503_when_s3_is_down() {
     assert!(created.has_thumbnail, "thumbnail stored through fs too");
     let hash = created.model.hash.clone();
 
-    let (status, body) = get_public(ts.fs_config(), &format!("/files/{hash}")).await;
+    let (status, body) = get_public(ts.storage.clone(), &format!("/files/{hash}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, png);
-    let (status, thumb) = get_public(ts.fs_config(), &format!("/files/{hash}/nahled")).await;
+    let (status, thumb) = get_public(ts.storage.clone(), &format!("/files/{hash}/nahled")).await;
     assert_eq!(status, StatusCode::OK);
     assert!(!thumb.is_empty());
 
     let (status, _) = get_public(
-        StorageConfig::S3(dead_s3_config()),
+        Storage::s3(&dead_s3_config(), db.clone()).expect("dead s3"),
         &format!("/files/{hash}"),
     )
     .await;
@@ -364,7 +370,7 @@ async fn public_route_serves_from_fs_and_answers_503_when_s3_is_down() {
 
     // A row whose blob the backend lacks (another, empty dir) is a 404.
     let empty = TestStorage::fs(&db);
-    let (status, _) = get_public(empty.fs_config(), &format!("/files/{hash}")).await;
+    let (status, _) = get_public(empty.storage.clone(), &format!("/files/{hash}")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     let thumb_hash = site::entity::file_thumbnail::Entity::find_by_id(created.model.id)

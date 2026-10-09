@@ -342,3 +342,27 @@ export interface ToolPermissionInput {
   effect: string
   priority?: number
 }
+
+export type DesignStorageKind = 'db' | 'fs' | 's3'
+
+export interface DesignReloadStatus {
+  at: string
+  ok: boolean
+  files: number
+  error: string | null
+}
+
+export interface DesignFile {
+  path: string
+  baked: boolean
+  overridden: boolean
+  size: number
+}
+
+export interface DesignState {
+  storage: DesignStorageKind
+  editable: boolean
+  local_dir: boolean
+  last_reload: DesignReloadStatus | null
+  files: DesignFile[]
+}
