@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 
+use anyhow::Context as _;
+
+use crate::storage::StorageConfig;
+
 pub struct Config {
     pub database_url: String,
     pub design_dir: Option<PathBuf>,
@@ -11,13 +15,15 @@ pub struct Config {
     /// server — the client requires *some* token, so a placeholder is
     /// substituted at client construction (`export::build_client`).
     pub mdcast_token: Option<String>,
+    /// Where file and thumbnail bytes live (`STORAGE_KIND`, default `db`).
+    pub storage: StorageConfig,
 }
 
 impl Config {
-    pub fn from_env() -> Self {
+    pub fn from_env() -> anyhow::Result<Self> {
         dotenvy::dotenv().ok();
-        Self {
-            database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL must be set"),
+        Ok(Self {
+            database_url: std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?,
             design_dir: std::env::var("DESIGN_DIR")
                 .ok()
                 .filter(|s| !s.is_empty())
@@ -27,6 +33,7 @@ impl Config {
                 .filter(|s| !s.is_empty()),
             mdcast_url: std::env::var("MDCAST_URL").ok().filter(|s| !s.is_empty()),
             mdcast_token: std::env::var("MDCAST_TOKEN").ok().filter(|s| !s.is_empty()),
-        }
+            storage: StorageConfig::from_env()?,
+        })
     }
 }

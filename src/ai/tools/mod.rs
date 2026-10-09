@@ -23,6 +23,7 @@ use entanglement_runtime::ToolRegistry;
 use sea_orm::DatabaseConnection;
 
 use crate::routes::ws::WsHub;
+use crate::storage::Storage;
 
 /// Build the registry of built-in (non-MCP) tools: the 14 site tools — a
 /// curated subset, not full CRUD (page read/search/edit/delete, tag
@@ -34,6 +35,7 @@ use crate::routes::ws::WsHub;
 /// would (issue #25, `crate::routes::broadcast`).
 pub fn registry(
     db: Arc<DatabaseConnection>,
+    storage: Storage,
     ws_hub: Arc<WsHub>,
     serper_api_key: Option<String>,
 ) -> ToolRegistry {
@@ -56,11 +58,16 @@ pub fn registry(
     reg.register(files::ListFilesTool { db: db.clone() });
     reg.register(files::CreateFileTool {
         db: db.clone(),
+        storage: storage.clone(),
         ws_hub: ws_hub.clone(),
     });
-    reg.register(files::ReadFileTool { db: db.clone() });
+    reg.register(files::ReadFileTool {
+        db: db.clone(),
+        storage: storage.clone(),
+    });
     reg.register(files::UpdateFileTool {
         db: db.clone(),
+        storage,
         ws_hub: ws_hub.clone(),
     });
     reg.register(files::DeleteFileTool {

@@ -24,7 +24,10 @@ async fn main() {
         )
         .init();
 
-    let config = Config::from_env();
+    let config = Config::from_env().unwrap_or_else(|e| {
+        eprintln!("invalid configuration: {e:#}");
+        std::process::exit(1);
+    });
     // Migrations run inside create_state, before the assistant engine reads
     // the schema.
     let state = site::state::create_state(&config).await;

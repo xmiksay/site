@@ -91,8 +91,11 @@ use minijinja::Environment;
 use pulldown_cmark::{Options, Parser, html};
 use sea_orm::DatabaseConnection;
 
+use crate::storage::Storage;
+
 struct RenderCtx<'a> {
     db: &'a DatabaseConnection,
+    storage: &'a Storage,
     tmpl: &'a Environment<'static>,
     logged_in: bool,
     /// Pages already on the transclusion stack — prevents infinite recursion.
@@ -108,11 +111,13 @@ struct RenderCtx<'a> {
 pub async fn render(
     md: &str,
     db: &DatabaseConnection,
+    storage: &Storage,
     tmpl: &Environment<'static>,
     logged_in: bool,
 ) -> String {
     let mut ctx = RenderCtx {
         db,
+        storage,
         tmpl,
         logged_in,
         visited_pages: HashSet::new(),
@@ -153,12 +158,14 @@ pub struct BridgedMarkdown {
 pub async fn render_for_export(
     md: &str,
     db: &DatabaseConnection,
+    storage: &Storage,
     tmpl: &Environment<'static>,
     logged_in: bool,
 ) -> BridgedMarkdown {
     let mut assets = Vec::new();
     let mut ctx = RenderCtx {
         db,
+        storage,
         tmpl,
         logged_in,
         visited_pages: HashSet::new(),

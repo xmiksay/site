@@ -69,6 +69,7 @@ async fn handle(
     let artifact = match export::render_page(
         client,
         &state.db,
+        &state.storage,
         &state.design,
         &env,
         content.markdown(),

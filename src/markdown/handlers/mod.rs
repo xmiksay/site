@@ -5,9 +5,7 @@ mod json;
 mod media;
 mod simple;
 
-use sea_orm::DatabaseConnection;
-
-use crate::files;
+use crate::storage::Storage;
 
 use super::directives::Directive;
 
@@ -58,8 +56,14 @@ pub(super) enum TextBlob {
     InvalidUtf8,
 }
 
-pub(super) async fn read_text_blob(db: &DatabaseConnection, hash: &str) -> TextBlob {
-    decode_text_blob(files::read_blob(db, hash).await.ok().flatten())
+/// A storage outage renders like a missing blob (logged): one directive must
+/// not fail the whole page.
+pub(super) async fn read_text_blob(storage: &Storage, hash: &str) -> TextBlob {
+    let bytes = storage.get_blob(hash).await.unwrap_or_else(|e| {
+        tracing::warn!(hash, "reading directive blob failed: {e}");
+        None
+    });
+    decode_text_blob(bytes.map(Vec::from))
 }
 
 pub(super) fn decode_text_blob(bytes: Option<Vec<u8>>) -> TextBlob {

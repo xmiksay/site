@@ -57,10 +57,14 @@ src/
                           # sanitize_filename, shared by both export routes;
                           # bundle.rs: build_bundle, declaring every asset a
                           # render references (eager bridge SVGs + design
-                          # templates, digest-only lazy file_blobs images);
+                          # templates, digest-only lazy storage images);
                           # render.rs: ExportFormat + render_page, the
                           # render entrypoint the public/admin export routes
                           # call (#67), and load_brand (#68)
+  storage/               # mod.rs: Storage (db | fs | s3 over object_store) —
+                          # put_blob/get_blob/get_blob_stream by sha256;
+                          # config.rs: STORAGE_KIND/STORAGE_DIR/S3_*;
+                          # migrate.rs: `site_cli storage migrate`
   auth.rs config.rs design.rs files.rs
   markdown/              # mod.rs (entry + MARKDOWN_EXTENSIONS_DOC), directives.rs
                           # (tag parsing), renderer.rs (expansion pipeline),
@@ -105,7 +109,8 @@ menus               id, path unique, markdown, private (m_008)
 
 files               id, path unique (m_017), hash (SHA-256), mimetype,
                     size_bytes, description?, audit
-file_blobs          hash PK, data bytea, size_bytes (deduped by hash)
+file_blobs          hash PK, data bytea? (only STORAGE_KIND=db, m_033),
+                    size_bytes (deduped by hash; one row per blob on every backend)
 file_thumbnails     file_id PK, hash, width, height, mimetype
 galleries           id, path unique (m_020), title, description?,
                     file_ids INT[], audit
@@ -178,6 +183,22 @@ tool_permissions    id, user_id, name pattern, effect (allow|deny|prompt),
                     capability key (read|write|call), or a scoped form
                     tool(argpattern) / tool{workdirpattern} (#39)
 ```
+
+## Storage
+
+File and thumbnail bytes go through `Storage` (`src/storage/`, held as `AppState.storage`; the AI file tools, markdown text directives and the export bundle get a clone). It is content-addressed: `put_blob(bytes) -> sha256`, `get_blob(hash)`, `get_blob_stream(hash)` (the public `/files/{hash}` and `/files/{hash}/nahled` routes stream it).
+
+| `STORAGE_KIND` | Bytes live in | Notes |
+|---|---|---|
+| `db` (default) | `file_blobs.data` | The original behavior; a metadata-only row gets its bytes filled on the next put |
+| `fs` | `STORAGE_DIR/blobs/{hash[0..2]}/{hash}` | Atomic writes (temp file + rename), fsync |
+| `s3` | `{bucket}/blobs/{hash[0..2]}/{hash}` | `object_store` AWS client; 5 s connect / 30 s read timeout, 2 retries within 15 s, no total timeout (long downloads stream) |
+
+Every backend keeps one `file_blobs` row per blob (hash, size) — the FK target of `files.hash`/`file_thumbnails.hash` and the list `storage migrate` walks; only `db` fills `data` (nullable since m_033). Writes put the object **before** the row, so a row never points at unwritten bytes; a DB failure after the put leaves a harmless orphan (content-addressed, and there is no blob GC). Thumbnails are best effort: a failed thumbnail write only means `has_thumbnail: false`.
+
+Errors: an unreachable backend is `storage::Error::Unavailable` → API **503** `storage unavailable` (writes change nothing) and public serving 503; a `files` row whose blob the backend lacks is 404 publicly; a markdown directive whose blob can't be read renders like a missing file (logged). Blob keys are validated as lowercase sha256 hex, so nothing can escape the `blobs/` prefix.
+
+**Switching backends:** `site_cli storage migrate --from db | --from-dir <path>` copies every hash in `file_blobs` from the source into the configured `STORAGE_KIND` — idempotent (a present blob is verified by sha256 and skipped), the source is only read, a target object with different content is reported and kept (exit 1), every copy is read back and verified. Reads are strict afterwards: no fallback to the old backend. Run it, then switch `STORAGE_KIND`. Moving back to `db` works the same way (`--from-dir` with `STORAGE_KIND=db`); `m_033`'s `down` refuses while metadata-only rows exist.
 
 ## Routes
 
@@ -724,9 +745,9 @@ Epic #63 integrated [`mdcast`](https://github.com/xmiksay/mdcast) to render page
 
 - **bridge SVGs** (eager bytes) — `BridgedMarkdown.assets`, the synthesized fen/pgn/mermaid diagrams under `bridge/{fen,pgn,mermaid}/…`; they exist only in memory, so the bundle holds their bytes (upload still only happens on a cache miss).
 - **design templates** (eager bytes) — every `design/mdcast/*` file except `brand.toml` (via `DesignStore::list_prefix`, so a `DESIGN_DIR` override applies exactly like it does to public pages), keyed with the `mdcast/` prefix stripped (`typst/layouts/pdf/hero.typ`, `revealjs/brand.css`). Manifest keys **shadow** the server's embedded catalog per mdcast 0.4's semantics, so these override the stock layouts per key while any key the site doesn't ship falls back to the server's default. Editing a template under `DESIGN_DIR` changes its digest and re-uploads automatically.
-- **page images** (digest-only, lazy) — image destinations parsed out of the bridged markdown (plus `BrandSpec::logo` if ever set), resolved via `markdown::lookup::fetch_file`; `files.hash` *is* the manifest digest, so `file_blobs` bytes are read only inside the `409` path, when the server actually asks. An image with no `files` row is skipped with a debug log — the server warn+drops undeclared refs, the same soft failure the in-process pipeline had. Operator note: keep the server's `MDCAST_MAX_UPLOAD_BYTES` at or above this site's 50 MB file-upload cap, or large images surface as `PayloadTooLarge` → 500.
+- **page images** (digest-only, lazy) — image destinations parsed out of the bridged markdown (plus `BrandSpec::logo` if ever set), resolved via `markdown::lookup::fetch_file`; `files.hash` *is* the manifest digest, so blob bytes are read from storage only inside the `409` path, when the server actually asks. An image with no `files` row is skipped with a debug log — the server warn+drops undeclared refs, the same soft failure the in-process pipeline had. Operator note: keep the server's `MDCAST_MAX_UPLOAD_BYTES` at or above this site's 50 MB file-upload cap, or large images surface as `PayloadTooLarge` → 500.
 
-**The directive pre-render bridge (#66):** `mdcast`'s `PageSplitter::split` (and its typst backend) takes real markdown, not HTML, and typst has no notion of a raw HTML block/table — so a page's `<page>`/`<file>`/`<image>`/`<gallery>`/`<fen>`/`<pgn>`/`<mermaid>`/`<json>` directives can't be handed the same HTML `render()` produces for the browser. `markdown::render_for_export(md, db, tmpl, logged_in) -> BridgedMarkdown` (`src/markdown/mod.rs`) resolves every directive to plain markdown instead: `<fen>`/`<pgn>` render a static chess diagram via the [`chess-diagram`](https://crates.io/crates/chess-diagram) crate (`chess_diagram::render_svg`/`chess_diagram::pgn::board_at` + `SvgRenderer`) and `<mermaid>` reuses the existing `mermaid-svg` render — none of these three have a `file_blobs` row of their own, so each synthesized SVG is spliced in as a `![alt](bridge/{fen,pgn,mermaid}/<hash>[-<ply>].svg)` markdown image reference and collected into `BridgedMarkdown.assets: Vec<(String, Bytes)>`; `<json>` renders a real markdown pipe table (`handlers::json::markdown_table`) instead of an HTML `<table>`; `<page>` splices the nested page's own directive-expanded markdown inline (trimmed, blank-line-separated) instead of wrapping it in a `page.html` template; `<file>`/`<image>`/`<gallery>` emit plain `![alt](file.path)` / `[desc](file.path)` references (by path — `build_bundle` re-resolves those paths through `files` to declare their digests). `render_for_export` deliberately stops after `renderer::expand_directives` — it never runs the pulldown-cmark parse, syntect highlighting, or `links::rewrite_internal_links` that `render()` does afterward, since all three operate on/produce HTML; plain non-directive markdown passes through completely untouched. `build_bundle` (above) carries `bridged.assets` into the render request eagerly, so the server's typst/pandoc backends resolve a synthesized diagram key exactly like any other asset. **Known limitation, explicitly out of scope for #66:** the alternate ` ```fen `/` ```pgn ` fenced-code-block authoring form (a second, independent path into the same chessboard.js client dependency, handled in `src/markdown/highlight.rs`) is *not* resolved by this bridge — only the `<fen>`/`<pgn>` directive-tag form is — so a page using the fenced form still exports as a plain, unrendered code block.
+**The directive pre-render bridge (#66):** `mdcast`'s `PageSplitter::split` (and its typst backend) takes real markdown, not HTML, and typst has no notion of a raw HTML block/table — so a page's `<page>`/`<file>`/`<image>`/`<gallery>`/`<fen>`/`<pgn>`/`<mermaid>`/`<json>` directives can't be handed the same HTML `render()` produces for the browser. `markdown::render_for_export(md, db, storage, tmpl, logged_in) -> BridgedMarkdown` (`src/markdown/mod.rs`) resolves every directive to plain markdown instead: `<fen>`/`<pgn>` render a static chess diagram via the [`chess-diagram`](https://crates.io/crates/chess-diagram) crate (`chess_diagram::render_svg`/`chess_diagram::pgn::board_at` + `SvgRenderer`) and `<mermaid>` reuses the existing `mermaid-svg` render — none of these three have a `file_blobs` row of their own, so each synthesized SVG is spliced in as a `![alt](bridge/{fen,pgn,mermaid}/<hash>[-<ply>].svg)` markdown image reference and collected into `BridgedMarkdown.assets: Vec<(String, Bytes)>`; `<json>` renders a real markdown pipe table (`handlers::json::markdown_table`) instead of an HTML `<table>`; `<page>` splices the nested page's own directive-expanded markdown inline (trimmed, blank-line-separated) instead of wrapping it in a `page.html` template; `<file>`/`<image>`/`<gallery>` emit plain `![alt](file.path)` / `[desc](file.path)` references (by path — `build_bundle` re-resolves those paths through `files` to declare their digests). `render_for_export` deliberately stops after `renderer::expand_directives` — it never runs the pulldown-cmark parse, syntect highlighting, or `links::rewrite_internal_links` that `render()` does afterward, since all three operate on/produce HTML; plain non-directive markdown passes through completely untouched. `build_bundle` (above) carries `bridged.assets` into the render request eagerly, so the server's typst/pandoc backends resolve a synthesized diagram key exactly like any other asset. **Known limitation, explicitly out of scope for #66:** the alternate ` ```fen `/` ```pgn ` fenced-code-block authoring form (a second, independent path into the same chessboard.js client dependency, handled in `src/markdown/highlight.rs`) is *not* resolved by this bridge — only the `<fen>`/`<pgn>` directive-tag form is — so a page using the fenced form still exports as a plain, unrendered code block.
 
 **The render pipeline + HTTP routes (#67):** `src/export/render.rs` exposes `ExportFormat` (`Pdf` | `Slides`, `::parse`/`::target`/`::content_type`) and the entrypoint `render_page(client, db, design, tmpl, markdown_src, title, logged_in, format) -> Result<mdcast_client::Artifact, ExportError>`: it runs `markdown::render_for_export`, loads the `BrandSpec` (see below), assembles the bundle via `build_bundle`, and posts a `RenderMarkdownRequest` (raw bridged markdown, `meta.title`, `brand`, target) through `mdcast_client::Client::render`, which handles the `409 → upload → retry` negotiation internally. Splitting and auto-classification happen **server-side** against the request's `brand.auto_layout`. One behavior delta vs. the old in-process pipeline: the server extracts a leading YAML frontmatter block from the markdown, and its `title` beats the request's `meta.title` (the page title passed here).
 

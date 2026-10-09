@@ -102,7 +102,14 @@ pub async fn catch_all(
             if menu_item.private && !logged_in {
                 return render_404(&state, &nav, logged_in);
             }
-            let body_html = markdown::render(&menu_item.markdown, &state.db, &env, logged_in).await;
+            let body_html = markdown::render(
+                &menu_item.markdown,
+                &state.db,
+                &state.storage,
+                &env,
+                logged_in,
+            )
+            .await;
             match tmpl.render(context! {
                 body_html,
                 menu_list => nav.list,
@@ -119,7 +126,8 @@ pub async fn catch_all(
                 return render_404(&state, &nav, logged_in);
             }
 
-            let body_html = markdown::render(&pg.markdown, &state.db, &env, logged_in).await;
+            let body_html =
+                markdown::render(&pg.markdown, &state.db, &state.storage, &env, logged_in).await;
             let page_view = pages::PageView::from(&pg);
 
             let tags = tag::Entity::find()

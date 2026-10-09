@@ -49,7 +49,7 @@ mod tests {
 ```
 
 Keep unit tests to **pure logic**. Anything that needs the database (SeaORM
-queries, `put_blob`/`read_blob`, revision reconstruction) belongs in an
+queries, `Storage::put_blob`/`get_blob`, revision reconstruction) belongs in an
 integration test, not here.
 
 ## Client tests (Vue / vitest)
@@ -115,6 +115,15 @@ CI runs this suite for real: both `.github/workflows/backend.yml` (per-PR) and
 `DATABASE_URL`, and run `site_migration` before the test step, so `tests/`
 executes on every PR rather than self-skipping.
 
+- `tests/storage.rs` — one suite over every blob backend (`db`, `fs`, `s3`),
+  `storage migrate`, and the public `/files/{hash}` route over fs plus a dead
+  S3 endpoint (503). Backends come from `tests/common/storage.rs`
+  (`#[path]`-included): a temp dir, or a random `test-<uuid>/` prefix in the
+  Garage test bucket, removed on drop. The S3 tests **fail, not skip**, without
+  `TEST_S3_ENDPOINT/BUCKET/REGION/ACCESS_KEY_ID/SECRET_ACCESS_KEY` — CI passes
+  them from GitHub secrets; locally `make test-integration` reads exactly
+  these lines from `.env` (see `.env.example`) and never `.env`'s
+  `DATABASE_URL`.
 - `tests/policy_db.rs` — `SitePolicy`/`tool_permissions` resolution against a
   real `tool_permissions` table (FK to `users`, so it can't be faked
   in-memory).

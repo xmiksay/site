@@ -47,6 +47,7 @@ async fn export_page(
     let artifact = export::render_page(
         client,
         &state.db,
+        &state.storage,
         &state.design,
         &env,
         &pg.markdown,

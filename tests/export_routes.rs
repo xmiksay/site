@@ -55,6 +55,7 @@ async fn setup_with(db_url: &str, tag: &str, negotiate: bool) -> Fixture {
         serper_api_key: None,
         mdcast_url: Some(mock.base_url.clone()),
         mdcast_token: None,
+        storage: Default::default(),
     };
     let state: AppState = state::create_state(&config).await;
     let db = state.db.clone();
@@ -266,7 +267,8 @@ async fn cold_cache_negotiation_uploads_the_missing_blob_and_retries() {
     let image_path = format!("export-routes-test/img-{}.png", uuid::Uuid::new_v4());
     let image_bytes: &[u8] = b"\x89PNG fake image bytes for negotiation";
     let hash = site::files::hash_blob(image_bytes);
-    site::files::put_blob(&fx.db, &hash, image_bytes)
+    site::storage::Storage::db(fx.db.clone())
+        .put_blob(image_bytes)
         .await
         .expect("insert blob");
     let now = chrono::Utc::now().fixed_offset();

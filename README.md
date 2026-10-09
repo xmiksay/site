@@ -77,6 +77,13 @@ docker compose exec app ./site_migration
 | `SERPER_API_KEY` | Optional — enables the `web_search` tool inside the AI assistant | unset |
 | `MDCAST_URL` | Base URL of the remote [`mdcast-server`](https://github.com/xmiksay/mdcast) that renders PDF/slides exports — export routes answer 503 while unset | unset |
 | `MDCAST_TOKEN` | Bearer token for `mdcast-server` (unset sends a placeholder, fine for a tokenless server) | unset |
+| `STORAGE_KIND` | Where file and thumbnail bytes live: `db` (`file_blobs.data`), `fs` or `s3`. Move existing blobs with `site_cli storage migrate` before switching | `db` |
+| `STORAGE_DIR` | Root directory for `STORAGE_KIND=fs` (created at start) | `./data` |
+| `S3_ENDPOINT` | S3-compatible endpoint for `STORAGE_KIND=s3` (empty → AWS) | unset |
+| `S3_BUCKET` | Bucket (required for `s3`) | unset |
+| `S3_REGION` | Region | `us-east-1` |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | Credentials (required for `s3`) | unset |
+| `S3_PATH_STYLE` | `true` for Garage/MinIO (`{endpoint}/{bucket}/{key}`); `false` puts the bucket into the host | `false` |
 | `PUBLIC_URL` | Public base URL for absolute `<loc>` entries in `/sitemap.xml` | unset (falls back to `SELF_URL`, then `http://localhost:3000`) |
 | `SELF_URL` | Fallback base URL for the sitemap when `PUBLIC_URL` is unset | unset |
 

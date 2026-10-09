@@ -114,6 +114,7 @@ pub(super) async fn tool_file_create(
 
     match files_repo::create_file(
         &state.db,
+        &state.storage,
         user_id,
         NewFile {
             path: args.path,
@@ -176,7 +177,7 @@ pub(super) async fn tool_file_read(
             });
             if args.include_content.unwrap_or(false) {
                 if files_repo::is_text_content(&f.model.mimetype) {
-                    match crate::files::read_blob(&state.db, &f.model.hash).await {
+                    match state.storage.get_blob(&f.model.hash).await {
                         Ok(Some(data)) => {
                             result["content"] = json!(String::from_utf8_lossy(&data));
                         }
@@ -185,7 +186,7 @@ pub(super) async fn tool_file_read(
                             result["content_error"] = json!("blob data missing");
                         }
                         Err(e) => {
-                            return tool_db_error(id, "Database error", e);
+                            return tool_db_error(id, "Reading file content failed", e);
                         }
                     }
                 } else {
@@ -222,6 +223,7 @@ pub(super) async fn tool_file_update(
 
     match files_repo::update_metadata(
         &state.db,
+        &state.storage,
         args.id,
         FileMetaUpdate {
             path: args.path,

@@ -137,6 +137,7 @@ impl SiteEngine {
     /// seam — see the module doc.
     pub async fn spawn(
         db: DatabaseConnection,
+        storage: crate::storage::Storage,
         ai_config: Arc<AiConfig>,
         ws_hub: Arc<WsHub>,
         serper_api_key: Option<String>,
@@ -147,7 +148,12 @@ impl SiteEngine {
             .context("loading model catalog")?;
         let policy = SitePolicy::new(db.clone());
 
-        let registry = tools::registry(Arc::new(db.clone()), ws_hub.clone(), serper_api_key);
+        let registry = tools::registry(
+            Arc::new(db.clone()),
+            storage,
+            ws_hub.clone(),
+            serper_api_key,
+        );
         // The resolver's constant baseline (see `tool_spec_resolver` below):
         // it must never include another user's MCP tool identities, only the
         // per-session `SiteMcp::tool_specs_for_user` extra layered on top of

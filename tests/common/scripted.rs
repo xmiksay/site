@@ -241,8 +241,10 @@ async fn build_fixture(
 
     let ai_config = std::sync::Arc::new(AiConfig::new());
     let ws_hub = std::sync::Arc::new(WsHub::new());
+    let storage = site::storage::Storage::db(db.clone());
     let engine = SiteEngine::spawn(
         db.clone(),
+        storage.clone(),
         ai_config,
         ws_hub.clone(),
         None,
@@ -255,6 +257,7 @@ async fn build_fixture(
     }
     let state = AppState {
         db: db.clone(),
+        storage,
         tmpl: site::templates::Templates::new(std::sync::Arc::new(site::design::DesignStore::new(
             None,
         ))),

@@ -17,6 +17,7 @@ use crate::ai::engine::user_id_from_session;
 use crate::repo::files::{self as files_repo, FileMetaUpdate, FileSaveError, NewFile};
 use crate::routes::broadcast;
 use crate::routes::ws::WsHub;
+use crate::storage::Storage;
 
 pub struct ListFilesTool {
     pub db: Arc<DatabaseConnection>,
@@ -71,6 +72,7 @@ impl Tool for ListFilesTool {
 
 pub struct CreateFileTool {
     pub db: Arc<DatabaseConnection>,
+    pub storage: Storage,
     pub ws_hub: Arc<WsHub>,
 }
 
@@ -130,6 +132,7 @@ impl Tool for CreateFileTool {
 
         let created = match files_repo::create_file(
             &self.db,
+            &self.storage,
             user_id,
             NewFile {
                 path,
@@ -167,6 +170,7 @@ impl Tool for CreateFileTool {
 
 pub struct ReadFileTool {
     pub db: Arc<DatabaseConnection>,
+    pub storage: Storage,
 }
 
 #[async_trait]
@@ -225,7 +229,9 @@ impl Tool for ReadFileTool {
         });
         if include_content {
             if files_repo::is_text_content(&f.model.mimetype) {
-                match crate::files::read_blob(self.db.as_ref(), &f.model.hash)
+                match self
+                    .storage
+                    .get_blob(&f.model.hash)
                     .await
                     .context("reading file blob")?
                 {
@@ -247,6 +253,7 @@ impl Tool for ReadFileTool {
 
 pub struct UpdateFileTool {
     pub db: Arc<DatabaseConnection>,
+    pub storage: Storage,
     pub ws_hub: Arc<WsHub>,
 }
 
@@ -306,6 +313,7 @@ impl Tool for UpdateFileTool {
 
         let updated = match files_repo::update_metadata(
             &self.db,
+            &self.storage,
             id,
             FileMetaUpdate {
                 path,

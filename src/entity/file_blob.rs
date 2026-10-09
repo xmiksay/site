@@ -5,8 +5,9 @@ use sea_orm::entity::prelude::*;
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub hash: String,
+    /// Filled only by the `db` storage backend.
     #[serde(skip)]
-    pub data: Vec<u8>,
+    pub data: Option<Vec<u8>>,
     pub size_bytes: i64,
     pub created_at: DateTimeWithTimeZone,
 }

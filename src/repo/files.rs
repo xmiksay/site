@@ -6,9 +6,10 @@ use sea_orm::{
 };
 
 use crate::entity::{file, file_thumbnail};
-use crate::files::{hash_blob, make_thumbnail, put_blob};
+use crate::files::make_thumbnail;
 use crate::path_util;
 use crate::repo::pages::ChildRow;
+use crate::storage::{self, Storage};
 
 pub async fn list_children(
     db: &DatabaseConnection,
@@ -88,6 +89,7 @@ pub enum FileSaveError {
     EmptyPath,
     EmptyData,
     Db(DbErr),
+    Storage(storage::Error),
 }
 
 impl std::fmt::Display for FileSaveError {
@@ -96,6 +98,7 @@ impl std::fmt::Display for FileSaveError {
             Self::EmptyPath => write!(f, "path is required"),
             Self::EmptyData => write!(f, "decoded data is empty"),
             Self::Db(e) => write!(f, "{e}"),
+            Self::Storage(e) => write!(f, "{e}"),
         }
     }
 }
@@ -103,6 +106,12 @@ impl std::fmt::Display for FileSaveError {
 impl From<DbErr> for FileSaveError {
     fn from(e: DbErr) -> Self {
         Self::Db(e)
+    }
+}
+
+impl From<storage::Error> for FileSaveError {
+    fn from(e: storage::Error) -> Self {
+        Self::Storage(e)
     }
 }
 
@@ -157,6 +166,7 @@ pub fn embed_hint(path: &str, mimetype: &str, id: i32) -> String {
 
 pub async fn create_file(
     db: &DatabaseConnection,
+    storage: &Storage,
     user_id: i32,
     input: NewFile,
 ) -> Result<CreatedFile, FileSaveError> {
@@ -167,9 +177,8 @@ pub async fn create_file(
     if input.data.is_empty() {
         return Err(FileSaveError::EmptyData);
     }
-    let hash = hash_blob(&input.data);
     let size_bytes = input.data.len() as i64;
-    put_blob(db, &hash, &input.data).await?;
+    let hash = storage.put_blob(&input.data).await?;
 
     let now = chrono::Utc::now().fixed_offset();
     let model = file::ActiveModel {
@@ -185,23 +194,7 @@ pub async fn create_file(
     .insert(db)
     .await?;
 
-    let mut has_thumbnail = false;
-    if let Some(thumb) = make_thumbnail(&input.data, &input.mimetype) {
-        let thumb_hash = hash_blob(&thumb.data);
-        if put_blob(db, &thumb_hash, &thumb.data).await.is_ok() {
-            let thumb_row = file_thumbnail::ActiveModel {
-                file_id: Set(model.id),
-                hash: Set(thumb_hash),
-                width: Set(thumb.width as i32),
-                height: Set(thumb.height as i32),
-                mimetype: Set(thumb.mimetype.to_string()),
-                created_at: Set(now),
-            };
-            if thumb_row.insert(db).await.is_ok() {
-                has_thumbnail = true;
-            }
-        }
-    }
+    let has_thumbnail = store_thumbnail(db, storage, model.id, &input.data, &input.mimetype).await;
 
     Ok(CreatedFile {
         model,
@@ -277,6 +270,7 @@ pub async fn has_thumbnail(db: &DatabaseConnection, file_id: i32) -> Result<bool
 
 pub async fn update_metadata(
     db: &DatabaseConnection,
+    storage: &Storage,
     id: i32,
     update: FileMetaUpdate,
 ) -> Result<Option<FileWithThumb>, FileSaveError> {
@@ -290,9 +284,7 @@ pub async fn update_metadata(
     let new_data = match update.data {
         Some(data) if data.is_empty() => return Err(FileSaveError::EmptyData),
         Some(data) => {
-            let hash = hash_blob(&data);
-            put_blob(db, &hash, &data).await?;
-            active.hash = Set(hash);
+            active.hash = Set(storage.put_blob(&data).await?);
             active.size_bytes = Set(data.len() as i64);
             Some(data)
         }
@@ -306,25 +298,7 @@ pub async fn update_metadata(
 
     let has_thumbnail = if let Some(data) = new_data {
         file_thumbnail::Entity::delete_by_id(id).exec(db).await?;
-        let mut has_thumbnail = false;
-        if let Some(thumb) = make_thumbnail(&data, &updated.mimetype) {
-            let thumb_hash = hash_blob(&thumb.data);
-            if put_blob(db, &thumb_hash, &thumb.data).await.is_ok() {
-                let now = chrono::Utc::now().fixed_offset();
-                let thumb_row = file_thumbnail::ActiveModel {
-                    file_id: Set(id),
-                    hash: Set(thumb_hash),
-                    width: Set(thumb.width as i32),
-                    height: Set(thumb.height as i32),
-                    mimetype: Set(thumb.mimetype.to_string()),
-                    created_at: Set(now),
-                };
-                if thumb_row.insert(db).await.is_ok() {
-                    has_thumbnail = true;
-                }
-            }
-        }
-        has_thumbnail
+        store_thumbnail(db, storage, id, &data, &updated.mimetype).await
     } else {
         has_thumbnail(db, id).await?
     };
@@ -335,110 +309,43 @@ pub async fn update_metadata(
     }))
 }
 
+/// Best effort: a file without a thumbnail is still a valid file, so any
+/// failure here only means `has_thumbnail: false`.
+async fn store_thumbnail(
+    db: &DatabaseConnection,
+    storage: &Storage,
+    file_id: i32,
+    data: &[u8],
+    mimetype: &str,
+) -> bool {
+    let Some(thumb) = make_thumbnail(data, mimetype) else {
+        return false;
+    };
+    let hash = match storage.put_blob(&thumb.data).await {
+        Ok(hash) => hash,
+        Err(e) => {
+            tracing::warn!(file_id, "storing thumbnail failed: {e}");
+            return false;
+        }
+    };
+    file_thumbnail::ActiveModel {
+        file_id: Set(file_id),
+        hash: Set(hash),
+        width: Set(thumb.width as i32),
+        height: Set(thumb.height as i32),
+        mimetype: Set(thumb.mimetype.to_string()),
+        created_at: Set(chrono::Utc::now().fixed_offset()),
+    }
+    .insert(db)
+    .await
+    .is_ok()
+}
+
 pub async fn delete_by_id(db: &DatabaseConnection, id: i32) -> Result<bool, DbErr> {
     let res = file::Entity::delete_by_id(id).exec(db).await?;
     Ok(res.rows_affected > 0)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{embed_hint, infer_mimetype, is_text_content};
-
-    #[test]
-    fn pgn_hints_pgn_directive() {
-        assert_eq!(
-            embed_hint("game.pgn", "application/octet-stream", 1),
-            r#"<pgn id="1">"#
-        );
-    }
-
-    #[test]
-    fn mermaid_hints_mermaid_directive() {
-        assert_eq!(
-            embed_hint("diagrams/flow.mmd", "text/plain", 2),
-            r#"<mermaid id="2">"#
-        );
-    }
-
-    #[test]
-    fn fen_hints_fen_directive() {
-        assert_eq!(
-            embed_hint("opening.fen", "application/x-chess-fen", 3),
-            r#"<fen id="3">"#
-        );
-    }
-
-    #[test]
-    fn json_hints_json_directive_with_query_placeholder() {
-        assert_eq!(
-            embed_hint("data/stats.json", "application/json", 4),
-            r#"<json id="4" query=".">"#
-        );
-    }
-
-    #[test]
-    fn image_mimetype_hints_image_directive() {
-        assert_eq!(
-            embed_hint("photo.jpg", "image/jpeg", 5),
-            r#"<image id="5">"#
-        );
-    }
-
-    #[test]
-    fn unknown_type_hints_file_directive() {
-        assert_eq!(embed_hint("notes.txt", "text/plain", 6), r#"<file id="6">"#);
-    }
-
-    #[test]
-    fn extension_wins_over_generic_mimetype() {
-        assert_eq!(
-            embed_hint("game.pgn", "application/octet-stream", 7),
-            r#"<pgn id="7">"#
-        );
-    }
-
-    #[test]
-    fn infers_pgn_mimetype() {
-        assert_eq!(infer_mimetype("game.pgn"), "application/x-chess-pgn");
-    }
-
-    #[test]
-    fn infers_mermaid_mimetype() {
-        assert_eq!(infer_mimetype("diagrams/flow.mmd"), "text/vnd.mermaid");
-    }
-
-    #[test]
-    fn infers_fen_mimetype() {
-        assert_eq!(infer_mimetype("opening.fen"), "text/plain");
-    }
-
-    #[test]
-    fn infers_known_extension_via_mime_guess() {
-        assert_eq!(infer_mimetype("photo.jpg"), "image/jpeg");
-    }
-
-    #[test]
-    fn falls_back_to_octet_stream_for_unknown_extension() {
-        assert_eq!(infer_mimetype("blob.bin"), "application/octet-stream");
-    }
-
-    #[test]
-    fn text_plain_is_text_content() {
-        assert!(is_text_content("text/plain"));
-    }
-
-    #[test]
-    fn json_is_text_content() {
-        assert!(is_text_content("application/json"));
-    }
-
-    #[test]
-    fn pgn_is_text_content() {
-        assert!(is_text_content("application/x-chess-pgn"));
-    }
-
-    #[test]
-    fn image_is_not_text_content() {
-        assert!(!is_text_content("image/png"));
-    }
-}
+#[path = "files_tests.rs"]
+mod tests;

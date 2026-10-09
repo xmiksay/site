@@ -32,6 +32,7 @@ mod m_029_add_llm_models_generation_capabilities;
 mod m_030_rename_tools_to_resource_operation;
 mod m_031_purge_assistant_history;
 mod m_032_add_assistant_sessions_parent;
+mod m_033_file_blobs_data_nullable;
 
 pub struct Migrator;
 
@@ -71,6 +72,7 @@ impl MigratorTrait for Migrator {
             Box::new(m_030_rename_tools_to_resource_operation::Migration),
             Box::new(m_031_purge_assistant_history::Migration),
             Box::new(m_032_add_assistant_sessions_parent::Migration),
+            Box::new(m_033_file_blobs_data_nullable::Migration),
         ]
     }
 }

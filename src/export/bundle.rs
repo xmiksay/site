@@ -22,12 +22,12 @@ use bytes::Bytes;
 use mdcast_client::AssetBundle;
 use mdcast_client::mdcast_api::{BrandSpec, Digest};
 use pulldown_cmark::{Event, Parser, Tag};
-use sea_orm::{DatabaseConnection, DbErr};
+use sea_orm::DatabaseConnection;
 
 use crate::design::DesignStore;
-use crate::files;
 use crate::markdown::BridgedMarkdown;
 use crate::markdown::lookup::{FileLookup, fetch_file};
+use crate::storage::Storage;
 
 /// `DesignStore` prefix holding the mdcast template overrides.
 const DESIGN_PREFIX: &str = "mdcast/";
@@ -40,6 +40,7 @@ const BRAND_TOML: &str = "mdcast/brand.toml";
 /// pipeline had.
 pub async fn build_bundle(
     db: &DatabaseConnection,
+    storage: &Storage,
     design: &DesignStore,
     brand: &BrandSpec,
     bridged: &BridgedMarkdown,
@@ -59,7 +60,7 @@ pub async fn build_bundle(
         keys.insert(logo.key.clone());
     }
     for key in keys {
-        insert_db_image(db, &mut bundle, key).await?;
+        insert_db_image(db, storage, &mut bundle, key).await?;
     }
 
     Ok(bundle)
@@ -105,9 +106,10 @@ fn is_content_key(dest: &str) -> bool {
 }
 
 /// Declare `key` digest-only from its `files` row; bytes are fetched from
-/// `file_blobs` only if the server reports the digest missing.
+/// storage only if the server reports the digest missing.
 async fn insert_db_image(
     db: &DatabaseConnection,
+    storage: &Storage,
     bundle: &mut AssetBundle,
     key: String,
 ) -> Result<()> {
@@ -118,18 +120,22 @@ async fn insert_db_image(
     let digest = Digest::parse(file.hash.clone())
         .with_context(|| format!("files.hash for `{key}` is not a lowercase sha256 digest"))?;
 
-    let db = db.clone();
+    let storage = storage.clone();
     let hash = file.hash;
     let fetch_key = key.clone();
     bundle.insert_digest(key, digest, move || {
-        let (db, hash, key) = (db.clone(), hash.clone(), fetch_key.clone());
+        let (storage, hash, key) = (storage.clone(), hash.clone(), fetch_key.clone());
         async move {
-            match files::read_blob(&db, &hash).await? {
-                Some(data) => Ok(Bytes::from(data)),
-                None => Err(DbErr::Custom(format!(
-                    "blob {hash} missing for asset key `{key}`"
-                ))),
-            }
+            storage
+                .get_blob(&hash)
+                .await
+                .map_err(std::io::Error::other)?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("blob {hash} missing for asset key `{key}`"),
+                    )
+                })
         }
     });
     Ok(())

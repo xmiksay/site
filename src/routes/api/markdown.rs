@@ -24,6 +24,6 @@ pub async fn render(
     Json(input): Json<RenderInput>,
 ) -> ApiResult<Json<RenderOutput>> {
     let env = state.tmpl.env();
-    let html = markdown::render(&input.markdown, &state.db, &env, true).await;
+    let html = markdown::render(&input.markdown, &state.db, &state.storage, &env, true).await;
     Ok(Json(RenderOutput { html }))
 }
