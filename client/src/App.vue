@@ -124,6 +124,7 @@ const nav = [
   { to: '/files', label: 'Files' },
   { to: '/galleries', label: 'Galleries' },
   { to: '/menu', label: 'Menu' },
+  { to: '/design', label: 'Design' },
   { to: '/tokens', label: 'Tokens' },
   { to: '/users', label: 'Users' },
   { to: '/assistant', label: 'Assistant' },

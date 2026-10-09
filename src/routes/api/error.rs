@@ -12,6 +12,7 @@ pub enum ApiError {
     Conflict(String),
     Internal(String),
     ServiceUnavailable(String),
+    Unprocessable(String),
 }
 
 impl ApiError {
@@ -23,6 +24,7 @@ impl ApiError {
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
         }
     }
 
@@ -31,7 +33,8 @@ impl ApiError {
             Self::BadRequest(msg)
             | Self::Conflict(msg)
             | Self::Internal(msg)
-            | Self::ServiceUnavailable(msg) => msg.clone(),
+            | Self::ServiceUnavailable(msg)
+            | Self::Unprocessable(msg) => msg.clone(),
             Self::Unauthorized => "unauthorized".to_string(),
             Self::NotFound => "not found".to_string(),
         }
@@ -62,6 +65,8 @@ impl From<crate::storage::Error> for ApiError {
                 Self::ServiceUnavailable("storage unavailable".into())
             }
             Error::Db(db) => db.into(),
+            Error::InvalidKey(key) => Self::BadRequest(format!("invalid path {key:?}")),
+            Error::NoObjectStore => Self::Conflict(err.to_string()),
             Error::InvalidHash(_) => {
                 tracing::error!("{err}");
                 Self::Internal("internal error".into())

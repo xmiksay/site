@@ -124,6 +124,11 @@ executes on every PR rather than self-skipping.
   them from GitHub secrets; locally `make test-integration` reads exactly
   these lines from `.env` (see `.env.example`) and never `.env`'s
   `DATABASE_URL`.
+- `tests/design.rs`, `tests/design_api.rs` — design overrides (#110):
+  `DesignStore::apply` over fs and S3 (save, 422-style rejection of a broken
+  template, external edit + reload, failed reload keeps the design, delete),
+  dead S3 → 503, `design push`; and `/api/design` over a full `AppState`
+  driving what the public 404 page renders (fs) and staying read-only (db).
 - `tests/policy_db.rs` — `SitePolicy`/`tool_permissions` resolution against a
   real `tool_permissions` table (FK to `users`, so it can't be faked
   in-memory).

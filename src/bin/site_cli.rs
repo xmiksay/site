@@ -70,6 +70,15 @@ async fn main() {
                 }
             }
         }
+        Some("design") if args.get(2).map(String::as_str) == Some("push") => {
+            match design_push(&args[3..]).await {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("design push: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
         _ => {
             eprintln!("Usage: site_cli <command>");
             eprintln!("Commands:");
@@ -77,6 +86,9 @@ async fn main() {
             eprintln!("  change-password <username> <password>   Change password");
             eprintln!(
                 "  storage migrate --from db | --from-dir <path>\n                                          Copy every blob into the configured STORAGE_KIND"
+            );
+            eprintln!(
+                "  design push <dir>                       Upload a design folder as storage overrides"
             );
             std::process::exit(1);
         }
@@ -109,4 +121,29 @@ async fn storage_migrate(args: &[String]) -> anyhow::Result<bool> {
     }
     println!("{}", report.summary());
     Ok(report.problems.is_empty())
+}
+
+/// Upload a design folder; the server applies it on its next reload.
+async fn design_push(args: &[String]) -> anyhow::Result<()> {
+    use anyhow::{Context as _, bail};
+    use site::storage::{Storage, StorageConfig};
+
+    let [dir] = args else {
+        bail!("usage: site_cli design push <dir>");
+    };
+    let db = Database::connect(std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?)
+        .await
+        .context("connect to the database")?;
+    let storage = Storage::new(&StorageConfig::from_env()?, db)?;
+    let report = site::design::push::push(&storage, std::path::Path::new(dir)).await?;
+    for skipped in &report.skipped {
+        println!("  skipped (outside templates/, assets/, mdcast/): {skipped}");
+    }
+    println!(
+        "{} uploaded, {} unchanged, {} skipped — click Reload in the admin Design page",
+        report.uploaded.len(),
+        report.unchanged.len(),
+        report.skipped.len()
+    );
+    Ok(())
 }

@@ -6,10 +6,12 @@
 //! Every backend keeps a `file_blobs` row per blob (hash, size): the
 //! `files`/`file_thumbnails` foreign keys point at it, and `storage migrate`
 //! walks it. Only the `db` backend fills its `data` column. Object keys are
-//! `blobs/{hash[0..2]}/{hash}`.
+//! `blobs/{hash[0..2]}/{hash}`. Object backends also hold keyed objects
+//! (design overrides under `design/…`, see [`objects`]).
 
 pub mod config;
 pub mod migrate;
+mod objects;
 
 use std::path::Path as FsPath;
 use std::sync::Arc;
@@ -30,6 +32,7 @@ use sea_orm::{
 
 use crate::files::hash_blob;
 pub use config::{S3Config, StorageConfig};
+pub use objects::{Object, Version, parse_key};
 
 /// Bounds how long a request waits on an unreachable bucket before it fails
 /// with 503 (the crate's default retries for minutes). No total timeout: it
@@ -46,6 +49,11 @@ const BLOB_PREFIX: &str = "blobs";
 pub enum Error {
     #[error("invalid blob hash {0:?}")]
     InvalidHash(String),
+    #[error("invalid storage key {0:?}")]
+    InvalidKey(String),
+    /// Keyed objects (design overrides) need an object backend.
+    #[error("the db storage backend holds no keyed objects; use STORAGE_KIND fs or s3")]
+    NoObjectStore,
     #[error("storage unavailable: {0}")]
     Unavailable(#[source] object_store::Error),
     #[error(transparent)]

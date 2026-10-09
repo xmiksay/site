@@ -75,6 +75,12 @@ pub async fn create_state(config: &Config) -> AppState {
 
     let design = Arc::new(DesignStore::new(config.design_dir.clone()));
     let tmpl = Templates::new(design.clone());
+    // Refuse the start rather than serve the baked design in place of the
+    // site's own while the bucket is down or an override is broken.
+    design
+        .apply(&storage, &tmpl, None)
+        .await
+        .expect("Failed to load design overrides from storage");
 
     // Before the engine (and its per-provider HTTP clients) starts writing
     // fresh endpoint state of its own.

@@ -61,11 +61,14 @@ src/
                           # render.rs: ExportFormat + render_page, the
                           # render entrypoint the public/admin export routes
                           # call (#67), and load_brand (#68)
+  design/                # mod.rs: DesignStore (DESIGN_DIR → stored → baked);
+                          # stored.rs: design/… overrides, validated reload;
+                          # push.rs: `site_cli design push`
   storage/               # mod.rs: Storage (db | fs | s3 over object_store) —
                           # put_blob/get_blob/get_blob_stream by sha256;
                           # config.rs: STORAGE_KIND/STORAGE_DIR/S3_*;
                           # migrate.rs: `site_cli storage migrate`
-  auth.rs config.rs design.rs files.rs
+  auth.rs config.rs files.rs
   markdown/              # mod.rs (entry + MARKDOWN_EXTENSIONS_DOC), directives.rs
                           # (tag parsing), renderer.rs (expansion pipeline),
                           # lookup.rs (file/gallery/page resolution), highlight.rs
@@ -84,11 +87,11 @@ design/                   # Baked default design bundle (via rust-embed)
                           # see "Export (mdcast)" below
 ```
 
-Design/template resolution (see `src/design.rs`, `DesignStore`):
-`DESIGN_DIR` override folder → baked `design/` → not found.
-The override folder mirrors the bundle layout (`templates/`, `assets/{css,js,img}`,
-`mdcast/`) and lets a deployment ship its own design as a plain folder instead of
-recompiling. With no `DESIGN_DIR` set, only the baked `design/` bundle is used.
+Design/template resolution (see `src/design/`, `DesignStore`):
+`DESIGN_DIR` (dev-only, live) → storage overrides (`design/…` keys) → baked
+`design/` → not found. All override layers mirror the bundle layout
+(`templates/`, `assets/{css,js,img}`, `mdcast/`); only paths under those three
+roots are served or accepted. See [Design overrides](#design-overrides).
 
 Templates (`src/templates.rs`, `Templates`) sit on top of the same `DesignStore`:
 release builds compile every template once at startup (frozen, shared); debug
@@ -200,6 +203,16 @@ Errors: an unreachable backend is `storage::Error::Unavailable` → API **503** 
 
 **Switching backends:** `site_cli storage migrate --from db | --from-dir <path>` copies every hash in `file_blobs` from the source into the configured `STORAGE_KIND` — idempotent (a present blob is verified by sha256 and skipped), the source is only read, a target object with different content is reported and kept (exit 1), every copy is read back and verified. Reads are strict afterwards: no fallback to the old backend. Run it, then switch `STORAGE_KIND`. Moving back to `db` works the same way (`--from-dir` with `STORAGE_KIND=db`); `m_033`'s `down` refuses while metadata-only rows exist.
 
+## Design overrides
+
+A deployment's own design lives in storage as `design/{path}` objects (`fs`: `STORAGE_DIR/design/…`, `s3`: the bucket), `path` under `templates/`, `assets/` or `mdcast/` (`src/design/stored.rs`). They are held in RAM (`DesignStore.stored`, swapped wholesale) — requests never touch storage.
+
+**Reload** (`DesignStore::apply`, serialized by a mutex): list `design/`, download only objects whose version (ETag + size + mtime) changed, apply the pending admin change if any, syntax-check every override template (UTF-8 + MiniJinja parse — render-time errors such as an unknown variable are not caught), then write the change to storage and swap the overlay in, and recompile the release build's frozen template environment (`Templates::refresh`). Any failure leaves storage and the running design untouched. A plain reload records its outcome (`last_reload`, shown in the admin) either way; a rejected admin save leaves it alone.
+
+**Ways in:** edit objects directly in the bucket (Garage admin UI, `aws s3`, rclone) and click **Reload** in the admin Design page (`POST /api/design/reload`); or use the Design page itself (tree of baked / overridden / override-only files, upload/replace/delete, inline text editor — every save reloads at once, a broken template answers 422); or `site_cli design push <dir>` (uploads a folder in the bundle layout, skips other paths, refuses the whole push on a broken template; the server picks it up on the next Reload).
+
+**Startup** loads the overlay before serving; unreachable storage or a broken override refuses the start rather than serving the baked design in place of the site's own. **`STORAGE_KIND=db`** has no keyed objects: only baked + `DESIGN_DIR`, the Design page is read-only, writes answer 409. Reloads are per process (single replica assumed). MCP and the AI assistant have no design access.
+
 ## Routes
 
 ### Public (server-rendered)
@@ -230,6 +243,9 @@ Errors: an unreachable backend is `storage::Error::Unavailable` → API **503** 
 |---|---|---|
 | `/api/ws` | GET (upgrade) | Global authenticated WebSocket — see below |
 | `/api/export/pages/{id}?format=pdf\|slides` | GET | Export any page by id to PDF or reveal.js slides (see [Export (mdcast)](#export-mdcast)) |
+| `/api/design` | GET | Design state: storage kind, `editable`, `local_dir`, `last_reload`, merged file list (`baked`/`overridden`/`size`) |
+| `/api/design/reload` | POST | Reload overrides from storage (after edits made directly in the bucket); 422 broken template, 503 storage down |
+| `/api/design/files/{*path}` | GET / PUT / DELETE | Effective file (`?source=baked` for the default) / write override from the raw body (20 MB) / remove override — writes reload at once; 400 bad path, 404 no override, 409 db storage, 422 broken template |
 
 ### OAuth2 + MCP
 

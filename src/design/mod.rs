@@ -1,9 +1,16 @@
+pub mod push;
+pub mod stored;
+
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use parking_lot::RwLock;
 use rust_embed::Embed;
+
+use stored::{ReloadStatus, Stored};
 
 /// The default design bundle baked into the binary at compile time. This is
 /// the always-present fallback layer; a deployment can override it at runtime
@@ -27,10 +34,16 @@ enum Overlay {
     Frozen(HashMap<String, Vec<u8>>),
 }
 
-/// Resolves resource requests against an optional override folder, falling
-/// back to the baked-in default design bundle.
+/// Resolves resource requests against three layers: the dev-only
+/// `DESIGN_DIR` folder, then the overrides loaded from storage (`design/…`
+/// keys, see [`stored`]), then the baked-in default design bundle.
 pub struct DesignStore {
     overlay: Overlay,
+    /// Swapped wholesale by a successful reload; requests never touch storage.
+    stored: RwLock<Arc<Stored>>,
+    status: RwLock<Option<ReloadStatus>>,
+    /// Serializes reloads so two saves cannot interleave list → validate → swap.
+    reload_lock: tokio::sync::Mutex<()>,
 }
 
 impl DesignStore {
@@ -55,7 +68,47 @@ impl DesignStore {
                 Overlay::Frozen(frozen)
             }
         };
-        Self { overlay }
+        Self {
+            overlay,
+            stored: RwLock::default(),
+            status: RwLock::default(),
+            reload_lock: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    /// Whether the dev-only `DESIGN_DIR` layer is active (it wins over
+    /// storage overrides).
+    pub fn has_local_dir(&self) -> bool {
+        !matches!(self.overlay, Overlay::None)
+    }
+
+    /// The baked default for `path`, ignoring every override.
+    pub fn baked(&self, path: &str) -> Option<Vec<u8>> {
+        Baked::get(path).map(|file| file.data.into_owned())
+    }
+
+    /// Every baked path under `prefix`.
+    pub fn baked_paths(&self, prefix: &str) -> Vec<String> {
+        Baked::iter()
+            .filter(|f| f.starts_with(prefix))
+            .map(|f| f.into_owned())
+            .collect()
+    }
+
+    /// The storage overrides currently loaded: `(path, size)`.
+    pub fn stored_paths(&self) -> Vec<(String, u64)> {
+        let stored = self.stored.read();
+        let mut out: Vec<_> = stored
+            .files
+            .iter()
+            .map(|(path, f)| (path.clone(), f.bytes.len() as u64))
+            .collect();
+        out.sort();
+        out
+    }
+
+    pub fn last_reload(&self) -> Option<ReloadStatus> {
+        self.status.read().clone()
     }
 
     /// Names of every template under `templates/`, deduplicated across the
@@ -82,13 +135,24 @@ impl DesignStore {
             }
         }
         self.overlay.list_prefix(prefix, &mut names);
+        names.extend(
+            self.stored
+                .read()
+                .files
+                .keys()
+                .filter(|k| k.starts_with(prefix))
+                .cloned(),
+        );
         names.into_iter().collect()
     }
 
-    /// Resolve a resource: override folder → baked default.
+    /// Resolve a resource: `DESIGN_DIR` → storage override → baked default.
     pub fn load(&self, path: &str) -> Option<Vec<u8>> {
         if let Some(data) = self.overlay.get(path) {
             return Some(data);
+        }
+        if let Some(f) = self.stored.read().files.get(path) {
+            return Some(f.bytes.to_vec());
         }
         Baked::get(path).map(|file| file.data.into_owned())
     }
@@ -245,9 +309,8 @@ mod tests {
         std::fs::create_dir_all(dir.join("templates")).unwrap();
         std::fs::write(dir.join("templates/base.html"), b"OVERRIDDEN").unwrap();
 
-        let store = DesignStore {
-            overlay: Overlay::Frozen(freeze_dir(&dir)),
-        };
+        let mut store = DesignStore::new(None);
+        store.overlay = Overlay::Frozen(freeze_dir(&dir));
         assert_eq!(
             store.load("templates/base.html").as_deref(),
             Some(&b"OVERRIDDEN"[..])
