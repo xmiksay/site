@@ -41,7 +41,7 @@ test-unit: ## Unit tests (in-module #[cfg(test)])
 	cargo test --lib --bins
 
 test-integration: ## Integration tests (tests/) — DB/Ollama-gated, skip gracefully if unset/unreachable
-	@test -d tests && cargo test --test '*' || echo "no integration tests yet (tests/ absent)"
+	@if [ -d tests ]; then cargo test --test '*'; else echo "no integration tests yet (tests/ absent)"; fi
 
 test-client: ## Vue admin SPA unit tests (vitest)
 	cd client && { [ -d node_modules ] || npm ci; } && npm run test
