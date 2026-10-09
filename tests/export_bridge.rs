@@ -16,6 +16,7 @@ use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use site::design::DesignStore;
 use site::entity::{file, file_blob, gallery, page, user};
 use site::markdown::render_for_export;
+use site::storage::Storage;
 use site::templates::Templates;
 
 async fn test_db() -> Option<DatabaseConnection> {
@@ -64,7 +65,7 @@ async fn inline_fen_directive_resolves_to_svg_asset() {
     let tmpl = tmpl_env();
 
     let md = "<fen>rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1</fen>";
-    let bridged = render_for_export(md, &db, &tmpl, false).await;
+    let bridged = render_for_export(md, &db, &Storage::db(db.clone()), &tmpl, false).await;
 
     assert!(
         !bridged.markdown.contains("<fen"),
@@ -89,7 +90,7 @@ async fn inline_pgn_directive_resolves_to_svg_asset() {
     let tmpl = tmpl_env();
 
     let md = "<pgn move=\"3\">1. e4 e5 2. Nf3 Nc6</pgn>";
-    let bridged = render_for_export(md, &db, &tmpl, false).await;
+    let bridged = render_for_export(md, &db, &Storage::db(db.clone()), &tmpl, false).await;
 
     assert!(
         !bridged.markdown.contains("<pgn"),
@@ -110,7 +111,7 @@ async fn invalid_inline_fen_reports_an_error_marker_without_panicking() {
     let tmpl = tmpl_env();
 
     let md = "<fen>this is not a fen at all</fen>";
-    let bridged = render_for_export(md, &db, &tmpl, false).await;
+    let bridged = render_for_export(md, &db, &Storage::db(db.clone()), &tmpl, false).await;
 
     assert!(
         bridged.markdown.contains("*[fen:"),
@@ -135,7 +136,8 @@ async fn gallery_directive_resolves_to_real_file_paths() {
 
     let content = b"fixture image bytes";
     let hash = site::files::hash_blob(content);
-    site::files::put_blob(&db, &hash, content)
+    site::storage::Storage::db(db.clone())
+        .put_blob(content)
         .await
         .expect("put_blob");
 
@@ -167,7 +169,7 @@ async fn gallery_directive_resolves_to_real_file_paths() {
     .expect("insert throwaway gallery");
 
     let md = format!(r#"<gallery path="{gallery_path}">"#);
-    let bridged = render_for_export(&md, &db, &tmpl, false).await;
+    let bridged = render_for_export(&md, &db, &Storage::db(db.clone()), &tmpl, false).await;
 
     assert!(
         !bridged.markdown.contains("<gallery"),
@@ -227,7 +229,7 @@ async fn page_transclusion_inlines_nested_markdown() {
     .expect("insert throwaway nested page");
 
     let md = format!(r#"<page path="{nested_path}">"#);
-    let bridged = render_for_export(&md, &db, &tmpl, false).await;
+    let bridged = render_for_export(&md, &db, &Storage::db(db.clone()), &tmpl, false).await;
 
     assert!(
         !bridged.markdown.contains("<page"),
@@ -300,7 +302,7 @@ async fn cyclic_page_transclusion_produces_skip_message_without_hanging() {
     // Drive the very markdown page `a` holds, exactly like transcluding it
     // from a third page would — this must terminate rather than hang.
     let md = format!(r#"<page path="{b_path}">"#);
-    let bridged = render_for_export(&md, &db, &tmpl, false).await;
+    let bridged = render_for_export(&md, &db, &Storage::db(db.clone()), &tmpl, false).await;
 
     assert!(
         bridged.markdown.contains("recursive transclusion") && bridged.markdown.contains("skipped"),
@@ -332,7 +334,7 @@ async fn inline_json_directive_renders_a_pipe_table() {
     let tmpl = tmpl_env();
 
     let md = r#"<json query=".rows[]" type="table">{"rows":[{"a":1},{"a":2}]}</json>"#;
-    let bridged = render_for_export(md, &db, &tmpl, false).await;
+    let bridged = render_for_export(md, &db, &Storage::db(db.clone()), &tmpl, false).await;
 
     assert!(
         !bridged.markdown.contains("<table"),
@@ -355,7 +357,7 @@ async fn inline_mermaid_directive_resolves_to_svg_asset() {
     let tmpl = tmpl_env();
 
     let md = "<mermaid>\npie\n\"A\" : 1\n\"B\" : 2\n</mermaid>";
-    let bridged = render_for_export(md, &db, &tmpl, false).await;
+    let bridged = render_for_export(md, &db, &Storage::db(db.clone()), &tmpl, false).await;
 
     assert!(
         !bridged.markdown.contains("<mermaid"),
@@ -376,7 +378,7 @@ async fn invalid_mermaid_source_falls_back_to_a_fenced_text_block() {
     let tmpl = tmpl_env();
 
     let md = "<mermaid>\nthis is not a valid mermaid diagram !!!\n</mermaid>";
-    let bridged = render_for_export(md, &db, &tmpl, false).await;
+    let bridged = render_for_export(md, &db, &Storage::db(db.clone()), &tmpl, false).await;
 
     assert!(bridged.assets.is_empty());
     assert!(
@@ -412,7 +414,7 @@ async fn plain_markdown_with_no_directives_passes_through_untouched() {
     let tmpl = tmpl_env();
 
     let md = "Some plain paragraph text.\n\n```rust\nfn main() {}\n```\n";
-    let bridged = render_for_export(md, &db, &tmpl, false).await;
+    let bridged = render_for_export(md, &db, &Storage::db(db.clone()), &tmpl, false).await;
 
     assert_eq!(bridged.markdown, md);
     assert!(bridged.assets.is_empty());

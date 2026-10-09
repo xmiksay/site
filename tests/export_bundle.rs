@@ -44,7 +44,8 @@ async fn make_fixture(db: &DatabaseConnection, path: &str, content: &[u8]) -> Fi
     .expect("insert throwaway user");
 
     let hash = site::files::hash_blob(content);
-    site::files::put_blob(db, &hash, content)
+    site::storage::Storage::db(db.clone())
+        .put_blob(content)
         .await
         .expect("put_blob");
 
@@ -101,6 +102,7 @@ async fn declares_a_page_image_digest_only_with_the_files_hash() {
     let design = DesignStore::new(None);
     let bundle = build_bundle(
         &db,
+        &site::storage::Storage::db(db.clone()),
         &design,
         &BrandSpec::default(),
         &bridged(format!("![img]({})", fx.path), Vec::new()),
@@ -140,6 +142,7 @@ async fn missing_content_path_is_skipped_not_an_error() {
     let design = DesignStore::new(None);
     let bundle = build_bundle(
         &db,
+        &site::storage::Storage::db(db.clone()),
         &design,
         &BrandSpec::default(),
         &bridged(format!("![img]({missing})"), Vec::new()),
@@ -175,6 +178,7 @@ async fn bridge_assets_are_eager_and_design_templates_shadow_the_catalog() {
     let svg_key = "bridge/fen/abc.svg".to_string();
     let bundle = build_bundle(
         &db,
+        &site::storage::Storage::db(db.clone()),
         &design,
         &BrandSpec::default(),
         &bridged(

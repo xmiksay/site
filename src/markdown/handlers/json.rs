@@ -38,7 +38,7 @@ pub(in crate::markdown) async fn directive_json(d: &Directive, ctx: &mut RenderC
                     lookup_label(&lookup)
                 );
             };
-            match read_text_blob(ctx.db, &file.hash).await {
+            match read_text_blob(ctx.storage, &file.hash).await {
                 TextBlob::Found(src) => src,
                 TextBlob::NotFound => {
                     return format!("\n\n*[json: file \"{}\" not found]*\n\n", file.path);

@@ -6,6 +6,13 @@
 
 export CARGO_BUILD_JOBS ?= 4
 
+# The S3 storage tests read TEST_S3_* (see .env.example): the environment wins,
+# else the line from .env. Never `include .env` — its DATABASE_URL is the dev
+# database and would override (and export) the test DATABASE_URL.
+TEST_S3_VARS := TEST_S3_ENDPOINT TEST_S3_BUCKET TEST_S3_REGION TEST_S3_ACCESS_KEY_ID TEST_S3_SECRET_ACCESS_KEY
+$(foreach v,$(TEST_S3_VARS),$(eval $(v) ?= $$(shell sed -n 's/^$(v)=//p' .env 2>/dev/null)))
+export $(TEST_S3_VARS)
+
 .DEFAULT_GOAL := help
 .PHONY: help client build run migrate dev check fmt lint test test-unit test-integration test-client verify clean
 
@@ -40,7 +47,7 @@ lint: ## Rust fmt-check + clippy (client typecheck runs via `make client` / vue-
 test-unit: ## Unit tests (in-module #[cfg(test)])
 	cargo test --lib --bins
 
-test-integration: ## Integration tests (tests/) — DB/Ollama-gated, skip gracefully if unset/unreachable
+test-integration: ## Integration tests (tests/) — DB/Ollama-gated (skip if unset); the S3 suite needs TEST_S3_*
 	@if [ -d tests ]; then cargo test --test '*'; else echo "no integration tests yet (tests/ absent)"; fi
 
 test-client: ## Vue admin SPA unit tests (vitest)

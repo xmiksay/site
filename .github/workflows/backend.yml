@@ -40,6 +40,13 @@ jobs:
 
     env:
       DATABASE_URL: postgres://site_test:site_test@localhost:5432/site_test
+      # The S3 storage suite (tests/storage.rs) — Garage test bucket,
+      # path-style. Fails, not skips, without these.
+      TEST_S3_ENDPOINT: ${{ secrets.TEST_S3_ENDPOINT }}
+      TEST_S3_BUCKET: ${{ secrets.TEST_S3_BUCKET }}
+      TEST_S3_REGION: ${{ secrets.TEST_S3_REGION }}
+      TEST_S3_ACCESS_KEY_ID: ${{ secrets.TEST_S3_ACCESS_KEY_ID }}
+      TEST_S3_SECRET_ACCESS_KEY: ${{ secrets.TEST_S3_SECRET_ACCESS_KEY }}
 
     steps:
       - uses: actions/checkout@v4

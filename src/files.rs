@@ -1,38 +1,9 @@
-use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, Statement};
 use sha2::{Digest, Sha256};
 
 pub fn hash_blob(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
-}
-
-pub async fn put_blob<C: ConnectionTrait>(db: &C, hash: &str, data: &[u8]) -> Result<(), DbErr> {
-    let stmt = Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        "INSERT INTO file_blobs (hash, data, size_bytes) VALUES ($1, $2, $3) ON CONFLICT (hash) DO NOTHING",
-        [hash.into(), data.into(), (data.len() as i64).into()],
-    );
-    db.execute(stmt).await?;
-    Ok(())
-}
-
-pub async fn read_blob<C: ConnectionTrait>(db: &C, hash: &str) -> Result<Option<Vec<u8>>, DbErr> {
-    use sea_orm::FromQueryResult;
-
-    #[derive(FromQueryResult)]
-    struct BlobRow {
-        data: Vec<u8>,
-    }
-
-    let stmt = Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        "SELECT data FROM file_blobs WHERE hash = $1",
-        [hash.into()],
-    );
-
-    let row = BlobRow::find_by_statement(stmt).one(db).await?;
-    Ok(row.map(|r| r.data))
 }
 
 pub struct Thumbnail {
@@ -69,7 +40,7 @@ mod tests {
     #[test]
     fn hash_blob_matches_known_vectors() {
         // Canonical SHA-256 test vectors — content addressing must stay stable,
-        // since these hashes are the primary key in `file_blobs`.
+        // since these hashes are the primary key in `file_blobs` and the storage keys.
         assert_eq!(
             hash_blob(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

@@ -60,12 +60,53 @@ async fn main() {
 
             println!("Password changed for '{username}'.");
         }
+        Some("storage") if args.get(2).map(String::as_str) == Some("migrate") => {
+            match storage_migrate(&args[3..]).await {
+                Ok(true) => {}
+                Ok(false) => std::process::exit(1),
+                Err(e) => {
+                    eprintln!("storage migrate: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
         _ => {
             eprintln!("Usage: site_cli <command>");
             eprintln!("Commands:");
             eprintln!("  create-user <username> <password>       Create a user");
             eprintln!("  change-password <username> <password>   Change password");
+            eprintln!(
+                "  storage migrate --from db | --from-dir <path>\n                                          Copy every blob into the configured STORAGE_KIND"
+            );
             std::process::exit(1);
         }
     }
+}
+
+/// Copy every blob into the configured backend; `Ok(false)` when any blob
+/// could not be copied (the report lists which).
+async fn storage_migrate(args: &[String]) -> anyhow::Result<bool> {
+    use anyhow::{Context as _, bail};
+    use site::storage::{Storage, StorageConfig, migrate};
+
+    let db = Database::connect(std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?)
+        .await
+        .context("connect to the database")?;
+    let source = match args {
+        [flag, kind] if flag == "--from" && kind == "db" => Storage::db(db.clone()),
+        [flag, dir] if flag == "--from-dir" => {
+            Storage::local(std::path::Path::new(dir), db.clone())?
+        }
+        _ => bail!("usage: site_cli storage migrate --from db | --from-dir <path>"),
+    };
+    let target = Storage::new(&StorageConfig::from_env()?, db)?;
+    println!("{} → {}", source.kind(), target.kind());
+
+    let hashes = target.known_hashes().await?;
+    let report = migrate::migrate(&source, &target, &hashes).await?;
+    for problem in &report.problems {
+        eprintln!("  {problem}");
+    }
+    println!("{}", report.summary());
+    Ok(report.problems.is_empty())
 }

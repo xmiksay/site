@@ -24,6 +24,7 @@ impl From<FileSaveError> for ApiError {
             FileSaveError::EmptyPath => ApiError::BadRequest("path is required".into()),
             FileSaveError::EmptyData => ApiError::BadRequest("uploaded file is empty".into()),
             FileSaveError::Db(db) => ApiError::from(db),
+            FileSaveError::Storage(e) => ApiError::from(e),
         }
     }
 }
@@ -106,6 +107,7 @@ pub async fn upload(
 
     let created = files_repo::create_file(
         &state.db,
+        &state.storage,
         user_id,
         NewFile {
             path,
@@ -126,6 +128,7 @@ pub async fn update(
 ) -> ApiResult<Json<FileSummary>> {
     let updated = files_repo::update_metadata(
         &state.db,
+        &state.storage,
         id,
         FileMetaUpdate {
             path: input.path,

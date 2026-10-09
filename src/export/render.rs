@@ -23,6 +23,7 @@ use sea_orm::DatabaseConnection;
 use crate::design::DesignStore;
 use crate::export::{ExportError, build_bundle};
 use crate::markdown;
+use crate::storage::Storage;
 
 /// The two export shapes this site exposes over HTTP. `mdcast` supports
 /// more targets (DOCX/ODT/PPTX), but only PDF and reveal.js-slides are
@@ -65,6 +66,7 @@ impl ExportFormat {
 pub async fn render_page(
     client: &Client,
     db: &DatabaseConnection,
+    storage: &Storage,
     design: &Arc<DesignStore>,
     tmpl: &Environment<'static>,
     markdown_src: &str,
@@ -72,10 +74,10 @@ pub async fn render_page(
     logged_in: bool,
     format: ExportFormat,
 ) -> Result<Artifact, ExportError> {
-    let bridged = markdown::render_for_export(markdown_src, db, tmpl, logged_in).await;
+    let bridged = markdown::render_for_export(markdown_src, db, storage, tmpl, logged_in).await;
 
     let brand = load_brand(design);
-    let bundle = build_bundle(db, design, &brand, &bridged).await?;
+    let bundle = build_bundle(db, storage, design, &brand, &bridged).await?;
 
     let mut req = request::markdown(bridged.markdown, format.target());
     req.meta.title = title;

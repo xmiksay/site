@@ -34,6 +34,7 @@ async fn setup(db_url: &str) -> Fixture {
         serper_api_key: None,
         mdcast_url: None,
         mdcast_token: None,
+        storage: Default::default(),
     };
     let state: AppState = state::create_state(&config).await;
     let db = state.db.clone();

@@ -58,6 +58,8 @@ mdcast-client = "0.4.0"
 # only way to set timeouts) must be built against 0.12 under a rename.
 reqwest12     = { package = "reqwest", version = "0.12", default-features = false, features = ["rustls-tls"] }
 bytes         = "1"
+object_store  = { version = "0.14", features = ["aws", "fs"] }
+thiserror     = "2"
 jaq-core      = "2"
 jaq-std       = "2"
 jaq-json      = { version = "1", features = ["serde_json"] }

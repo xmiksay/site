@@ -14,7 +14,8 @@ Hybrid personal site: server-rendered public pages (MiniJinja) + Vue 3 admin SPA
 - **Auth:** Argon2 password hashing, session cookies (`site_session`, 24 h), legacy service tokens, OAuth2 (PKCE)
 - **MCP:** hand-rolled JSON-RPC 2.0 server at `POST /mcp` (the per-user MCP *client* the AI assistant consumes goes through `entanglement_runtime::mcp::HttpClient`)
 - **AI:** `src/ai/` adapts a single process-wide `entanglement-core`/`-runtime`/`-provider` engine (`Holly`) into `AppState` — per-user sessions, DB-backed tool permissions, per-user MCP client, event-sourced history, sub-agent profiles, streamed over the WS hub
-- **Export:** `src/export/` renders pages to PDF/reveal.js-slides on a **remote `mdcast-server`** via the thin `mdcast-client` 0.4 crate — the site compiles no typst and spawns no pandoc. `markdown::render_for_export` (#66) bridges every markdown directive (`<page>`/`<file>`/`<image>`/`<gallery>`/`<fen>`/`<pgn>`/`<mermaid>`/`<json>`) to plain markdown — real image refs/pipe tables/spliced page markdown, with synthesized fen/pgn/mermaid diagrams (`chess-diagram`/`mermaid-svg`) as in-memory assets — and `export::build_bundle` declares every referenced asset by sha256 (design templates from `design/mdcast/` shadow the server catalog; page images are digest-only from `files.hash`, bytes fetched from `file_blobs` only on a server cache miss). `mdcast_api::BrandSpec` is sourced from `design/mdcast/brand.toml` (mapped from `design/assets/css/style.css`'s `:root` tokens, with brand-aware typst layouts `design/mdcast/typst/layouts/pdf/*.typ` and a reveal.js escape hatch `design/mdcast/revealjs/brand.css` alongside — all `DESIGN_DIR`-overridable) and travels as `request.brand`; splitting/classification happen server-side. `MDCAST_URL` unset → export routes answer 503; see [`docs/architecture.md`](../docs/architecture.md#export-mdcast) (#64–#68, mdcast 0.4 adoption)
+- **Export:** `src/export/` renders pages to PDF/reveal.js-slides on a **remote `mdcast-server`** via the thin `mdcast-client` 0.4 crate — the site compiles no typst and spawns no pandoc. `markdown::render_for_export` (#66) bridges every markdown directive (`<page>`/`<file>`/`<image>`/`<gallery>`/`<fen>`/`<pgn>`/`<mermaid>`/`<json>`) to plain markdown — real image refs/pipe tables/spliced page markdown, with synthesized fen/pgn/mermaid diagrams (`chess-diagram`/`mermaid-svg`) as in-memory assets — and `export::build_bundle` declares every referenced asset by sha256 (design templates from `design/mdcast/` shadow the server catalog; page images are digest-only from `files.hash`, bytes fetched from storage only on a server cache miss). `mdcast_api::BrandSpec` is sourced from `design/mdcast/brand.toml` (mapped from `design/assets/css/style.css`'s `:root` tokens, with brand-aware typst layouts `design/mdcast/typst/layouts/pdf/*.typ` and a reveal.js escape hatch `design/mdcast/revealjs/brand.css` alongside — all `DESIGN_DIR`-overridable) and travels as `request.brand`; splitting/classification happen server-side. `MDCAST_URL` unset → export routes answer 503; see [`docs/architecture.md`](../docs/architecture.md#export-mdcast) (#64–#68, mdcast 0.4 adoption)
+- **Storage:** `src/storage/` — content-addressed blob store for file/thumbnail bytes over `db` (`file_blobs.data`, default), `fs` or `s3` (`object_store`; Garage in prod), picked by `STORAGE_KIND`. Outage → 503. `site_cli storage migrate` copies blobs between backends; see [`docs/architecture.md`](../docs/architecture.md#storage) (#109)
 - **Logging:** tracing + tracing-subscriber with env filter
 
 ## Architecture (overview)
@@ -50,6 +51,7 @@ cargo run --bin site_migration -- fresh     # reset & reapply
 cargo run --bin site_migration -- status
 cargo run --bin site_cli -- create-user <username> <password>
 cargo run --bin site_cli -- change-password <username> <password>
+cargo run --bin site_cli -- storage migrate --from db   # or --from-dir <path>; into STORAGE_KIND
 ```
 
 `/check` wraps `make verify`; `/site-mcp` exercises the MCP endpoint (local vs production).
@@ -67,6 +69,9 @@ Tests: `make test` (backend unit + integration + client), `make test-unit`, `mak
 | `SERPER_API_KEY` | (unset) | Enables AI assistant `web_search` tool |
 | `PUBLIC_URL` | (unset) | Public base URL used to build absolute `<loc>` entries in `/sitemap.xml` |
 | `SELF_URL` | (unset) | Fallback base URL for the sitemap when `PUBLIC_URL` is unset |
+| `STORAGE_KIND` | `db` | Blob backend for file/thumbnail bytes: `db` (`file_blobs.data`), `fs` or `s3`. Invalid config refuses the start |
+| `STORAGE_DIR` | `./data` | Root for `STORAGE_KIND=fs` |
+| `S3_ENDPOINT` / `S3_BUCKET` / `S3_REGION` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` / `S3_PATH_STYLE` | (unset) / `us-east-1` / `false` | `STORAGE_KIND=s3` settings (Garage: `https://s3.mmik.cz`, region `garage`, path-style) |
 | `MDCAST_URL` | (unset) | Base URL of the remote `mdcast-server` rendering PDF/slides exports. Unset → export routes answer 503; nothing else degrades |
 | `MDCAST_TOKEN` | (unset) | Bearer token for `mdcast-server`. Unset sends the literal placeholder `unauthenticated`, fine for a tokenless server |
 
@@ -76,7 +81,7 @@ Tests: `make test` (backend unit + integration + client), `make test-unit`, `mak
 - API protected by session-cookie middleware (`require_login_api`)
 - MCP/OAuth protected by Bearer token middleware in handlers
 - Page revisions store diffs (`diffy`), not full snapshots
-- Files are content-addressed by SHA-256; `file_blobs` deduplicate
+- Files are content-addressed by SHA-256; `file_blobs` deduplicate. Bytes go through `Storage` (`src/storage/`, `state.storage`) — never read/write `file_blobs.data` directly; it is only filled by the `db` backend
 - Service tokens have no expiry; OAuth access tokens last 1 h
 - Always run `cargo check` after Rust changes; run the Vue build before serving the SPA (use `make`)
 - **Keep [`docs/architecture.md`](../docs/architecture.md) current** — when a change adds/removes/renames a module, route, entity, env var, or MCP tool, update the matching section there in the same change

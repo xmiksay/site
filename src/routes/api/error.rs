@@ -53,6 +53,23 @@ impl From<DbErr> for ApiError {
     }
 }
 
+impl From<crate::storage::Error> for ApiError {
+    fn from(err: crate::storage::Error) -> Self {
+        use crate::storage::Error;
+        match err {
+            Error::Unavailable(e) => {
+                tracing::error!("storage unavailable: {e}");
+                Self::ServiceUnavailable("storage unavailable".into())
+            }
+            Error::Db(db) => db.into(),
+            Error::InvalidHash(_) => {
+                tracing::error!("{err}");
+                Self::Internal("internal error".into())
+            }
+        }
+    }
+}
+
 pub type ApiResult<T> = Result<T, ApiError>;
 
 #[cfg(test)]
@@ -70,5 +87,16 @@ mod tests {
             }
             other => panic!("expected Internal, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn storage_outage_is_503() {
+        let err = crate::storage::Error::Unavailable(object_store::Error::Generic {
+            store: "S3",
+            source: "connection refused".into(),
+        });
+        let api: ApiError = err.into();
+        assert_eq!(api.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(api.message(), "storage unavailable");
     }
 }

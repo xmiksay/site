@@ -8,11 +8,14 @@ use crate::config::Config;
 use crate::design::DesignStore;
 use crate::migration::{Migrator, MigratorTrait};
 use crate::routes::ws::WsHub;
+use crate::storage::Storage;
 use crate::templates::Templates;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
+    /// File and thumbnail bytes (`STORAGE_KIND`).
+    pub storage: Storage,
     pub tmpl: Templates,
     pub design: Arc<DesignStore>,
     pub agent_engine: Arc<SiteEngine>,
@@ -67,6 +70,9 @@ pub async fn create_state(config: &Config) -> AppState {
     // migration that state hydration depends on.
     Migrator::up(&db, None).await.expect("Migrations failed");
 
+    let storage = Storage::new(&config.storage, db.clone()).expect("Failed to configure storage");
+    tracing::info!(kind = storage.kind(), "blob storage");
+
     let design = Arc::new(DesignStore::new(config.design_dir.clone()));
     let tmpl = Templates::new(design.clone());
 
@@ -78,6 +84,7 @@ pub async fn create_state(config: &Config) -> AppState {
     let ws_hub = Arc::new(WsHub::new());
     let agent_engine = SiteEngine::spawn(
         db.clone(),
+        storage.clone(),
         ai_config,
         ws_hub.clone(),
         config.serper_api_key.clone(),
@@ -118,6 +125,7 @@ pub async fn create_state(config: &Config) -> AppState {
 
     AppState {
         db,
+        storage,
         tmpl,
         design,
         agent_engine,

@@ -30,7 +30,7 @@ pub(in crate::markdown) async fn directive_fen(d: &Directive, ctx: &mut RenderCt
                 let html = format!(r#"<p><em>[fen file "{label}" not found]</em></p>"#);
                 return block(html);
             };
-            match read_text_blob(ctx.db, &file.hash).await {
+            match read_text_blob(ctx.storage, &file.hash).await {
                 TextBlob::Found(fen) => fen,
                 TextBlob::NotFound => {
                     let html = format!(r#"<p><em>[fen file "{}" not found]</em></p>"#, file.path);
@@ -124,7 +124,7 @@ pub(in crate::markdown) async fn directive_pgn(d: &Directive, ctx: &mut RenderCt
                 let html = format!(r#"<p><em>[pgn file "{label}" not found]</em></p>"#);
                 return block(html);
             };
-            match read_text_blob(ctx.db, &file.hash).await {
+            match read_text_blob(ctx.storage, &file.hash).await {
                 TextBlob::Found(pgn) => pgn,
                 TextBlob::NotFound => {
                     let html = format!(r#"<p><em>[pgn file "{}" not found]</em></p>"#, file.path);
@@ -216,7 +216,7 @@ pub(in crate::markdown) async fn directive_mermaid(
                 let html = format!(r#"<p><em>[mermaid file "{label}" not found]</em></p>"#);
                 return block(html);
             };
-            match read_text_blob(ctx.db, &file.hash).await {
+            match read_text_blob(ctx.storage, &file.hash).await {
                 TextBlob::Found(src) => src,
                 TextBlob::NotFound => {
                     let html = format!(
