@@ -4,8 +4,9 @@
 //! `pages.*` / `files.*` / `galleries.*` / `tags.*` change events broadcast
 //! to every connected user (shared content), published uniformly from
 //! `src/routes/broadcast.rs` regardless of which edge (REST API, MCP, or the
-//! AI assistant) performed the mutation. `assistant.*` events publish only to
-//! the owning user's connections.
+//! AI assistant) performed the mutation; so do `design.draft_changed` (every
+//! mutation of the shared design draft) and `design.published`. `assistant.*`
+//! events publish only to the owning user's connections.
 //!
 //! `assistant.*` carries real token-level streaming: `src/ai/ws_bridge.rs`
 //! subscribes to the entanglement engine's `Holly::subscribe()` broadcast
@@ -39,6 +40,7 @@ pub enum Topic {
     Files,
     Galleries,
     Tags,
+    Design,
 }
 
 #[derive(Clone, Debug, Serialize)]

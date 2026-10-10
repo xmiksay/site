@@ -1,7 +1,7 @@
-//! Design overrides in storage (#110, #114): the reload contract of
-//! `DesignStore::apply` over db, fs and S3 (and a dead S3), and `design push`
-//! over db and fs.
-//! The HTTP routes are in `tests/design_api.rs`.
+//! The published design in storage (#110, #114): the reload contract of
+//! `DesignStore::reload` over db, fs and S3 (and a dead S3), and `design
+//! push` over db and fs. The draft/publish/history flow is in
+//! `tests/design_publish.rs`, the HTTP routes in `tests/design_api.rs`.
 //!
 //! Gated on `DATABASE_URL` like every DB test; the S3 test fails, not skips,
 //! without `TEST_S3_*` (see `common/storage.rs`).
@@ -16,16 +16,11 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use sea_orm::{Database, DatabaseConnection};
 use site::design::DesignStore;
-use site::design::stored::{Change, DesignError};
 use site::templates::Templates;
 use storage_fixture::TestStorage;
 
-fn test_db_url() -> Option<String> {
-    std::env::var("DATABASE_URL").ok()
-}
-
 async fn test_db() -> Option<DatabaseConnection> {
-    let url = test_db_url()?;
+    let url = std::env::var("DATABASE_URL").ok()?;
     Some(
         Database::connect(&url)
             .await
@@ -33,59 +28,31 @@ async fn test_db() -> Option<DatabaseConnection> {
     )
 }
 
-fn put(path: &str, body: &str) -> Option<Change> {
-    Some(Change::Put {
-        path: path.into(),
-        bytes: body.as_bytes().to_vec().into(),
-    })
-}
-
-/// The `apply` contract every backend honors.
-async fn exercise_apply(ts: &TestStorage) {
+/// The `reload` contract every backend honors: objects edited straight in
+/// the bucket go live on reload; a broken one fails it and keeps the design.
+async fn exercise_reload(ts: &TestStorage) {
     let design = Arc::new(DesignStore::new(None));
     let tmpl = Templates::new(design.clone());
     let storage = &ts.storage;
-    let baked_css = design.load("assets/css/style.css").expect("baked css");
+    let baked_404 = design.load("templates/404.html").expect("baked 404");
 
-    // Admin save: written to storage and live at once.
-    design
-        .apply(storage, &tmpl, put("assets/css/style.css", "body{}"))
-        .await
-        .expect("save");
-    assert_eq!(
-        design.load("assets/css/style.css").as_deref(),
-        Some(&b"body{}"[..])
-    );
-    let stored = storage
-        .get("design/assets/css/style.css")
-        .await
-        .expect("get");
-    assert_eq!(stored.as_deref(), Some(&b"body{}"[..]));
+    let status = design.reload(storage, &tmpl).await.expect("empty reload");
+    assert!(status.ok && status.files == 0, "{status:?}");
 
-    // A broken template is rejected: nothing written, nothing swapped.
-    let err = design
-        .apply(storage, &tmpl, put("templates/404.html", "{% if %}"))
-        .await
-        .expect_err("broken template");
-    assert!(matches!(err, DesignError::Invalid(_)), "{err:?}");
-    assert!(
-        storage
-            .get("design/templates/404.html")
-            .await
-            .expect("get")
-            .is_none()
-    );
-    assert!(
-        design.last_reload().expect("status").ok,
-        "a rejected save keeps the status"
-    );
-
-    // Edited straight in the bucket, then Reload.
     storage
         .put("design/templates/404.html", "BUCKET-404".into())
         .await
         .expect("external put");
-    let status = design.apply(storage, &tmpl, None).await.expect("reload");
+    storage
+        .put("design/assets/css/style.css", "body{}".into())
+        .await
+        .expect("external put");
+    // Outside the bundle roots: ignored.
+    storage
+        .put("design/notes.txt", "x".into())
+        .await
+        .expect("external put");
+    let status = design.reload(storage, &tmpl).await.expect("reload");
     assert_eq!(status.files, 2);
     let rendered = tmpl
         .env()
@@ -95,13 +62,12 @@ async fn exercise_apply(ts: &TestStorage) {
         .expect("render");
     assert_eq!(rendered, "BUCKET-404");
 
-    // A broken file in the bucket fails the reload and keeps the design.
     storage
         .put("design/templates/404.html", "{% endif %}".into())
         .await
         .expect("external broken put");
     design
-        .apply(storage, &tmpl, None)
+        .reload(storage, &tmpl)
         .await
         .expect_err("broken reload");
     let status = design.last_reload().expect("status");
@@ -111,61 +77,38 @@ async fn exercise_apply(ts: &TestStorage) {
         Some(&b"BUCKET-404"[..])
     );
 
-    // Delete the override (and fix the bucket): back to baked.
-    storage
-        .delete("design/templates/404.html")
-        .await
-        .expect("rm");
-    design
-        .apply(
-            storage,
-            &tmpl,
-            Some(Change::Delete {
-                path: "assets/css/style.css".into(),
-            }),
-        )
-        .await
-        .expect("delete");
-    assert_eq!(design.load("assets/css/style.css"), Some(baked_css));
-    assert!(design.stored_paths().is_empty());
-    let err = design
-        .apply(
-            storage,
-            &tmpl,
-            Some(Change::Delete {
-                path: "assets/css/style.css".into(),
-            }),
-        )
-        .await
-        .expect_err("second delete");
-    assert!(matches!(err, DesignError::NoOverride(_)), "{err:?}");
+    for key in ["design/templates/404.html", "design/assets/css/style.css"] {
+        storage.delete(key).await.expect("rm");
+    }
+    design.reload(storage, &tmpl).await.expect("reload");
+    assert_eq!(design.load("templates/404.html"), Some(baked_404));
 }
 
 #[tokio::test]
-async fn apply_over_db() {
+async fn reload_over_db() {
     let Some(db) = test_db().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    exercise_apply(&TestStorage::db(&db)).await;
+    exercise_reload(&TestStorage::db(&db)).await;
 }
 
 #[tokio::test]
-async fn apply_over_fs() {
+async fn reload_over_fs() {
     let Some(db) = test_db().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    exercise_apply(&TestStorage::fs(&db)).await;
+    exercise_reload(&TestStorage::fs(&db)).await;
 }
 
 #[tokio::test]
-async fn apply_over_s3() {
+async fn reload_over_s3() {
     let Some(db) = test_db().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    exercise_apply(&TestStorage::s3(&db)).await;
+    exercise_reload(&TestStorage::s3(&db)).await;
 }
 
 async fn exercise_push(ts: &TestStorage) {
@@ -240,10 +183,7 @@ async fn reload_against_unreachable_s3_is_503_and_recorded() {
     let dead = site::storage::Storage::s3(&storage_fixture::dead_s3_config(), db).expect("dead");
     let design = Arc::new(DesignStore::new(None));
     let tmpl = Templates::new(design.clone());
-    let err = design
-        .apply(&dead, &tmpl, None)
-        .await
-        .expect_err("dead reload");
+    let err = design.reload(&dead, &tmpl).await.expect_err("dead reload");
     let api: site::routes::api::error::ApiError = err.into();
     let resp = axum::response::IntoResponse::into_response(api);
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);

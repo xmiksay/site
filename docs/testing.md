@@ -128,12 +128,20 @@ executes on every PR rather than self-skipping.
   them from GitHub secrets; locally `make test-integration` reads exactly
   these lines from `.env` (see `.env.example`) and never `.env`'s
   `DATABASE_URL`.
-- `tests/design.rs`, `tests/design_api.rs` — design overrides (#110, #114):
-  `DesignStore::apply` over db, fs and S3 (save, 422-style rejection of a
-  broken template, external edit + reload, failed reload keeps the design,
-  delete), dead S3 → 503, `design push` over db and fs; and `/api/design` over
-  a full `AppState` driving what the public 404 page renders (fs, and db with
-  the state's storage swapped for a scoped one after startup).
+- `tests/design.rs`, `tests/design_publish.rs`,
+  `tests/design_publish_failures.rs`, `tests/design_api.rs` — the
+  design in storage (#110, #114, #115): `DesignStore::reload` over db, fs and
+  S3 (bucket edit + reload, failed reload keeps the design, delete), dead S3 →
+  503, `design push` over db and fs; the draft/publish/history flow over db,
+  fs and S3 (draft init, edits invisible until publish, failed validation
+  leaving `design/` untouched, mirror deletions and baked reverts, history,
+  restore into the draft, discard), crash recovery of an interrupted publish
+  (db, fs), and a mirror failing midway restoring the previous `design/` (fs,
+  via a read-only directory — skipped when running as root); and the
+  `/api/design/*` routes over a full `AppState` driving what the public 404
+  page renders, raw binary files and the `design.*` WS events, registered
+  straight on `AppState.ws_hub` (fs, and db with the state's storage swapped
+  for a scoped one after startup).
 - `tests/policy_db.rs` — `SitePolicy`/`tool_permissions` resolution against a
   real `tool_permissions` table (FK to `users`, so it can't be faked
   in-memory).

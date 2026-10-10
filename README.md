@@ -73,7 +73,7 @@ docker compose exec app ./site_migration
 | `DATABASE_URL` | PostgreSQL connection string | required (compose uses `postgres://blog:blog@db:5432/blog`) |
 | `RUST_LOG` | Log level filter | `site=debug,tower_http=debug,info` |
 | `PORT` | HTTP listen port | `3000` |
-| `DESIGN_DIR` | Dev-only override folder for `{templates, assets, mdcast}`, checked before storage overrides and the baked `design/` bundle (debug: live reload; release: frozen into RAM at startup). Deployments keep their design as `design/…` objects in storage (admin Design page / bucket + Reload) | unset |
+| `DESIGN_DIR` | Dev-only override folder for `{templates, assets, mdcast}`, checked before storage overrides and the baked `design/` bundle (debug: live reload; release: frozen into RAM at startup). Deployments keep their design as `design/…` objects in storage (published from the shared draft in the admin Design page, or bucket edit + Reload) | unset |
 | `SERPER_API_KEY` | Optional — enables the `web_search` tool inside the AI assistant | unset |
 | `MDCAST_URL` | Base URL of the remote [`mdcast-server`](https://github.com/xmiksay/mdcast) that renders PDF/slides exports — export routes answer 503 while unset | unset |
 | `MDCAST_TOKEN` | Bearer token for `mdcast-server` (unset sends a placeholder, fine for a tokenless server) | unset |

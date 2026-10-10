@@ -43,9 +43,9 @@ describe('path helpers', () => {
   })
 
   it('encodes each segment but keeps slashes', () => {
-    expect(designFileUrl('assets/img/a b#.png')).toBe('/api/design/files/assets/img/a%20b%23.png')
+    expect(designFileUrl('assets/img/a b#.png')).toBe('/api/design/draft/assets/img/a%20b%23.png')
     expect(designFileUrl('templates/x.html', true)).toBe(
-      '/api/design/files/templates/x.html?source=baked',
+      '/api/design/draft/templates/x.html?source=baked',
     )
   })
 

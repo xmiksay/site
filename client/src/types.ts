@@ -1,4 +1,4 @@
-export type WsTopic = 'assistant' | 'pages' | 'files' | 'galleries' | 'tags'
+export type WsTopic = 'assistant' | 'pages' | 'files' | 'galleries' | 'tags' | 'design'
 
 export interface WsEnvelope<T = any> {
   topic: WsTopic
@@ -359,9 +359,17 @@ export interface DesignFile {
   size: number
 }
 
+export interface DesignChange {
+  path: string
+  kind: 'added' | 'modified' | 'deleted'
+}
+
+/** The shared draft (`GET /api/design/draft`): its view over the baked
+ *  bundle and what publishing it would change. */
 export interface DesignState {
   storage: DesignStorageKind
   local_dir: boolean
   last_reload: DesignReloadStatus | null
   files: DesignFile[]
+  changes: DesignChange[]
 }

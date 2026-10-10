@@ -18,6 +18,7 @@ function designState(overrides: Partial<DesignState> = {}): DesignState {
     local_dir: false,
     last_reload: null,
     files: [{ path: 'templates/base.html', baked: true, overridden: false, size: 10 }],
+    changes: [],
     ...overrides,
   }
 }
@@ -32,7 +33,7 @@ describe('design store', () => {
     apiMock.mockResolvedValueOnce(designState())
     const store = useDesignStore()
     await store.load()
-    expect(apiMock).toHaveBeenCalledWith('/api/design')
+    expect(apiMock).toHaveBeenCalledWith('/api/design/draft')
     expect(store.files).toHaveLength(1)
   })
 
@@ -47,7 +48,7 @@ describe('design store', () => {
     await store.save('templates/my page.html', 'abc')
 
     const [url, init] = apiMock.mock.calls[0]
-    expect(url).toBe('/api/design/files/templates/my%20page.html')
+    expect(url).toBe('/api/design/draft/templates/my%20page.html')
     expect(init).toMatchObject({ method: 'PUT', body: 'abc' })
     expect(new Headers(init!.headers).get('Content-Type')).toBe('application/octet-stream')
     expect(store.state).toEqual(fresh)
@@ -73,7 +74,7 @@ describe('design store', () => {
     apiMock.mockResolvedValueOnce(designState({ files: [] }))
 
     await store.remove('assets/css/x.css')
-    expect(apiMock).toHaveBeenCalledWith('/api/design/files/assets/css/x.css', { method: 'DELETE' })
+    expect(apiMock).toHaveBeenCalledWith('/api/design/draft/assets/css/x.css', { method: 'DELETE' })
     expect(store.files).toHaveLength(0)
   })
 
@@ -104,7 +105,7 @@ describe('design store', () => {
     apiBlobMock.mockResolvedValueOnce({ blob: new Blob(['hello']), filename: 'base.html' })
     const store = useDesignStore()
     const text = await store.fetchText('templates/base.html', true)
-    expect(apiBlobMock).toHaveBeenCalledWith('/api/design/files/templates/base.html?source=baked')
+    expect(apiBlobMock).toHaveBeenCalledWith('/api/design/draft/templates/base.html?source=baked')
     expect(text).toBe('hello')
   })
 })

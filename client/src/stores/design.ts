@@ -9,7 +9,7 @@ export const useDesignStore = defineStore('design', () => {
   const files = computed(() => state.value?.files ?? [])
 
   async function load() {
-    state.value = await api<DesignState>('/api/design')
+    state.value = await api<DesignState>('/api/design/draft')
   }
 
   async function reload() {

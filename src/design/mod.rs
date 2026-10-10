@@ -1,3 +1,5 @@
+pub mod draft;
+pub mod publish;
 pub mod push;
 pub mod stored;
 
@@ -7,10 +9,11 @@ use std::sync::Arc;
 
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use bytes::Bytes;
 use parking_lot::RwLock;
 use rust_embed::Embed;
 
-use stored::{ReloadStatus, Stored};
+use stored::{Cache, Files, ReloadStatus, Stored};
 
 /// The default design bundle baked into the binary at compile time. This is
 /// the always-present fallback layer; a deployment can override it at runtime
@@ -42,8 +45,12 @@ pub struct DesignStore {
     /// Swapped wholesale by a successful reload; requests never touch storage.
     stored: RwLock<Arc<Stored>>,
     status: RwLock<Option<ReloadStatus>>,
-    /// Serializes reloads so two saves cannot interleave list → validate → swap.
+    /// Serializes reloads and publishes so two cannot interleave
+    /// mirror → list → validate → swap.
     reload_lock: tokio::sync::Mutex<()>,
+    /// Serializes draft mutations (and a publish's read of the draft); holds
+    /// the draft's bytes cached by version. Taken after `reload_lock`.
+    draft: tokio::sync::Mutex<Cache>,
 }
 
 impl DesignStore {
@@ -73,6 +80,7 @@ impl DesignStore {
             stored: RwLock::default(),
             status: RwLock::default(),
             reload_lock: tokio::sync::Mutex::new(()),
+            draft: tokio::sync::Mutex::default(),
         }
     }
 
@@ -87,24 +95,18 @@ impl DesignStore {
         Baked::get(path).map(|file| file.data.into_owned())
     }
 
-    /// Every baked path under `prefix`.
-    pub fn baked_paths(&self, prefix: &str) -> Vec<String> {
-        Baked::iter()
-            .filter(|f| f.starts_with(prefix))
-            .map(|f| f.into_owned())
-            .collect()
-    }
-
-    /// The storage overrides currently loaded: `(path, size)`.
-    pub fn stored_paths(&self) -> Vec<(String, u64)> {
-        let stored = self.stored.read();
-        let mut out: Vec<_> = stored
-            .files
-            .iter()
-            .map(|(path, f)| (path.clone(), f.bytes.len() as u64))
+    /// `files` over the baked bundle: every baked file under the bundle
+    /// roots, replaced or extended by `files`.
+    pub fn with_baked(&self, files: &Files) -> Files {
+        let mut view: Files = Baked::iter()
+            .filter(|path| stored::check_path(path).is_ok())
+            .filter_map(|path| {
+                let data = Baked::get(&path)?.data.into_owned();
+                Some((path.into_owned(), Bytes::from(data)))
+            })
             .collect();
-        out.sort();
-        out
+        view.extend(files.iter().map(|(p, b)| (p.clone(), b.clone())));
+        view
     }
 
     pub fn last_reload(&self) -> Option<ReloadStatus> {

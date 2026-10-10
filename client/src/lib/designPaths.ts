@@ -28,7 +28,7 @@ export function parentFolder(path: string): string {
 
 export function designFileUrl(path: string, baked = false): string {
   const encoded = path.split('/').map(encodeURIComponent).join('/')
-  return `/api/design/files/${encoded}${baked ? '?source=baked' : ''}`
+  return `/api/design/draft/${encoded}${baked ? '?source=baked' : ''}`
 }
 
 /** Returns an error message, or null when `path` is an acceptable override target. */

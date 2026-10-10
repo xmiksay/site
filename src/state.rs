@@ -78,7 +78,11 @@ pub async fn create_state(config: &Config) -> AppState {
     // Refuse the start rather than serve the baked design in place of the
     // site's own while the bucket is down or an override is broken.
     design
-        .apply(&storage, &tmpl, None)
+        .recover_publish(&storage)
+        .await
+        .expect("Failed to complete an interrupted design publish");
+    design
+        .reload(&storage, &tmpl)
         .await
         .expect("Failed to load design overrides from storage");
 
