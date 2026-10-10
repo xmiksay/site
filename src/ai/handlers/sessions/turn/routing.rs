@@ -16,18 +16,16 @@ use crate::entity::tool_permission;
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
-/// Every `(session, request_id)` still awaiting a decision *before* this
-/// request's own decisions are applied — passed to `send_and_collect` purely
-/// as a readiness signal (see its doc): a batch with several pending calls
-/// only resumes once *all* of them resolve
+/// Every `(session, request_id)` in `prior` still awaiting a decision — a
+/// batch with several pending calls only resumes once *all* of them resolve
 /// (`entanglement_core::session::TurnState::is_drained`), so `approve`'s own
 /// decisions settling isn't enough on its own to know whether it's safe to
-/// also wait for that session's continuation — this says whether anything
-/// *else* is still open. `ToolCall`/`ToolRequest`/`ToolOutput` records are
-/// never pruned (same fact `session_for_call`'s doc relies on), so a linear
-/// scan of `prior` for a `ToolRequest` with no later matching `ToolOutput` is
-/// exact, not a heuristic.
-pub(super) fn open_tool_requests(prior: &[LogRecord]) -> Vec<(SessionId, String)> {
+/// also wait for that session's continuation; this says whether anything
+/// *else* is still open (via [`open_calls_after`]). `ToolCall`/`ToolRequest`/
+/// `ToolOutput` records are never pruned (same fact `session_for_call`'s doc
+/// relies on), so a linear scan for a `ToolRequest` with no later matching
+/// `ToolOutput` is exact for the records it is given.
+fn open_tool_requests(prior: &[LogRecord]) -> Vec<(SessionId, String)> {
     let resolved: std::collections::HashSet<&str> = prior
         .iter()
         .filter_map(|r| match &r.payload {
@@ -48,53 +46,53 @@ pub(super) fn open_tool_requests(prior: &[LogRecord]) -> Vec<(SessionId, String)
         .collect()
 }
 
-/// [`open_tool_requests`], but re-read against a fresh `assistant_events` load
-/// until the *other* (see `own_call_ids` below) open entries stop changing —
-/// closes the same `DbSink` TOCTOU window [`session_for_call_awaiting`]
-/// already closes for its own lookup (#104): `prior` is a snapshot that can be
-/// missing a `ToolOutput` the async writer hasn't flushed yet, so a call
-/// resolved moments ago by an earlier, already-answered request can still read
-/// as open here. Trusting that stale entry as a genuine "something else is
-/// still open" readiness signal makes [`send_and_collect`](super::collect::
-/// send_and_collect) refuse to graduate the session into `session_targets`,
-/// so it returns the instant *this* request's own decisions settle — before
-/// the model's closing reply, which is still coming.
+/// How long [`open_calls_after`] waits for `DbSink` to land the `ToolOutput`
+/// it barriers on. Only a shed or failed insert ever exhausts it; a slow
+/// writer under load just takes longer to pass.
+const PERSIST_BARRIER_TIMEOUT: Duration = Duration::from_secs(30);
+const PERSIST_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// The calls still open on `session` (under `root`'s log), read once
+/// `assistant_events` holds `session`'s `ToolOutput` for `output` — the one
+/// [`send_and_collect`](super::collect::send_and_collect) just observed live.
 ///
-/// `own_call_ids` — this same request's own `decisions` — are excluded before
-/// checking for staleness: they are *expected* to read as open (this very
-/// request is what resolves them, and hasn't sent anything to the engine
-/// yet), so retrying on their account would add a DB round trip to every
-/// ordinary approve for no reason. Only when some *other* call still reads
-/// open — the actual shape of this race — do we pay for a bounded re-read,
-/// stopping as soon as two consecutive reads agree (the writer has caught up)
-/// or [`CALL_LOOKUP_RETRY_ATTEMPTS`] is exhausted, whichever comes first.
-pub(super) async fn open_tool_requests_settled(
+/// That row is an exact barrier: the persistence tap and `DbSink`'s single
+/// writer append the engine broadcast in order, so once it has landed, every
+/// event broadcast before it has too — including a sibling call's
+/// `ToolOutput` that resolved before this request subscribed. A history
+/// snapshot taken when the request began can still lack that row, and
+/// reading the sibling as open made `approve` return before the model's
+/// closing reply (#104, #124). Anything broadcast after the barrier the
+/// caller has seen live, so it subtracts those itself. A row that never lands
+/// within [`PERSIST_BARRIER_TIMEOUT`] leaves the answer as of the last read.
+pub(super) async fn open_calls_after(
     db: &sea_orm::DatabaseConnection,
-    session_id: &SessionId,
-    prior: &[LogRecord],
-    own_call_ids: &std::collections::HashSet<&str>,
+    root: &SessionId,
+    session: &SessionId,
+    output: &str,
 ) -> ApiResult<Vec<(SessionId, String)>> {
-    let others =
-        |pending: Vec<(SessionId, String)>| -> std::collections::HashSet<(SessionId, String)> {
-            pending
+    let deadline = tokio::time::Instant::now() + PERSIST_BARRIER_TIMEOUT;
+    loop {
+        let records = load_prior_records(db, root).await?;
+        let landed = records.iter().any(|r| {
+            r.session == *session
+                && matches!(&r.payload,
+                    LogPayload::Out(OutEvent::ToolOutput { request_id, .. }) if request_id == output)
+        });
+        if landed || tokio::time::Instant::now() >= deadline {
+            if !landed {
+                tracing::warn!(
+                    request_id = output,
+                    "tool output never reached assistant_events; open calls may be stale"
+                );
+            }
+            return Ok(open_tool_requests(&records)
                 .into_iter()
-                .filter(|(_, id)| !own_call_ids.contains(id.as_str()))
-                .collect()
-        };
-    let mut current = others(open_tool_requests(prior));
-    if current.is_empty() {
-        return Ok(Vec::new());
-    }
-    for _ in 0..CALL_LOOKUP_RETRY_ATTEMPTS {
-        tokio::time::sleep(CALL_LOOKUP_RETRY_DELAY).await;
-        let reloaded = load_prior_records(db, session_id).await?;
-        let next = others(open_tool_requests(&reloaded));
-        if next == current {
-            break;
+                .filter(|(s, _)| s == session)
+                .collect());
         }
-        current = next;
+        tokio::time::sleep(PERSIST_POLL_INTERVAL).await;
     }
-    Ok(current.into_iter().collect())
 }
 
 /// Persist an "always deny" `tool_permissions` rule for the tool behind

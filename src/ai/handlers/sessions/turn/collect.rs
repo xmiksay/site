@@ -10,6 +10,7 @@ use entanglement_core::{AgentState, InMsg, OutEvent, SessionId};
 use entanglement_runtime::session_store::{LogPayload, LogRecord};
 use tokio::sync::broadcast;
 
+use super::routing;
 use crate::ai::engine::{self, SiteEngine};
 use crate::routes::api::error::{ApiError, ApiResult};
 
@@ -59,23 +60,22 @@ const TURN_TIMEOUT: Duration = Duration::from_secs(180);
 ///   session simply has nothing new to say until the rest of the batch is
 ///   also decided.
 ///
-/// `extra_pending` (`approve`'s `open_tool_requests`) names every call
-/// already outstanding on a target session *before* this request's own
-/// decisions, purely as a **readiness signal** — it never blocks this
-/// response. The moment this request's *own* decisions for a session settle,
-/// that session graduates into `session_targets` (below) *only if*
-/// `extra_pending` has no other still-open entry for it too: only then does
-/// that session's `TurnState` genuinely drain (`is_drained`), so the engine's
-/// own `drive_turn` is already running or about to — *now* it's correct to
-/// also wait (full [`TURN_TIMEOUT`] budget) for that session's `Done`/
-/// `Error`/next `WaitingApproval`, the same way a plain prompt always has,
-/// instead of returning the instant the last `ToolOutput` lands and silently
-/// omitting the continuation. If a sibling `extra_pending` call for that
-/// session is *still* open at that moment (a batch this request only
-/// partially decided), this correctly does **not** wait further — that's
-/// exactly the case that used to hang for the full timeout, since nothing
-/// new arrives on that session until the rest of the batch is decided
-/// elsewhere.
+/// `drain_check` (`approve`'s DB handle and root, `None` for every other
+/// caller) answers a **readiness** question — it never blocks this response.
+/// The moment this request's *own* decisions for a session settle, that
+/// session graduates into `session_targets` (below) *only if* no other call
+/// is still open on it (`routing::open_calls_after`, read behind a
+/// persistence barrier, minus every `ToolOutput` seen live here): only then
+/// does that session's `TurnState` genuinely drain (`is_drained`), so the
+/// engine's own `drive_turn` is already running or about to — *now* it's
+/// correct to also wait (full [`TURN_TIMEOUT`] budget) for that session's
+/// `Done`/`Error`/next `WaitingApproval`, the same way a plain prompt always
+/// has, instead of returning the instant the last `ToolOutput` lands and
+/// silently omitting the continuation. If a sibling call for that session is
+/// *still* open at that moment (a batch this request only partially decided),
+/// this correctly does **not** wait further — that's exactly the case that
+/// used to hang for the full timeout, since nothing new arrives on that
+/// session until the rest of the batch is decided elsewhere.
 ///
 /// A batched `approve` whose `decisions` resolve calls on two different
 /// sessions (the root and a child, or two sibling children) waits for every
@@ -87,7 +87,7 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
     engine: &SiteEngine,
     session: &SessionId,
     msgs: Vec<InMsg>,
-    extra_pending: Vec<(SessionId, String)>,
+    drain_check: Option<(&sea_orm::DatabaseConnection, &SessionId)>,
 ) -> ApiResult<Vec<LogRecord>> {
     let mut sub = engine.holly.subscribe();
     let mut collected = Vec::with_capacity(msgs.len() + 8);
@@ -140,13 +140,11 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
     // Readiness-only tracking (see this function's doc) — never gates the
     // response, only whether a session that just drained *our* decisions is
     // also free of any other still-open call.
-    let mut open_others: std::collections::HashSet<(SessionId, String)> = extra_pending
-        .into_iter()
-        .filter(|key| !pending_calls.contains(key))
-        .collect();
-    for (s, _) in &open_others {
-        targets.insert(s.clone());
-    }
+    let mut open_others: std::collections::HashSet<(SessionId, String)> =
+        std::collections::HashSet::new();
+    let mut seen_outputs: std::collections::HashSet<(SessionId, String)> =
+        std::collections::HashSet::new();
+    let mut drain_checked: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
 
     let mut descendants: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
     let mut settled_sessions: std::collections::HashSet<SessionId> =
@@ -195,16 +193,23 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
             let key = (ev_session.clone(), request_id.clone());
             pending_calls.remove(&key);
             open_others.remove(&key);
+            seen_outputs.insert(key);
+            let ours_drained = approve_sessions.contains(&ev_session)
+                && !pending_calls.iter().any(|(s, _)| s == &ev_session);
+            if ours_drained
+                && let Some((db, root)) = drain_check
+                && drain_checked.insert(ev_session.clone())
+            {
+                let open = routing::open_calls_after(db, root, &ev_session, request_id).await?;
+                open_others.extend(open.into_iter().filter(|k| !seen_outputs.contains(k)));
+            }
             // Our own decisions for this session just drained *and* nothing
             // else was left open for it either — it's now safe to also wait
             // for its continuation (see this function's doc). Checked on
             // every `ToolOutput` for this session, not just ours, since a
             // sibling resolving (concurrently, elsewhere) can be what
             // finally empties `open_others` for it.
-            if approve_sessions.contains(&ev_session)
-                && !pending_calls.iter().any(|(s, _)| s == &ev_session)
-                && !open_others.iter().any(|(s, _)| s == &ev_session)
-            {
+            if ours_drained && !open_others.iter().any(|(s, _)| s == &ev_session) {
                 session_targets.insert(ev_session.clone());
             }
         }

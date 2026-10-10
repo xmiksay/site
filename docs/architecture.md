@@ -694,7 +694,12 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   `assistant_events` after a turn settles — reassessed for #43 and unrelated
   to `entanglement_runtime`'s own guarantees either way: it exists solely
   because `DbSink`'s async writer task gives no read-your-writes guarantee at
-  the instant this handler observes e.g. `Done`.
+  the instant this handler observes e.g. `Done`. Where `approve` must know
+  whether *other* calls of a batch are still open (to decide whether to wait
+  for the turn's continuation), `turn/routing.rs`'s `open_calls_after` reads
+  them only once its own just-observed `ToolOutput` row has landed: the tap
+  and the single writer persist the broadcast in order, so that row is an
+  exact barrier for every earlier event (#104, #124).
 - `projection/` — pure fold of **one** session's `assistant_events` rows into
   the `{role, content}` shape the admin client renders (`role` one of
   `user | assistant | tool_result | error`). `assistant_events` for a whole

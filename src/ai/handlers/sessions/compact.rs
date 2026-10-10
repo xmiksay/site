@@ -109,7 +109,7 @@ pub async fn compact(
         .await
         .map_err(|_| ApiError::Internal("engine inbox closed".into()))?;
 
-    let report = send_and_collect(engine, &source, vec![oneshot], Vec::new()).await?;
+    let report = send_and_collect(engine, &source, vec![oneshot], None).await?;
     if let Some(message) = turn_error(&report) {
         return Err(ApiError::BadRequest(message));
     }
@@ -139,7 +139,7 @@ pub async fn compact(
         // `predecessor: Some(_)` spawn inherits its predecessor's user.
         user: None,
     };
-    let mut collected = send_and_collect(engine, &successor, vec![spawn], Vec::new()).await?;
+    let mut collected = send_and_collect(engine, &successor, vec![spawn], None).await?;
     engine.mark_live(successor.clone());
 
     // `entanglement_runtime`'s persistence tap synthesizes the seeded

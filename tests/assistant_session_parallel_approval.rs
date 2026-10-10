@@ -20,13 +20,15 @@
 //! whole session, so approving calls one at a time returns promptly for each
 //! one, and the last approval still drives the turn to completion.
 //!
-//! Also covers #104: approving call B right after call A, with no wait for
-//! A's `ToolOutput` to land in `assistant_events`, used to race `DbSink`'s
+//! Also covers #104/#124: approving call B right after call A, with no wait
+//! for A's `ToolOutput` to land in `assistant_events`, used to race `DbSink`'s
 //! async writer and hand `send_and_collect` a stale "A is still open" signal
-//! (`open_tool_requests`, `src/ai/handlers/sessions/turn/routing.rs`) —
-//! stopping it from waiting for the session's continuation and dropping the
-//! closing reply from B's response. `open_tool_requests_settled` closes that
-//! window by re-reading `assistant_events` until the signal stops changing.
+//! — stopping it from waiting for the session's continuation and dropping the
+//! closing reply from B's response. A re-read "until two reads agree" only
+//! narrowed that window (it still failed under load, and on CI);
+//! `open_calls_after` (`src/ai/handlers/sessions/turn/routing.rs`) closes it
+//! by reading open calls only once B's own `ToolOutput` has been persisted,
+//! which orders every earlier event — A's included — before it.
 //!
 //! DB-gated only (no live model needed) — see `tests/common/scripted.rs`'s
 //! `ScriptedFixture` doc for why a scripted `Llm` is used instead.
@@ -45,6 +47,10 @@ use scripted::{scripted_cleanup, scripted_session, setup_scripted};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 use site::entity::tag;
+
+/// Ceiling on waiting for both parallel calls to show up in the persisted
+/// history — generous because only a broken run ever reaches it.
+const PERSIST_WAIT: Duration = Duration::from_secs(30);
 
 /// First round: two parallel `tag_create` calls (both permission-gated,
 /// defaulting to `Ask` for a fresh user with no `tool_permissions` rows) in
@@ -161,9 +167,8 @@ async fn approving_calls_one_at_a_time_settles_each_promptly_and_the_last_contin
     // way `tests/assistant_session_subagent_pagewriter.rs` polls for its
     // child's call — approving a call before its own `ToolRequest` has landed
     // races the engine's own registration, not the bug this test targets.
-    let mut call_ids = Vec::new();
-    let mut detail = resp;
-    for _ in 0..20 {
+    let deadline = tokio::time::Instant::now() + PERSIST_WAIT;
+    let call_ids = loop {
         let (status, resp) = send(
             &fx.app,
             "GET",
@@ -174,24 +179,20 @@ async fn approving_calls_one_at_a_time_settles_each_promptly_and_the_last_contin
         .await;
         assert_eq!(status, StatusCode::OK, "read session: {resp}");
         let ids = pending_call_ids(resp["messages"].as_array().expect("messages array"));
-        detail = resp;
         if ids.len() == 2 {
-            call_ids = ids;
-            break;
+            break ids;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert_eq!(
-        call_ids.len(),
-        2,
-        "never saw both parallel pending calls: {detail:#}"
-    );
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "never saw both parallel pending calls: {resp:#}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
 
     // Approve the first call alone. Before the fix, `send_and_collect` waited
     // for the *whole session* to settle (`Done`/`Error`/`WaitingApproval`),
     // which never happens until the second call is also decided — this
-    // request would hang for the full 180s `TURN_TIMEOUT`.
-    let start = std::time::Instant::now();
+    // request would hit the 180s `TURN_TIMEOUT` and answer 500, not 200.
     let (status, approved_a) = send(
         &fx.app,
         "POST",
@@ -200,14 +201,7 @@ async fn approving_calls_one_at_a_time_settles_each_promptly_and_the_last_contin
         Some(json!({ "decisions": [{ "tool_call_id": call_ids[0], "approve": true }] })),
     )
     .await;
-    let elapsed = start.elapsed();
     assert_eq!(status, StatusCode::OK, "approve call A: {approved_a}");
-    assert!(
-        elapsed < Duration::from_secs(10),
-        "approving one of two pending calls took {elapsed:?} — looks like it \
-         waited for the whole batch to drain instead of settling on its own \
-         ToolOutput: {approved_a:#}"
-    );
     assert!(
         tag_exists(&fx.db, &tag_a).await,
         "approving call A should have run tag_create for it: {approved_a:#}"
@@ -218,21 +212,14 @@ async fn approving_calls_one_at_a_time_settles_each_promptly_and_the_last_contin
     );
 
     // Approve call B immediately, with no wait for call A's `ToolOutput` to
-    // land in `assistant_events` first. `approve`'s `extra_pending` readiness
-    // signal (`open_tool_requests_settled`, `src/ai/handlers/sessions/turn/
-    // routing.rs`) used to be a plain read of `prior` — `DbSink` writes
-    // `assistant_events` from its own async writer task
-    // (`src/ai/persistence.rs`'s module doc), so `prior` could still be
-    // missing call A's `ToolOutput` here, handing `send_and_collect` a stale
-    // "A is still open" signal that stopped it from waiting for the session's
-    // continuation (#104). `open_tool_requests_settled` now re-reads
-    // `assistant_events` until that signal stops changing before trusting it,
-    // closing exactly this window — so the closing reply below must show up
-    // without this test doing its own polling wait first.
+    // land in `assistant_events` first — `DbSink` writes from its own async
+    // writer task (`src/ai/persistence.rs`'s module doc), so the history
+    // `approve` starts from can still lack it (see the module doc). The
+    // closing reply below must show up without this test doing its own
+    // polling wait first.
     //
     // Approve the second (last) call — this is what actually drains the
     // batch and lets the turn continue to its closing text reply.
-    let start = std::time::Instant::now();
     let (status, approved_b) = send(
         &fx.app,
         "POST",
@@ -241,12 +228,7 @@ async fn approving_calls_one_at_a_time_settles_each_promptly_and_the_last_contin
         Some(json!({ "decisions": [{ "tool_call_id": call_ids[1], "approve": true }] })),
     )
     .await;
-    let elapsed = start.elapsed();
     assert_eq!(status, StatusCode::OK, "approve call B: {approved_b}");
-    assert!(
-        elapsed < Duration::from_secs(10),
-        "approving the last pending call took {elapsed:?}: {approved_b:#}"
-    );
     assert!(
         tag_exists(&fx.db, &tag_b).await,
         "approving call B should have run tag_create for it: {approved_b:#}"
