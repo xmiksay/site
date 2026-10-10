@@ -73,7 +73,7 @@ async function deleteSession(id: number) {
     >
       <ChatPanel
         v-if="assistant.current"
-        class="flex-1"
+        class="flex-1 bg-surface rounded-lg shadow overflow-hidden"
         :show-back="true"
         @back="assistant.current = null"
       />

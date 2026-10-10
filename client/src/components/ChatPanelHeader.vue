@@ -20,7 +20,10 @@ async function promptToChangeTitle() {
 </script>
 
 <template>
-  <header v-if="assistant.current" class="shrink-0 p-3 border-b flex items-center justify-between gap-2">
+  <header
+    v-if="assistant.current"
+    class="shrink-0 p-3 border-b border-line-2 flex flex-wrap items-center justify-between gap-2"
+  >
     <div class="flex items-center gap-2 min-w-0">
       <button
         v-if="showBack"
@@ -41,6 +44,9 @@ async function promptToChangeTitle() {
         {{ assistant.current.title }}
       </button>
     </div>
-    <AssistantSessionToolbar />
+    <div class="flex flex-wrap items-center gap-2">
+      <AssistantSessionToolbar />
+      <slot />
+    </div>
   </header>
 </template>

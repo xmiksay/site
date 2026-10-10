@@ -7,12 +7,11 @@ import { computed, onMounted, ref } from 'vue'
 import { useAssistantStore } from '../stores/assistant'
 import { useDesignStore } from '../stores/design'
 import { defaultUploadPath } from '../lib/designPaths'
-import AssistantChat from './AssistantChat.vue'
-import AssistantSessionToolbar from './AssistantSessionToolbar.vue'
+import ChatPanel from './ChatPanel.vue'
 
 const assistant = useAssistantStore()
 const design = useDesignStore()
-const chat = ref<InstanceType<typeof AssistantChat> | null>(null)
+const chat = ref<InstanceType<typeof ChatPanel> | null>(null)
 const error = ref('')
 const uploading = ref(false)
 
@@ -85,11 +84,11 @@ onMounted(async () => {
 
 <template>
   <div class="flex flex-col min-h-0 flex-1">
-    <div class="p-2 border-b flex flex-wrap items-center gap-2 text-sm">
+    <div class="p-2 border-b border-line-2 flex flex-wrap items-center gap-2 text-sm">
       <select
         v-if="designerSessions.length"
         :value="isChild ? current?.parent_session_id : current?.id"
-        class="min-w-0 flex-1 rounded border border-gray-300 px-2 py-1"
+        class="min-w-0 flex-1 rounded border border-line-1 bg-surface px-2 py-1"
         aria-label="Designer chats"
         @change="select(Number(($event.target as HTMLSelectElement).value))"
       >
@@ -97,27 +96,31 @@ onMounted(async () => {
           {{ s.title }} · {{ new Date(s.updated_at).toLocaleDateString() }}
         </option>
       </select>
-      <button
-        type="button"
-        class="rounded bg-gray-800 hover:bg-gray-700 text-white px-2 py-1"
-        @click="newChat"
-      >
+      <button type="button" class="rounded button-primary px-2 py-1" @click="newChat">
         New Designer chat
       </button>
     </div>
-    <div v-if="current" class="px-2 py-1 border-b flex flex-wrap items-center gap-2 text-sm">
-      <button
-        v-if="isChild"
-        type="button"
-        class="text-blue-600 hover:underline"
-        @click="select(current.parent_session_id!)"
-      >
-        ← Back to the Designer chat
-      </button>
-      <template v-else>
-        <AssistantSessionToolbar />
+    <p v-if="error" class="m-2 text-sm text-danger-strong bg-danger-bg border border-danger-soft rounded p-2">
+      {{ error }}
+    </p>
+    <ChatPanel
+      v-if="current"
+      ref="chat"
+      class="flex-1"
+      placeholder="Describe the design change…  (Cmd+Enter to send)"
+    >
+      <template #actions>
+        <button
+          v-if="isChild"
+          type="button"
+          class="text-xs text-accent hover:underline"
+          @click="select(current.parent_session_id!)"
+        >
+          ← Back to the Designer chat
+        </button>
         <label
-          class="ml-auto rounded border border-gray-300 px-2 py-0.5 hover:bg-gray-50 cursor-pointer"
+          v-else
+          class="text-xs rounded border border-line-1 px-2 py-1 hover:bg-surface-raised cursor-pointer"
           :class="{ 'opacity-50': uploading }"
           title="Upload an image or font into the draft's assets/"
         >
@@ -131,15 +134,8 @@ onMounted(async () => {
           />
         </label>
       </template>
-    </div>
-    <p v-if="error" class="m-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2">{{ error }}</p>
-    <AssistantChat
-      v-if="current"
-      ref="chat"
-      placeholder="Describe the design change…  (Cmd+Enter to send)"
-      @select-session="select"
-    />
-    <div v-else class="flex-1 flex items-center justify-center p-4 text-center text-sm text-gray-500">
+    </ChatPanel>
+    <div v-else class="flex-1 flex items-center justify-center p-4 text-center text-sm text-fg-3">
       Start a Designer chat: the assistant edits the draft, the preview shows the result.
     </div>
   </div>

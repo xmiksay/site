@@ -262,7 +262,10 @@ async function restore(revId: number) {
         v-if="chatOpen && !props.create && pageContext"
         class="w-96 shrink-0 relative"
       >
-        <ChatPanel class="absolute inset-0" :page-context="pageContext" />
+        <ChatPanel
+          class="absolute inset-0 bg-surface rounded-lg shadow overflow-hidden"
+          :page-context="pageContext"
+        />
       </div>
     </div>
 
