@@ -4,6 +4,8 @@
 import { onMounted, ref } from 'vue'
 import { useDesignStore } from '../stores/design'
 
+// `dirty`: the open editor has unsaved edits, which a restore discards.
+const props = defineProps<{ dirty: boolean }>()
 const emit = defineEmits<{ restored: [id: string]; close: [] }>()
 
 const design = useDesignStore()
@@ -18,7 +20,8 @@ function message(e: unknown): string {
 async function restore(id: string) {
   const changes = design.state?.changes.length ?? 0
   const lost = changes ? ` The ${changes} unpublished change(s) in the draft are replaced.` : ''
-  if (!confirm(`Restore version ${id} into the draft?${lost}`)) return
+  const unsaved = props.dirty ? " The open file's unsaved edits are lost too." : ''
+  if (!confirm(`Restore version ${id} into the draft?${lost}${unsaved}`)) return
   busy.value = id
   error.value = ''
   try {

@@ -7,7 +7,7 @@
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Extension, Path, Query, State};
-use axum::http::{HeaderMap, Uri, header};
+use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -72,10 +72,24 @@ impl From<DesignError> for ApiError {
             DesignError::Storage(e) => e.into(),
             DesignError::BadPath(_) => Self::BadRequest(err.to_string()),
             DesignError::NotInDraft(_) | DesignError::NoVersion(_) => Self::NotFound,
-            DesignError::Invalid(_) => Self::Unprocessable(err.to_string()),
-            DesignError::Conflict(_) | DesignError::NothingToPublish => {
-                Self::Conflict(err.to_string())
-            }
+            DesignError::Invalid(ref errors) => Self::Detailed {
+                status: StatusCode::UNPROCESSABLE_ENTITY,
+                message: err.to_string(),
+                code: "invalid",
+                details: errors.clone(),
+            },
+            DesignError::Conflict(ref paths) => Self::Detailed {
+                status: StatusCode::CONFLICT,
+                message: err.to_string(),
+                code: "conflict",
+                details: paths.clone(),
+            },
+            DesignError::NothingToPublish => Self::Detailed {
+                status: StatusCode::CONFLICT,
+                message: err.to_string(),
+                code: "nothing_to_publish",
+                details: Vec::new(),
+            },
             DesignError::RenderCheck => Self::Internal(err.to_string()),
             DesignError::PublishFailed { ref error, .. } => {
                 let msg = status_error(&err);

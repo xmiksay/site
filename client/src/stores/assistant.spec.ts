@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { nextTick } from 'vue'
 import { useAssistantStore } from './assistant'
 import { api } from '../api'
 import type { WsEnvelope } from '../types'
@@ -167,5 +168,46 @@ describe('assistant store — session summaries', () => {
 
     // Not just `[{id: 2}]` — the child row is gone server-side too.
     expect(store.sessions).toEqual([])
+  })
+
+  it('a turn finishing for another session neither takes over nor blocks the open chat', async () => {
+    const store = useAssistantStore()
+    store.current = { id: 1, messages: [] } as any
+    let finish!: (d: unknown) => void
+    apiMock.mockReturnValueOnce(new Promise((r) => (finish = r)) as never)
+    const turn = store.sendMessage(1, 'hi')
+    expect(store.sending).toBe(true)
+
+    // The admin switches to the Design studio's chat while the turn runs.
+    store.current = { id: 2, messages: [] } as any
+    await nextTick()
+    expect(store.sending).toBe(false)
+
+    finish({ id: 1, messages: [{ id: 9 }] })
+    expect(await turn).toEqual({ id: 1, messages: [{ id: 9 }] })
+    expect(store.current?.id).toBe(2)
+    expect(store.sending).toBe(false)
+
+    // Back on the first chat, nothing is in flight any more.
+    store.current = { id: 1, messages: [] } as any
+    await nextTick()
+    expect(store.sending).toBe(false)
+  })
+
+  it('switching back to a chat with a request in flight shows it busy', async () => {
+    const store = useAssistantStore()
+    store.current = { id: 1, messages: [] } as any
+    let finish!: (d: unknown) => void
+    apiMock.mockReturnValueOnce(new Promise((r) => (finish = r)) as never)
+    const turn = store.sendMessage(1, 'hi')
+    store.current = { id: 2, messages: [] } as any
+    await nextTick()
+    store.current = { id: 1, messages: [] } as any
+    await nextTick()
+    expect(store.sending).toBe(true)
+    finish({ id: 1, messages: [] })
+    await turn
+    expect(store.sending).toBe(false)
+    expect(store.current?.id).toBe(1)
   })
 })

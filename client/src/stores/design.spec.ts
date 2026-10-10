@@ -140,7 +140,9 @@ describe('design store', () => {
     apiMock.mockRejectedValueOnce(
       new ApiError(
         409,
-        'design/ changed outside the draft since it was started: templates/base.html; discard the draft to adopt those changes, or publish with force=true to overwrite them',
+        'design/ changed outside the draft since it was started: templates/base.html; …',
+        'conflict',
+        ['templates/base.html'],
       ),
     )
     expect(await store.publish()).toMatchObject({ kind: 'conflict', paths: ['templates/base.html'] })
@@ -149,13 +151,16 @@ describe('design store', () => {
   })
 
   it('a 409 with nothing to publish resolves as "nothing"', async () => {
-    apiMock.mockRejectedValueOnce(new ApiError(409, 'nothing to publish: the draft matches the live design'))
+    apiMock.mockRejectedValueOnce(new ApiError(409, 'nothing to publish: the draft matches the live design', 'nothing_to_publish'))
     expect(await useDesignStore().publish()).toMatchObject({ kind: 'nothing' })
   })
 
   it('a 422 resolves with one error per template problem', async () => {
     apiMock.mockRejectedValueOnce(
-      new ApiError(422, 'templates/a.html:2: undefined value (rendering 404); templates/b.html: syntax error'),
+      new ApiError(422, 'templates/a.html:2: …; templates/b.html: …', 'invalid', [
+        'templates/a.html:2: undefined value (rendering 404)',
+        'templates/b.html: syntax error',
+      ]),
     )
     expect(await useDesignStore().publish()).toEqual({
       kind: 'invalid',
@@ -220,11 +225,15 @@ describe('design store', () => {
     expect(apiMock).not.toHaveBeenCalled()
 
     store.state = designState()
-    apiMock.mockResolvedValueOnce(designState({ changes: [{ path: 'templates/base.html', kind: 'modified' }] }))
+    let land!: (s: DesignState) => void
+    apiMock.mockReturnValueOnce(new Promise((r) => (land = r)) as never)
     wsHandler!({ topic: 'design', event: 'draft_changed', payload: { action: 'put', path: 'a' } })
-    await vi.waitFor(() => expect(store.state?.changes).toHaveLength(1))
-    expect(store.revision).toBe(2)
     expect(apiMock).toHaveBeenCalledWith('/api/design/draft')
+    // Not before the fresh state landed: consumers read it on the bump.
+    expect(store.revision).toBe(1)
+    land(designState({ changes: [{ path: 'templates/base.html', kind: 'modified' }] }))
+    await vi.waitFor(() => expect(store.revision).toBe(2))
+    expect(store.state?.changes).toHaveLength(1)
   })
 
   it('a published WS event also refreshes a loaded history', async () => {

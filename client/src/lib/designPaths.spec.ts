@@ -59,6 +59,10 @@ describe('path helpers', () => {
     expect(previewPath(' about?x=1 ')).toBe('/about?x=1')
     expect(previewPath('//evil.example/x')).toBe('/evil.example/x')
     expect(previewPath('/\\evil.example')).toBe('/evil.example')
+    expect(previewPath('/\t/evil.example/x')).toBe('/evil.example/x')
+    expect(previewPath('\n/\r\n/evil.example')).toBe('/evil.example')
+    expect(previewPath('/a\\b')).toBe('/a/b')
+    expect(previewPath('/blog#top')).toBe('/blog#top')
   })
 
   it('routes uploads by type: images and fonts into assets/, the rest into the folder', () => {

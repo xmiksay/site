@@ -48,7 +48,7 @@ function select(path: string) {
 }
 
 function onUploaded(path: string) {
-  if (path === selected.value) editorGeneration.value++
+  if (path === selected.value) reset()
   else select(path)
 }
 
@@ -93,7 +93,7 @@ defineExpose({ confirmDiscard, reset })
             </li>
           </ul>
         </section>
-        <DesignUpload :folder="folder" @uploaded="onUploaded" />
+        <DesignUpload :folder="folder" :dirty-path="dirty ? selected : null" @uploaded="onUploaded" />
       </div>
     </div>
     <DesignEditor

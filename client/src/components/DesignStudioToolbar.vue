@@ -78,7 +78,10 @@ function publish() {
 }
 
 function discard() {
-  if (!confirm('Zahodit draft? Every unpublished change is lost and the draft resets to the live design.')) return
+  const unsaved = props.dirty ? " The open file's unsaved edits are lost too." : ''
+  if (!confirm(`Zahodit draft? Every unpublished change is lost and the draft resets to the live design.${unsaved}`)) {
+    return
+  }
   return run(async () => {
     await design.discard()
     emit('reset')
@@ -162,6 +165,6 @@ function splitError(line: string): [string, string] {
       </ul>
     </div>
 
-    <DesignHistory v-if="showHistory" @restored="onRestored" @close="showHistory = false" />
+    <DesignHistory v-if="showHistory" :dirty="dirty" @restored="onRestored" @close="showHistory = false" />
   </div>
 </template>

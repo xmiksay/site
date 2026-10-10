@@ -103,10 +103,16 @@ export const useDesignStore = defineStore('design', () => {
   }
 
   useWsStore().on('design', (envelope) => {
-    revision.value++
     // Nothing to refresh until a page has loaded the draft.
-    if (!state.value) return
-    load().catch(() => {})
+    if (!state.value) {
+      revision.value++
+      return
+    }
+    // Bump only once the fresh state landed: consumers read `files` (e.g.
+    // a file's `overridden`) when the revision moves.
+    load()
+      .catch(() => {})
+      .finally(() => revision.value++)
     if (envelope.event === 'published' && history.value.length) loadHistory().catch(() => {})
   })
 

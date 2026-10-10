@@ -3,7 +3,8 @@ import { computed, ref } from 'vue'
 import { useDesignStore } from '../stores/design'
 import { defaultUploadPath, validateDesignPath } from '../lib/designPaths'
 
-const props = defineProps<{ folder: string }>()
+// `dirtyPath`: the file open in the editor with unsaved edits, if any.
+const props = defineProps<{ folder: string; dirtyPath?: string | null }>()
 const emit = defineEmits<{ uploaded: [path: string] }>()
 
 const design = useDesignStore()
@@ -24,7 +25,9 @@ function pick(e: Event) {
 
 async function submit() {
   if (!canSubmit.value || !file.value) return
-  if (exists.value && !confirm(`Overwrite ${target.value}?`)) return
+  if (target.value === props.dirtyPath) {
+    if (!confirm(`Overwrite ${target.value} and discard its unsaved edits?`)) return
+  } else if (exists.value && !confirm(`Overwrite ${target.value}?`)) return
   busy.value = true
   error.value = ''
   try {

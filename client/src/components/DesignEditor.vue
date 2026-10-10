@@ -20,9 +20,11 @@ const busy = ref(false)
 const error = ref('')
 const content = ref('')
 const original = ref('')
-// True once the textarea is writable: an existing override, or a baked file the
-// user chose to override (the override does not exist until Save).
-const editing = ref(false)
+// A baked file the admin chose to override; the override exists only after Save.
+const pendingOverride = ref(false)
+// Derived from the file's own state, so a draft change made elsewhere (the AI
+// overriding or reverting this file) flips it without a reload.
+const editing = computed(() => props.file.overridden || pendingOverride.value)
 const previewUrl = ref<string | null>(null)
 // 'published' / 'baked' show that version read-only beside the draft; the
 // draft edit stays untouched underneath.
@@ -32,7 +34,18 @@ const sourceUrl = ref<string | null>(null)
 const sourceMissing = ref(false)
 
 const dirty = computed(
-  () => editing.value && (content.value !== original.value || !props.file.overridden),
+  () => pendingOverride.value || (editing.value && content.value !== original.value),
+)
+// Sync, so `editing` and `dirty` never see the flip half-applied: an override
+// appearing ends a pending one; one reverted under unsaved edits keeps them
+// editable as a pending override.
+watch(
+  () => props.file.overridden,
+  (overridden) => {
+    if (overridden) pendingOverride.value = false
+    else if (content.value !== original.value) pendingOverride.value = true
+  },
+  { flush: 'sync' },
 )
 watch(dirty, (d) => emit('dirty', d), { immediate: true })
 
@@ -90,7 +103,6 @@ watch(
         if (!dirty.value && text !== original.value) {
           content.value = text
           original.value = text
-          editing.value = props.file.overridden
         }
       } else if (isImage.value) {
         setPreview(await design.fetchContent(props.file.path))
@@ -109,7 +121,6 @@ async function load() {
     if (isText.value) {
       content.value = await design.fetchText(props.file.path)
       original.value = content.value
-      editing.value = props.file.overridden
     } else if (isImage.value) {
       setPreview(await design.fetchContent(props.file.path))
     }
@@ -124,12 +135,12 @@ function startOverride() {
   return run(async () => {
     content.value = await design.fetchText(props.file.path, 'baked')
     original.value = content.value
-    editing.value = true
+    pendingOverride.value = true
   })
 }
 
 function cancelOverride() {
-  editing.value = false
+  pendingOverride.value = false
   return load()
 }
 
@@ -139,6 +150,7 @@ function save() {
     const body = content.value
     await design.save(props.file.path, body)
     original.value = body
+    pendingOverride.value = false
   })
 }
 

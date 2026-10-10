@@ -19,11 +19,29 @@ describe('DesignPreview', () => {
     expect(wrapper.get('iframe').attributes('src')).toBe('/')
   })
 
-  it('navigates to the typed path, kept on this origin', async () => {
+  it('navigates the frame to the typed path, even back to where it started', async () => {
     vi.spyOn(useDesignStore(), 'setPreview').mockResolvedValue()
     const wrapper = mount(DesignPreview)
     await flushPromises()
-    await wrapper.get('input').setValue('//evil.example/blog')
+    const assign = vi.fn()
+    // The admin clicked a link inside the frame: it is no longer at `src`.
+    const location = { pathname: '/blog/post', search: '', hash: '', assign, reload: vi.fn() }
+    Object.defineProperty(wrapper.get('iframe').element, 'contentWindow', { value: { location } })
+    await wrapper.get('iframe').trigger('load')
+    expect((wrapper.get('input').element as HTMLInputElement).value).toBe('/blog/post')
+
+    await wrapper.get('input').setValue('/')
+    await wrapper.get('form').trigger('submit')
+    expect(assign).toHaveBeenCalledWith('/')
+    expect(location.reload).not.toHaveBeenCalled()
+  })
+
+  it('keeps a typed path on this origin, remounting when the frame is unreachable', async () => {
+    vi.spyOn(useDesignStore(), 'setPreview').mockResolvedValue()
+    const wrapper = mount(DesignPreview)
+    await flushPromises()
+    Object.defineProperty(wrapper.get('iframe').element, 'contentWindow', { value: null })
+    await wrapper.get('input').setValue('/\t/evil.example/blog')
     await wrapper.get('form').trigger('submit')
     expect(wrapper.get('iframe').attributes('src')).toBe('/evil.example/blog')
   })

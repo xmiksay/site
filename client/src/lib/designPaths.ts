@@ -34,13 +34,20 @@ export function designFileUrl(path: string, source: DesignSource = 'draft'): str
   return `/api/design/draft/${encoded}${source === 'draft' ? '' : `?source=${source}`}`
 }
 
-/** A site-relative URL for the preview iframe from what the admin typed: one
- *  leading `/`, so `//host` cannot point the frame at another origin. */
-export function previewPath(input: string): string {
-  return `/${input.trim().replace(/^[/\\]+/, '')}`
+/** A site-relative URL for the preview iframe from what the admin typed, never
+ *  leaving `origin`: browsers drop tabs/newlines and read `\` as `/`, so
+ *  `/\t/host` or `/\host` would otherwise become a protocol-relative URL. */
+export function previewPath(input: string, origin: string = location.origin): string {
+  const path = `/${input.replace(/[\t\n\r]/g, '').trim().replace(/^[/\\]+/, '')}`
+  try {
+    const url = new URL(path, origin)
+    return url.origin === origin ? `${url.pathname}${url.search}${url.hash}` : '/'
+  } catch {
+    return '/'
+  }
 }
 
-const FONT_EXTENSIONS =new Set(['woff', 'woff2', 'ttf', 'otf', 'eot'])
+const FONT_EXTENSIONS = new Set(['woff', 'woff2', 'ttf', 'otf', 'eot'])
 
 /** Where an uploaded file lands by default: images under `assets/img/`, fonts
  *  under `assets/fonts/`, anything else in the folder picked in the tree. */

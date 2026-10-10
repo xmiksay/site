@@ -45,19 +45,29 @@ function onLoad() {
   if (path) input.value = path
 }
 
+// The frame may have navigated away from `src`, so both act on its live
+// location; remounting at a path is the fallback.
+function remountAt(path: string) {
+  src.value = path
+  frameKey.value++
+}
+
 function reload() {
   try {
     frame.value!.contentWindow!.location.reload()
   } catch {
-    frameKey.value++
+    remountAt(currentPath() ?? src.value)
   }
 }
 
 function go() {
   const path = previewPath(input.value)
   input.value = path
-  if (path === src.value) reload()
-  else src.value = path
+  try {
+    frame.value!.contentWindow!.location.assign(path)
+  } catch {
+    remountAt(path)
+  }
 }
 
 // The banner's exit link inside the iframe turns the preview off; the manual
@@ -68,7 +78,7 @@ async function refresh() {
 }
 
 function openInTab() {
-  window.open(currentPath() ?? src.value, '_blank', 'noopener')
+  window.open(previewPath(currentPath() ?? input.value), '_blank', 'noopener')
 }
 
 let timer: ReturnType<typeof setTimeout> | null = null

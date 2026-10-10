@@ -66,6 +66,59 @@ describe('DesignEditor', () => {
     expect((textarea.element as HTMLTextAreaElement).value).toBe('<mine>')
   })
 
+  it('an override reverted elsewhere becomes read-only without turning dirty', async () => {
+    const store = useDesignStore()
+    const fetchText = vi.spyOn(store, 'fetchText').mockResolvedValue('<override>')
+    const wrapper = mount(DesignEditor, { props: { file: overridden } })
+    await flushPromises()
+
+    fetchText.mockResolvedValue('<baked>')
+    await wrapper.setProps({ file: { ...overridden, overridden: false } })
+    store.revision++
+    await flushPromises()
+
+    expect(wrapper.emitted('dirty')!.flat()).not.toContain(true)
+    const textarea = wrapper.get('textarea')
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('<baked>')
+    expect(textarea.attributes('readonly')).toBeDefined()
+  })
+
+  it('a baked file overridden elsewhere becomes editable', async () => {
+    const store = useDesignStore()
+    const fetchText = vi.spyOn(store, 'fetchText').mockResolvedValue('<baked>')
+    const baked = { ...overridden, overridden: false }
+    const wrapper = mount(DesignEditor, { props: { file: baked } })
+    await flushPromises()
+    expect(wrapper.get('textarea').attributes('readonly')).toBeDefined()
+
+    fetchText.mockResolvedValue('<from the AI>')
+    await wrapper.setProps({ file: overridden })
+    store.revision++
+    await flushPromises()
+
+    const textarea = wrapper.get('textarea')
+    expect(textarea.attributes('readonly')).toBeUndefined()
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('<from the AI>')
+    expect(wrapper.emitted('dirty')!.flat()).not.toContain(true)
+  })
+
+  it('unsaved edits survive the override being reverted elsewhere', async () => {
+    const store = useDesignStore()
+    vi.spyOn(store, 'fetchText').mockResolvedValue('<override>')
+    const wrapper = mount(DesignEditor, { props: { file: overridden } })
+    await flushPromises()
+    await wrapper.get('textarea').setValue('<mine>')
+
+    await wrapper.setProps({ file: { ...overridden, overridden: false } })
+    store.revision++
+    await flushPromises()
+
+    const textarea = wrapper.get('textarea')
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('<mine>')
+    expect(textarea.attributes('readonly')).toBeUndefined()
+    expect(wrapper.emitted('dirty')!.at(-1)).toEqual([true])
+  })
+
   it('shows the published version read-only, keeping the draft edit', async () => {
     const store = useDesignStore()
     vi.spyOn(store, 'fetchText').mockResolvedValue('<draft>')

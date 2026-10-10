@@ -104,6 +104,26 @@ describe('DesignStudioToolbar', () => {
     expect(wrapper.emitted('reset')).toHaveLength(1)
   })
 
+  it('discard and restore warn that the open file loses its unsaved edits', async () => {
+    const confirm = vi.fn().mockReturnValue(false)
+    vi.stubGlobal('confirm', confirm)
+    const store = useDesignStore()
+    vi.spyOn(store, 'loadHistory').mockImplementation(async () => {
+      store.history = [entry]
+    })
+    const restore = vi.spyOn(store, 'restore')
+    const wrapper = mount(DesignStudioToolbar, { props: { dirty: true } })
+
+    await button(wrapper, 'Zahodit draft').trigger('click')
+    expect(confirm.mock.calls[0][0]).toContain('unsaved edits are lost')
+
+    await button(wrapper, 'Historie').trigger('click')
+    await flushPromises()
+    await button(wrapper, 'Restore to draft').trigger('click')
+    expect(confirm.mock.calls[1][0]).toContain('unsaved edits are lost')
+    expect(restore).not.toHaveBeenCalled()
+  })
+
   it('Zahodit draft is disabled without changes', () => {
     useDesignStore().state = state([])
     const wrapper = mount(DesignStudioToolbar, { props: { dirty: false } })

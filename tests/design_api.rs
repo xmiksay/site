@@ -233,6 +233,16 @@ async fn exercise(app: &App, ts: &TestStorage, kind: &str) {
             .contains("templates/404.html"),
         "{body}"
     );
+    assert_eq!(body["code"], "invalid", "{body}");
+    let details = body["details"].as_array().expect("details");
+    assert!(
+        details.len() == 1
+            && details[0]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("templates/404.html"),
+        "{body}"
+    );
     assert_eq!(app.public_404().await, baked_404, "live untouched");
     assert!(
         ts.storage
@@ -263,6 +273,14 @@ async fn exercise(app: &App, ts: &TestStorage, kind: &str) {
     let error = body["error"].as_str().unwrap_or("");
     assert!(
         error.contains("templates/page_search.html:2: undefined"),
+        "{body}"
+    );
+    assert_eq!(body["code"], "invalid", "{body}");
+    assert!(
+        body["details"][0]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("templates/page_search.html:2: undefined"),
         "{body}"
     );
     assert_eq!(app.public_404().await, baked_404, "live untouched");
@@ -325,6 +343,8 @@ async fn exercise(app: &App, ts: &TestStorage, kind: &str) {
             .contains("nothing to publish"),
         "{body}"
     );
+    assert_eq!(body["code"], "nothing_to_publish", "{body}");
+    assert!(body.get("details").is_none(), "{body}");
 
     let (status, _) = app
         .call(
@@ -365,6 +385,8 @@ async fn exercise(app: &App, ts: &TestStorage, kind: &str) {
             .contains("changed outside the draft since it was started: templates/404.html"),
         "{body}"
     );
+    assert_eq!(body["code"], "conflict", "{body}");
+    assert_eq!(body["details"], json!(["templates/404.html"]), "{body}");
     assert_eq!(app.public_404().await, "EXTERNAL");
     let (status, _) = app.json("POST", "/api/design/publish?force=true", "").await;
     assert_eq!(status, StatusCode::OK);
