@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::design::draft::FileChange;
 use crate::design::publish::HistoryEntry;
-use crate::design::stored::{DesignError, ReloadStatus, check_path, status_error};
+use crate::design::stored::{DesignError, ReloadStatus, status_error};
+use crate::design::tools::{DesignFile, MAX_FILE_SIZE, Source, file_entries, read_source};
 use crate::entity::user;
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::routes::broadcast::{self, DraftChange};
@@ -25,24 +26,29 @@ use crate::routes::public::preview::{EXIT_PATH, PREVIEW_COOKIE};
 use crate::state::AppState;
 use crate::storage;
 
-/// Fonts and images are the largest files; templates are tiny.
-const MAX_DESIGN_FILE_SIZE: usize = 20 * 1024 * 1024;
-
+/// Session-only: publishing, discarding, the history, reloads and the
+/// draft preview are human actions in the admin.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/reload", post(reload))
-        .route("/draft", get(draft))
         .route("/draft/discard", post(discard))
-        .route(
-            "/draft/{*path}",
-            get(read_file).put(put_file).delete(delete_file),
-        )
         .route("/publish", post(publish))
         .route("/history", get(history))
         .route("/history/{id}/restore", post(restore))
         .route("/preview", post(set_preview))
         .route("/preview/exit", get(exit_preview))
-        .layer(DefaultBodyLimit::max(MAX_DESIGN_FILE_SIZE))
+}
+
+/// The draft tree and its files, also open to external agents with the MCP
+/// Bearer token (#118) — raw bodies, so `curl -T font.woff2` works.
+pub fn draft_router() -> Router<AppState> {
+    Router::new()
+        .route("/draft", get(draft))
+        .route(
+            "/draft/{*path}",
+            get(read_file).put(put_file).delete(delete_file),
+        )
+        .layer(DefaultBodyLimit::max(MAX_FILE_SIZE))
 }
 
 /// The draft as the admin sees it.
@@ -58,15 +64,6 @@ pub struct DraftState {
     files: Vec<DesignFile>,
     /// What publishing would change.
     changes: Vec<FileChange>,
-}
-
-#[derive(Serialize)]
-struct DesignFile {
-    path: String,
-    baked: bool,
-    /// Differs from the baked default (or has none).
-    overridden: bool,
-    size: u64,
 }
 
 impl From<DesignError> for ApiError {
@@ -96,19 +93,7 @@ impl From<DesignError> for ApiError {
 async fn draft_state(state: &AppState) -> ApiResult<Json<DraftState>> {
     let design = &state.design;
     let draft = design.draft(&state.storage).await?;
-    let files = design
-        .with_baked(&draft.files)
-        .into_iter()
-        .map(|(path, bytes)| {
-            let baked = design.baked(&path);
-            DesignFile {
-                baked: baked.is_some(),
-                overridden: baked.as_deref() != Some(bytes.as_ref()),
-                size: bytes.len() as u64,
-                path,
-            }
-        })
-        .collect();
+    let files = file_entries(design, &design.with_baked(&draft.files));
     Ok(Json(DraftState {
         storage: state.storage.kind(),
         local_dir: design.has_local_dir(),
@@ -143,19 +128,10 @@ async fn read_file(
     Path(path): Path<String>,
     Query(query): Query<ReadQuery>,
 ) -> ApiResult<Response> {
-    check_path(&path)?;
-    let design = &state.design;
-    let data = match query.source.as_deref() {
-        None | Some("draft") => design.draft_read(&state.storage, &path).await?,
-        Some("published") => design.published_view().remove(&path),
-        Some("baked") => design.baked(&path).map(Bytes::from),
-        Some(other) => {
-            return Err(ApiError::BadRequest(format!(
-                "source must be draft, published or baked, not {other:?}"
-            )));
-        }
-    }
-    .ok_or(ApiError::NotFound)?;
+    let source = Source::parse(query.source.as_deref()).map_err(ApiError::BadRequest)?;
+    let data = read_source(&state.design, &state.storage, &path, source)
+        .await?
+        .ok_or(ApiError::NotFound)?;
     let mime = mime_guess::from_path(&path).first_or_octet_stream();
     Ok(([(header::CONTENT_TYPE, mime.to_string())], data).into_response())
 }

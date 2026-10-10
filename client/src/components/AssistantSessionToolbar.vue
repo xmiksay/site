@@ -169,6 +169,7 @@ async function applyThinkingBudget() {
       <option value="build">Build</option>
       <option value="researcher">Researcher</option>
       <option value="page-writer">Page writer</option>
+      <option value="designer">Designer</option>
     </select>
     <button
       v-if="!readOnly"

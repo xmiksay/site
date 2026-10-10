@@ -153,6 +153,19 @@ executes on every PR rather than self-skipping.
   page renders, raw binary files and the `design.*` WS events, registered
   straight on `AppState.ws_hub` (fs, and db with the state's storage swapped
   for a scoped one after startup).
+- `tests/design_agents.rs` — design access for agents (#118): the
+  `design_*` MCP tools (in `tools/list`, no publish tool; write → read →
+  changes → `design_render_check` reporting an undefined variable with its
+  template, the published design untouched) and the draft HTTP routes with
+  the Bearer token (service token and OAuth access token; a raw binary upload
+  read back; 401 without or with a bad token), while publish, discard,
+  reload, history and restore — and every other `/api/*` route — answer 401
+  to a Bearer request. The shared tool logic itself (arguments, base64,
+  error mapping, a write/read/changes/delete round trip over fs storage, no
+  DB, and that tool writes reach the cached preview `DraftSite`) is
+  unit-tested in `src/design/tools/tests.rs`; the `designer` profile
+  and the design tools' default-allow permissions in
+  `src/ai/engine/profiles.rs` and `src/ai/tool_permissions/tests.rs`.
 - `tests/design_smoke.rs` — `templates::smoke::smoke_render` (#117): the baked
   design renders clean and every contract template is exercised; an
   undefined variable (in a partial and in `base.html`, reported once) and a

@@ -72,5 +72,6 @@ export function needsDecision(tc: ToolCallView): boolean {
 export function profileIcon(profile: string): string {
   if (profile === 'researcher') return '🔎'
   if (profile === 'page-writer') return '✎'
+  if (profile === 'designer') return '🎨'
   return '🤖'
 }

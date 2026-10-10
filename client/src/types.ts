@@ -106,7 +106,7 @@ export interface AssistantSession {
   max_output_tokens: number | null
   /** Extended-thinking budget in tokens (Anthropic/Gemini only — silently ignored by OpenAI-wire models); `null` = model default. */
   thinking_budget_tokens: number | null
-  /** `"build" | "researcher" | "page-writer"`; never null, defaults to `"build"`. */
+  /** `"build" | "researcher" | "page-writer" | "designer"`; never null, defaults to `"build"`. */
   agent_profile: string
   /** Spawning parent session for a sub-agent; `null` on a root session. */
   parent_session_id: number | null

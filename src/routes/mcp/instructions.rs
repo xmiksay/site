@@ -20,7 +20,8 @@ const SERVER_INSTRUCTIONS_HEADER: &str = "\
 Server-rendered site. Pages are stored in PostgreSQL and served at their `path` \
 (e.g. path `notes/example` → URL `/notes/example`).
 
-Pages, tags, files and galleries can all be managed here as MCP tools. To \
+Pages, tags, files, galleries and the design draft can all be managed here as \
+MCP tools. To \
 override these instructions for your installation, create a page with path \
 `CLAUDE` and its markdown will be served instead.
 
@@ -35,14 +36,46 @@ override these instructions for your installation, create a page with path \
   New pages created via MCP default to private.
 - **revisions**: every markdown change stores a diff automatically.
 
+## Design
+
+The public site's look (MiniJinja templates, CSS, JS, fonts, images, export \
+layouts) is a bundle of files under `templates/`, `assets/` and `mdcast/`. \
+The `design_*` tools edit one shared **draft** of it; the live site never \
+changes until a human publishes the draft in the admin — there is no publish \
+tool. Workflow:
+
+1. `design_contract` — what every template receives (read it before editing \
+   templates; the strict render rejects any variable it does not list).
+2. `design_list` / `design_read` — the draft view (draft over the baked \
+   default bundle); `source: \"published\"` or `\"baked\"` to compare.
+3. `design_write` (`data` text or `data_base64` binary) / `design_delete` \
+   (reverts a file to its baked default).
+4. `design_render_check` — compile + strict smoke render of the draft; fix \
+   every error it reports.
+5. `design_changes` — summarize what publishing would change, then ask the \
+   human to preview and publish the draft in the admin Design page.
+
+Large binaries (fonts) can also go straight over HTTP with this same Bearer \
+token: `curl -T font.woff2 -H \"Authorization: Bearer …\" \
+<site>/api/design/draft/assets/fonts/font.woff2` (`GET`/`PUT`/`DELETE \
+/api/design/draft/{path}`, `GET /api/design/draft` for the tree).
+
 ## Markdown extensions
 
 ";
 
 pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
-    JsonRpcResponse::success(
-        id,
-        json!({
+    let mut list = tools_list();
+    if let Some(tools) = list["tools"].as_array_mut() {
+        tools.extend(super::design::tool_list());
+    }
+    JsonRpcResponse::success(id, list)
+}
+
+/// Every non-design tool; the design tools' entries come from the shared
+/// `crate::design::tools::specs` catalogue.
+fn tools_list() -> Value {
+    json!({
             "tools": [
                 // ----- Pages -----
                 {
@@ -261,6 +294,5 @@ pub(super) fn handle_tools_list(id: Option<Value>) -> JsonRpcResponse {
                     }
                 }
             ]
-        }),
-    )
+    })
 }

@@ -5,7 +5,7 @@
 //!
 //! Split by tool family: JSON-RPC envelope/plumbing lives in `rpc`, the
 //! static `initialize`/`tools/list` content lives in `instructions`, and each
-//! tool family (`pages`, `tags`, `files`, `galleries`) is a plain module of
+//! tool family (`pages`, `tags`, `files`, `galleries`, `design`) is a plain module of
 //! `async fn`s dispatched from `handle_tools_call` below — callable directly
 //! without going through the Axum router.
 
@@ -20,6 +20,7 @@ use crate::repo::pages::{self as pages_repo};
 use crate::routes::oauth;
 use crate::state::AppState;
 
+mod design;
 mod files;
 mod galleries;
 mod instructions;
@@ -134,6 +135,8 @@ async fn handle_tools_call(
         "gallery_create" => galleries::tool_gallery_create(state, user_id, id, arguments).await,
         "gallery_update" => galleries::tool_gallery_update(state, id, arguments).await,
         "gallery_delete" => galleries::tool_gallery_delete(state, id, arguments).await,
+
+        name if design::handles(name) => design::call(state, id, name, arguments).await,
 
         _ => JsonRpcResponse::error(id, -32602, format!("Unknown tool: {tool_name}")),
     }

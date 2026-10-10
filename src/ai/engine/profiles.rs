@@ -1,8 +1,15 @@
 //! The engine's agent-profile roster (#17): the built-in root profile plus
-//! the two spawnable sub-agents, `researcher` and `page-writer`. Split out of
-//! `engine.rs` to keep that file under the project's 400-line cap.
+//! the spawnable sub-agents, `researcher`, `page-writer` and (#118)
+//! `designer`. Split out of `engine.rs` to keep that file under the
+//! project's 400-line cap.
+
+use std::sync::LazyLock;
 
 use entanglement_core::{AgentMode, AgentProfile, Permission, PermissionProfile, ProfileRegistry};
+
+use crate::design::tools::specs as design_specs;
+use crate::markdown::MARKDOWN_EXTENSIONS_DOC;
+use crate::templates::contract;
 
 /// The engine's built-in root profile name (`entanglement_core::ProfileRegistry
 /// ::new`'s own constant) — every session starts under it. Re-exported here
@@ -20,13 +27,22 @@ pub const RESEARCHER_PROFILE: &str = "researcher";
 /// restriction as [`RESEARCHER_PROFILE`].
 pub const PAGE_WRITER_PROFILE: &str = "page-writer";
 
+/// Sub-agent profile name: edits the shared design draft (#118) — never
+/// publishes. Same leaf restriction as [`RESEARCHER_PROFILE`].
+pub const DESIGNER_PROFILE: &str = "designer";
+
 /// Every profile name a session may directly switch to via `InMsg::SetAgent`
-/// (#42) — the root plus the two spawnable sub-agents. `entanglement_core`
+/// (#42) — the root plus the spawnable sub-agents. `entanglement_core`
 /// itself imposes no reachability gate on a direct `SetAgent` (only spawn
 /// targets are mode-checked), so this site enforces its own known-name
 /// allowlist at the API boundary instead of forwarding an arbitrary string to
 /// the engine.
-pub const SWITCHABLE_PROFILES: &[&str] = &[BUILD_PROFILE, RESEARCHER_PROFILE, PAGE_WRITER_PROFILE];
+pub const SWITCHABLE_PROFILES: &[&str] = &[
+    BUILD_PROFILE,
+    RESEARCHER_PROFILE,
+    PAGE_WRITER_PROFILE,
+    DESIGNER_PROFILE,
+];
 
 const RESEARCHER_TOOLS: &[&str] = &[
     "web_search",
@@ -49,6 +65,10 @@ const PAGE_WRITER_TOOLS: &[&str] = &[
     "gallery_update",
 ];
 
+/// Read-only site tools the designer gets next to every `design_*` tool, to
+/// look at the real content its templates render.
+const DESIGNER_SITE_TOOLS: &[&str] = &["page_read", "page_search", "file_list"];
+
 /// Appended to the site system prompt (`engine.rs`'s `system_prompt_resolver`)
 /// only for a session running under [`RESEARCHER_PROFILE`] — the model
 /// otherwise gets the exact same generic prompt regardless of profile.
@@ -64,9 +84,49 @@ pub(super) const PAGE_WRITER_PROMPT_SUFFIX: &str = "\n\n---\n\nYou are running a
     avoid duplicating an existing page, then create or edit exactly the page you were asked for \
     (private by default). Report the page's path back when done.";
 
+/// Appended for a session running under [`DESIGNER_PROFILE`]. Carries the
+/// template contract itself, without its example contexts (~10 KB instead
+/// of ~16 KB): a designer edits templates in nearly every task, so the
+/// variable tables earn their place, and injecting them saves a
+/// `design_contract` round trip; the examples and the JSON Schema stay one
+/// call away. Generated from the same source as `docs/design-contract.md`,
+/// so it cannot drift.
+static DESIGNER_PROMPT_SUFFIX: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "\n\n---\n\nYou are running as the `designer` sub-agent: you change the public site's \
+         design (MiniJinja templates under `templates/`, CSS/JS/fonts/images under `assets/`, \
+         export layouts under `mdcast/`) by editing the shared design **draft** with the \
+         `design_*` tools. The live site does not change until a human publishes the draft; you \
+         cannot publish.\n\n\
+         Workflow: `design_list`/`design_read` the files you change (`source: \"baked\"` shows \
+         the shipped default) → `design_write` (text as `data`, binary as `data_base64`) or \
+         `design_delete` (reverts a file to its baked default) → `design_render_check`, and fix \
+         every compile or render error it reports until it answers `ok: true` → \
+         `design_changes`. Finish by summarizing the changes and telling the human to preview \
+         the draft and publish it from the admin Design page.\n\n\
+         Templates may only use the variables the contract below lists: the render check \
+         treats anything else as an error. `design_contract` returns it with example contexts \
+         (`schema: true` for JSON Schema).\n\n\
+         Page bodies arrive pre-rendered; the markdown directives below render through the \
+         `templates/markdown/*.html` partials:\n\n{MARKDOWN_EXTENSIONS_DOC}\n\n{}",
+        contract::compact_markdown()
+    )
+});
+
+/// The profile-specific part of the system prompt, appended to the site
+/// prompt (`engine.rs`'s `system_prompt_resolver`); empty for the root.
+pub(super) fn prompt_suffix(profile: &str) -> &'static str {
+    match profile {
+        RESEARCHER_PROFILE => RESEARCHER_PROMPT_SUFFIX,
+        PAGE_WRITER_PROFILE => PAGE_WRITER_PROMPT_SUFFIX,
+        DESIGNER_PROFILE => DESIGNER_PROMPT_SUFFIX.as_str(),
+        _ => "",
+    }
+}
+
 /// The engine's agent-profile roster (#17): the built-in root profile (every
-/// session starts under it) plus the two spawnable sub-agents. The root
-/// profile's `spawnable_agents` allowlist is narrowed to exactly these two —
+/// session starts under it) plus the spawnable sub-agents. The root
+/// profile's `spawnable_agents` allowlist is narrowed to exactly these —
 /// combined with `entanglement_runtime`'s ancestor privilege clamp (a child's
 /// effective tool mask/permission grade is the least-privileged fold across
 /// its own profile and every ancestor's), a sub-agent can never reach a tool
@@ -77,6 +137,7 @@ pub(super) fn build_profiles() -> ProfileRegistry {
         root.spawnable_agents = Some(vec![
             RESEARCHER_PROFILE.to_string(),
             PAGE_WRITER_PROFILE.to_string(),
+            DESIGNER_PROFILE.to_string(),
         ]);
         registry.insert(root);
     }
@@ -92,10 +153,21 @@ pub(super) fn build_profiles() -> ProfileRegistry {
          supporting tags/files/galleries.",
         PAGE_WRITER_TOOLS,
     ));
+    let designer_tools: Vec<&str> = design_specs::TOOLS
+        .iter()
+        .map(|spec| spec.name)
+        .chain(DESIGNER_SITE_TOOLS.iter().copied())
+        .collect();
+    registry.insert(sub_agent_profile(
+        DESIGNER_PROFILE,
+        "Design sub-agent — edits the shared design draft (templates, CSS, JS, assets) and \
+         validates it with the strict render check; never publishes (a human does, in the admin).",
+        &designer_tools,
+    ));
     registry
 }
 
-/// Build one of the two leaf sub-agent profiles: `Subagent` mode (reachable
+/// Build one of the leaf sub-agent profiles: `Subagent` mode (reachable
 /// only via spawn, never a primary entry agent), restricted to `tools` (#116's
 /// physical tool mask — anything else is neither advertised nor accepted),
 /// and `can_spawn: Some(false)` so it cannot itself spawn further (depth stays
@@ -132,14 +204,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn root_profile_may_only_spawn_the_two_sub_agents() {
+    fn root_profile_may_only_spawn_the_sub_agents() {
         let profiles = build_profiles();
         let root = profiles.get("build").expect("build profile present");
         let allowed: Option<Vec<&str>> = root
             .spawnable_agents
             .as_ref()
             .map(|v| v.iter().map(String::as_str).collect());
-        assert_eq!(allowed, Some(vec![RESEARCHER_PROFILE, PAGE_WRITER_PROFILE]));
+        assert_eq!(
+            allowed,
+            Some(vec![
+                RESEARCHER_PROFILE,
+                PAGE_WRITER_PROFILE,
+                DESIGNER_PROFILE
+            ])
+        );
         assert!(root.may_spawn());
         assert!(root.spawn_target_allowed(RESEARCHER_PROFILE));
         assert!(root.spawn_target_allowed(PAGE_WRITER_PROFILE));
@@ -168,5 +247,32 @@ mod tests {
         assert!(page_writer.advertises_tool("gallery_create"));
         assert!(!page_writer.advertises_tool("web_search"));
         assert!(!page_writer.advertises_tool("page_delete"));
+    }
+
+    #[test]
+    fn designer_is_a_leaf_with_every_design_tool_and_no_publish() {
+        let profiles = build_profiles();
+        let designer = profiles.get(DESIGNER_PROFILE).expect("designer");
+        assert!(designer.spawnable_as_subagent());
+        assert!(!designer.may_spawn());
+        for spec in design_specs::TOOLS {
+            assert!(designer.advertises_tool(spec.name), "{}", spec.name);
+        }
+        assert!(designer.advertises_tool("page_read"));
+        assert!(!designer.advertises_tool("page_edit"));
+        assert!(!designer.advertises_tool("file_create"));
+        assert!(SWITCHABLE_PROFILES.contains(&DESIGNER_PROFILE));
+    }
+
+    #[test]
+    fn designer_prompt_carries_contract_directives_and_workflow() {
+        let prompt = prompt_suffix(DESIGNER_PROFILE);
+        assert!(prompt.contains("`designer` sub-agent"));
+        assert!(prompt.contains(MARKDOWN_EXTENSIONS_DOC));
+        assert!(prompt.contains(&contract::compact_markdown()));
+        assert!(prompt.contains("design_render_check"));
+        assert!(prompt.contains("publish it from the admin"));
+        assert_eq!(prompt_suffix(BUILD_PROFILE), "");
+        assert_eq!(prompt_suffix(RESEARCHER_PROFILE), RESEARCHER_PROMPT_SUFFIX);
     }
 }

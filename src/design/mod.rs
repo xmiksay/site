@@ -1,7 +1,9 @@
+pub mod check;
 pub mod draft;
 pub mod publish;
 pub mod push;
 pub mod stored;
+pub mod tools;
 pub mod view;
 
 use std::collections::{BTreeSet, HashMap};

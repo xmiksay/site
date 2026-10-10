@@ -68,11 +68,14 @@ src/
                           # stored.rs: published design/… objects, validated
                           # reload, validate_for_publish; draft.rs: the
                           # shared design-draft/ (init, edit, discard,
-                          # change list, mirror); publish.rs: publish,
-                          # design-history/ snapshots, restore, crash
-                          # recovery; push.rs: `site_cli design push`;
-                          # view.rs: Resolve (what a request renders
-                          # with) + the cached DraftSite for preview
+                          # change list, mirror); check.rs: render_check
+                          # (compile + strict smoke render, the publish gate);
+                          # publish.rs: publish, design-history/ snapshots,
+                          # restore, crash recovery; push.rs: `site_cli
+                          # design push`; view.rs: Resolve (what a request
+                          # renders with) + the cached DraftSite for preview;
+                          # tools/: the design_* draft tools shared by MCP
+                          # and the AI assistant (#118)
   storage/               # mod.rs: Storage (db | fs | s3 over object_store) —
                           # put_blob/get_blob/get_blob_stream by sha256;
                           # objects.rs: keyed get/put/delete/list on every
@@ -147,7 +150,7 @@ real data does not reach. Returns a `SmokeReport` (`cases`, `errors`:
 deduplicated `SmokeError { template, line, message, case }`); `Err` when one of
 its own queries fails (a tag deleted mid-run just skips its search case) — the helpers it shares with live requests treat DB
 errors as live requests do (empty menu, no tags, directive "not found").
-Publish (#115) runs it over the draft view before anything goes live (see [publishing](#design-overrides), step 2); `design_render_check` (#118) comes later.
+Publish (#115) runs it over the draft view before anything goes live (see [publishing](#design-overrides), step 2), through `design::check::render_check` (compile errors first, the smoke render only when everything compiles); the `design_render_check` tool (#118) runs the same check over the draft without publishing.
 
 ## Data Model
 
@@ -211,7 +214,8 @@ assistant_sessions  id, user_id, title, provider/model snapshots, model_id?,
                     `GenerationParams` overrides, #42; `None` leaves that knob
                     at the model's own default), agent_profile (m_027,
                     default `"build"` — the engine profile the session runs
-                    under, `"build"`/`"researcher"`/`"page-writer"`),
+                    under, `"build"`/`"researcher"`/`"page-writer"`/
+                    `"designer"`),
                     parent_session_id? + root_engine_session_id (m_032, #99 —
                     a spawned researcher/page-writer sub-agent is a real row
                     of its own; parent_session_id is a self-FK ON DELETE
@@ -303,7 +307,9 @@ Failure guarantees:
 
 **Ways in:** the admin Design page (edits the draft through `/api/design/draft/*`; interim "Draft — not live" label with Publish — confirming a forced publish on a conflict — and Discard buttons until the Design studio, #119); `site_cli design push <dir>` (uploads a folder in the bundle layout **into the draft**, initializing it if needed, skips other paths, keeps draft files the folder lacks, refuses the whole push on a broken template; it goes live through the same publish. The CLI is another process: it emits **no WS events** (open admin tabs see the push on their next refresh) and takes **no lock** shared with the server, so it must not run while an admin publishes, discards or restores — the draft could end up mixed); or, for professionals, edit `design/` objects directly in the bucket (Garage admin UI, `aws s3`, rclone) and click **Reload** (`POST /api/design/reload`). A bucket edit bypasses the draft: the next publish answers 409 listing the edited paths — **discard** the draft (after Reload) to adopt them, or force to overwrite them.
 
-**Startup** runs a reload (completing a pending publish first) before serving; unreachable storage or a broken override refuses the start rather than serving the baked design in place of the site's own. Every backend holds the design (`db` since #114). Reloads and the draft cache are per process (single replica assumed). MCP and the AI assistant have no design access yet (#118).
+**Startup** runs a reload (completing a pending publish first) before serving; unreachable storage or a broken override refuses the start rather than serving the baked design in place of the site's own. Every backend holds the design (`db` since #114). Reloads and the draft cache are per process (single replica assumed).
+
+**Agents (#118)** reach the draft — never publish — through the `design_*` tools (see [MCP Server](#mcp-server) and the AI assistant's `designer` profile) and, for external agents with the MCP Bearer token, the draft HTTP routes (`GET /api/design/draft`, `GET/PUT/DELETE /api/design/draft/{*path}`, raw bodies: `curl -T font.woff2 -H "Authorization: Bearer …" …/api/design/draft/assets/fonts/font.woff2`). Their writes broadcast `design.draft_changed` like the admin's.
 
 ### Draft preview
 
@@ -335,14 +341,16 @@ An admin sees the real site rendered with the draft (#116): `POST /api/design/pr
 
 ### JSON API `/api/*` (session cookie required)
 
+Everything below needs the session cookie (`require_login_api`), except the design **draft** routes (`/api/design/draft`, `/api/design/draft/{*path}`), which also accept the MCP Bearer token — OAuth access token or service token (`require_login_or_bearer_api`, #118). Publish, discard, history/restore and reload stay session-only: a Bearer request gets 401.
+
 `auth/{login,logout,me}`, `users` (`GET/POST /`, `DELETE /{id}`, `PUT /{id}/password`), `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, `export/pages/{id}` (below), and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve` + `sessions/{id}/compact` (manual context compaction, #40), `mcp-servers` CRUD, `providers` CRUD + `providers/status` (live per-provider throttle posture, #89), `models` CRUD (`context_window` field, #40), `permissions` CRUD (tool-permission rules).
 
 | Path | Method | Description |
 |---|---|---|
 | `/api/ws` | GET (upgrade) | Global authenticated WebSocket — see below |
 | `/api/export/pages/{id}?format=pdf\|slides` | GET | Export any page by id to PDF or reveal.js slides (see [Export (mdcast)](#export-mdcast)) |
-| `/api/design/draft` | GET | Draft state (read-only; an uninitialized draft shows the published view): storage kind, `local_dir`, `last_reload`, `initialized`, the draft view's files (`path`/`baked`/`overridden` = differs from baked/`size`) and `changes` vs published (`{path, kind: added\|modified\|deleted}`) |
-| `/api/design/draft/{*path}` | GET / PUT / DELETE | Draft file as raw bytes (`?source=draft` default \| `published` \| `baked`) / write it from the raw body (20 MB, text or binary, not validated) / remove the draft's copy (a baked file reverts to its default) — writes answer the draft state and broadcast `design.draft_changed`; 400 bad path, 404 not in the draft |
+| `/api/design/draft` | GET (session or Bearer) | Draft state (read-only; an uninitialized draft shows the published view): storage kind, `local_dir`, `last_reload`, `initialized`, the draft view's files (`path`/`baked`/`overridden` = differs from baked/`size`) and `changes` vs published (`{path, kind: added\|modified\|deleted}`) |
+| `/api/design/draft/{*path}` | GET / PUT / DELETE (session or Bearer) | Draft file as raw bytes (`?source=draft` default \| `published` \| `baked`) / write it from the raw body (20 MB, text or binary, not validated) / remove the draft's copy (a baked file reverts to its default) — writes answer the draft state and broadcast `design.draft_changed`; 400 bad path, 404 not in the draft |
 | `/api/design/draft/discard` | POST | Reset the draft to the published view and re-base it; draft state, `design.draft_changed` |
 | `/api/design/publish[?force=true]` | POST | Publish the draft (see [Design overrides](#design-overrides)) → the new history entry, `design.published`. Rejections change nothing: 422 failed validation (compile or strict smoke render, listing template + line), 500 when the smoke render cannot query the DB, 409 nothing to publish, 409 `design/` changed outside the draft (lists the paths; `force=true` overwrites them). 503 storage down / 500 otherwise when the mirror or reload failed (the message says whether the previous design was restored) |
 | `/api/design/history` | GET | Every published version `{id, at, by, files}`, newest first |
@@ -375,12 +383,13 @@ it *consumes* per-user MCP servers on behalf of the AI assistant (`ai::mcp`'s
 `SiteMcp` over `entanglement_runtime::mcp::HttpClient`, see the AI Assistant
 section below).
 
-`POST /mcp` exposes JSON-RPC 2.0 with these tools (defined in `src/routes/mcp/{pages,tags,files,galleries}.rs`):
+`POST /mcp` exposes JSON-RPC 2.0 with these tools (defined in `src/routes/mcp/{pages,tags,files,galleries,design}.rs`):
 
 - **Pages:** `page_read`, `page_edit`, `page_search` (prefix/tag/q + limit/offset), `page_delete`
 - **Tags:** `tag_list`, `tag_read`, `tag_create`, `tag_update`, `tag_delete`
 - **Files:** `file_list`, `file_create` (mimetype inferred from the path extension when omitted — `.pgn`/`.mmd`/`.fen`/`.json` get dedicated mimetypes, issue #57 — and the response's `embed` field is a ready-to-use directive derived from that extension/mimetype: `<pgn>`/`<mermaid>`/`<fen>`/`<json>` for those extensions, `<image>` for `image/*`, `<file>` otherwise — `files_repo::embed_hint`, issue #55), `file_read` (`include_content` returns the file's text for text-ish mimetypes — plain text, JSON, PGN, mermaid, FEN, per `files_repo::is_text_content`), `file_update` (path/description, plus optional `mimetype`/`data`/`data_base64` to replace the stored bytes in place — issue #56, so a bad upload is repairable instead of unrecoverable), `file_delete`
 - **Galleries:** `gallery_list`, `gallery_read`, `gallery_create`, `gallery_update`, `gallery_delete`
+- **Design draft (#118):** `design_list` (draft view: `path`/`baked`/`overridden`/`size` per file, optional `prefix`, plus `changes`), `design_read` (`path`, `source` = `draft`|`published`|`baked`; UTF-8 as `data`, else `data_base64`, with `mimetype`), `design_write` (`path` + exactly one of `data`/`data_base64`, 20 MB, path checked like the API), `design_delete` (a baked file reverts to its default), `design_changes` (`{path, kind: added|modified|deleted}` vs published), `design_contract` (the template contract Markdown, `schema: true` for the JSON Schema), `design_render_check` (compile + strict smoke render over the draft view → `{ok, compile_errors, render_errors: [{template, line, message, case}], cases}`). **No publish tool** — publishing is a human action in the admin. One implementation, `src/design/tools/` (`specs.rs` = names/descriptions/schemas), behind both `src/routes/mcp/design.rs` and the AI's `src/ai/tools/design.rs`; failures map storage/DB detail to `storage unavailable`/`database error` (`stored::status_error`), the rest to their client-safe message.
 
 Tool names follow a `<resource>_<operation>` convention (issue #61); `web_search`/`web_fetch` (below) are the exception, already resource-first.
 
@@ -432,7 +441,7 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   session budgets sensibly before any `SetModel` narrows it to the session's
   actual pinned model — which is why that default must resolve
   deterministically (see `catalog.rs` below). Three submodules (kept under the 400-line cap):
-  `engine/profiles.rs` (the `researcher`/`page-writer` profile roster, below),
+  `engine/profiles.rs` (the `researcher`/`page-writer`/`designer` profile roster and their prompt suffixes, below),
   `engine/session_tree.rs`
   (`root_session_of`/`user_id_from_session`/`user_id_from_session_awaiting`,
   re-exported from `engine.rs` so every existing `crate::ai::engine::...` call
@@ -452,8 +461,17 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     (read-only: `web_search`/`web_fetch`/`page_read`/`page_search`/
     `tag_list`/`file_list`/`gallery_list`) and `page-writer`
     (`page_read`/`page_search`/`page_edit`/`tag_create`/`file_create`/
-    `gallery_list`/`gallery_create`/`gallery_update`). `build`'s
-    `spawnable_agents` allowlist is narrowed to exactly these two; each leaf's
+    `gallery_list`/`gallery_create`/`gallery_update`) and (#118) `designer`
+    (every `design_*` tool plus read-only `page_read`/`page_search`/
+    `file_list`). `designer`'s prompt suffix carries the workflow (edit the
+    draft → `design_render_check` until `ok` → `design_changes` → tell the
+    human to preview and publish in the admin), `MARKDOWN_EXTENSIONS_DOC`, and
+    the template contract without its example contexts
+    (`contract::compact_markdown()`, ~10 KB): templates are edited in nearly
+    every design task, so injecting the variable tables saves a
+    `design_contract` round trip, while the examples and the JSON Schema stay
+    one call away. `build`'s
+    `spawnable_agents` allowlist is narrowed to exactly these three; each leaf's
     `can_spawn: Some(false)` keeps spawn depth at 1. `profile_tool_specs`
     (built via `entanglement_runtime::subagent::spawn_specs_for`) is what
     actually advertises `agent_spawn`/`agent`/`agent_poll` to a profile that
@@ -655,9 +673,11 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   files `list`/`create`/`read`/`update`/`delete` (issue #56 — `file_update`
   can replace a file's stored bytes/mimetype in place, and `file_read` can
   return its text content, so a bad upload is repairable instead of orphaned),
-  galleries `list`/`create`/`update`, plus `web_search`/`web_fetch`. Tool
-  names follow the `<resource>_<operation>` convention (issue #61).
-- `tool_permissions.rs` — the allow/deny/prompt rule evaluator `policy.rs`
+  galleries `list`/`create`/`update`, plus `web_search`/`web_fetch` and the
+  seven `design_*` draft tools (`tools/design.rs`, one generic adapter over
+  the shared `crate::design::tools`, #118). Tool names follow the
+  `<resource>_<operation>` convention (issue #61).
+- `tool_permissions/` — the allow/deny/prompt rule evaluator `policy.rs`
   wraps (#39): a user's rows (ordered `priority DESC, id DESC` — ascending
   precedence, so `PermissionProfile::resolve_scoped`'s last-match-wins
   reproduces the old `priority ASC, id ASC` first-match-wins semantics) build
@@ -672,7 +692,13 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   annotation maps to it (ADR-0117, `mcp_capability_index` reads
   `user_mcp_servers.capabilities`). No site tool exposes a working directory
   yet, so a `tool{pattern}` rule is stored and matched like any other but
-  never fires (`SitePolicy` always passes `workdir = None`).
+  never fires (`SitePolicy` always passes `workdir = None`). `BUILTIN_ALLOW`
+  (#118) puts every `design_*` tool at **allow** by default, as the
+  lowest-precedence rules — the draft is invisible until a human publishes,
+  so draft edits need no approval; any user rule (`write: prompt`,
+  `design_write: deny`, `*`) still overrides it. The design tools are
+  `read`/`write` capability members, and `design_read`/`design_write`/
+  `design_delete` scope by `path` (`write(assets/*)`).
 - `handlers/` — `/api/assistant/*`: `sessions/` (CRUD + `messages`/`approve`,
   which drive a turn through `Holly` and project `assistant_events` on the
   way out, plus `compact.rs`'s `sessions/{id}/compact`, #40,
@@ -729,7 +755,7 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     against `low|medium|high`, `max_output_tokens`/`thinking_budget_tokens`
     against `Some(0)` being rejected as meaningless, and `agent_profile`
     against `engine::SWITCHABLE_PROFILES` (`build`/`researcher`/
-    `page-writer`) at the API boundary — `entanglement_core` itself imposes
+    `page-writer`/`designer`) at the API boundary — `entanglement_core` itself imposes
     no reachability gate on a direct `SetAgent` — so an unknown/invalid value
     is rejected `400` before any DB write. All four generation knobs persist
     onto the session row verbatim as partial overrides (an omitted field

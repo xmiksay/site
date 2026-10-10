@@ -32,7 +32,21 @@ pub fn router(state: AppState) -> Router<AppState> {
         .nest("/export", export::router())
         .nest("/assistant", crate::ai::handlers::router())
         .nest("/ws", crate::routes::ws::router())
-        .route_layer(from_fn_with_state(state, crate::auth::require_login_api));
+        .route_layer(from_fn_with_state(
+            state.clone(),
+            crate::auth::require_login_api,
+        ));
+    // External design agents (#118) reach only the draft files with the MCP
+    // Bearer token; everything else stays session-only.
+    let agent = Router::new()
+        .nest("/design", design::draft_router())
+        .route_layer(from_fn_with_state(
+            state,
+            crate::auth::require_login_or_bearer_api,
+        ));
 
-    Router::new().nest("/auth", auth::router()).merge(protected)
+    Router::new()
+        .nest("/auth", auth::router())
+        .merge(protected)
+        .merge(agent)
 }

@@ -91,6 +91,7 @@ pub async fn create_state(config: &Config) -> AppState {
     let agent_engine = SiteEngine::spawn(
         db.clone(),
         storage.clone(),
+        design.clone(),
         ai_config,
         ws_hub.clone(),
         config.serper_api_key.clone(),

@@ -11,6 +11,7 @@
 //! `ToolCall.input` arrives as a JSON **string** — see `common::parse_args`.
 
 mod common;
+mod design;
 mod files;
 mod galleries;
 mod pages;
@@ -22,13 +23,15 @@ use std::sync::Arc;
 use entanglement_runtime::ToolRegistry;
 use sea_orm::DatabaseConnection;
 
+use crate::design::DesignStore;
 use crate::routes::ws::WsHub;
 use crate::storage::Storage;
 
 /// Build the registry of built-in (non-MCP) tools: the 14 site tools — a
 /// curated subset, not full CRUD (page read/search/edit/delete, tag
 /// list/create, file list/create/read/update/delete, gallery
-/// list/create/update) — plus `web_search`/`web_fetch`. `engine.rs`
+/// list/create/update) — plus `web_search`/`web_fetch` and the seven
+/// design-draft tools (`design_*`, shared with MCP, #118). `engine.rs`
 /// builds this once at `SiteEngine` construction and layers per-session MCP
 /// routing tools on top (see `crate::ai::mcp`). Every mutating tool also
 /// gets `ws_hub` so it broadcasts the same WS event a REST API mutation
@@ -36,10 +39,20 @@ use crate::storage::Storage;
 pub fn registry(
     db: Arc<DatabaseConnection>,
     storage: Storage,
+    design: Arc<DesignStore>,
     ws_hub: Arc<WsHub>,
     serper_api_key: Option<String>,
 ) -> ToolRegistry {
     let mut reg = ToolRegistry::new();
+    design::register(
+        &mut reg,
+        design::DesignDeps {
+            db: db.clone(),
+            storage: storage.clone(),
+            design,
+            ws_hub: ws_hub.clone(),
+        },
+    );
     reg.register(pages::ReadPageTool { db: db.clone() });
     reg.register(pages::SearchPagesTool { db: db.clone() });
     reg.register(pages::EditPageTool {

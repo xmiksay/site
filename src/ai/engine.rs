@@ -4,12 +4,12 @@
 //!
 //! See [`session_tree`] for the `u{user_id}:{uuid}` session-id convention and
 //! how a sub-agent (#17) child session resolves back to its owning user, and
-//! [`profiles`] for the `researcher`/`page-writer` sub-agent profile roster.
+//! [`profiles`] for the `researcher`/`page-writer`/`designer` sub-agent roster.
 //!
 //! ## Public API for the next phase
 //!
 //! ```ignore
-//! let engine = SiteEngine::spawn(db, ai_config, ws_hub, serper_api_key, None).await?;
+//! let engine = SiteEngine::spawn(db, storage, design, ai_config, ws_hub, key, None).await?;
 //! let session = SiteEngine::session_id_for_user(user_id);
 //! engine.holly.send(InMsg::prompt(session, text)).await?;
 //! ```
@@ -138,6 +138,7 @@ impl SiteEngine {
     pub async fn spawn(
         db: DatabaseConnection,
         storage: crate::storage::Storage,
+        design: Arc<crate::design::DesignStore>,
         ai_config: Arc<AiConfig>,
         ws_hub: Arc<WsHub>,
         serper_api_key: Option<String>,
@@ -151,6 +152,7 @@ impl SiteEngine {
         let registry = tools::registry(
             Arc::new(db.clone()),
             storage,
+            design,
             ws_hub.clone(),
             serper_api_key,
         );
@@ -181,11 +183,7 @@ impl SiteEngine {
             let cache = system_prompt_cache.clone();
             Arc::new(move |_session: &SessionId, profile: &AgentProfile| {
                 let base = cache.read().clone();
-                let suffix = match profile.name.as_str() {
-                    RESEARCHER_PROFILE => profiles::RESEARCHER_PROMPT_SUFFIX,
-                    PAGE_WRITER_PROFILE => profiles::PAGE_WRITER_PROMPT_SUFFIX,
-                    _ => "",
-                };
+                let suffix = profiles::prompt_suffix(&profile.name);
                 Some(format!("{base}{suffix}"))
             })
         };
