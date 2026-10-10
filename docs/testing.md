@@ -177,9 +177,11 @@ executes on every PR rather than self-skipping.
   of the same name gets `-2`), `GET /api/files/by-path/…?thumbnail=true`
   redirects to its thumbnail; in a Designer chat a font lands in the draft's
   `assets/fonts/`, an image in `assets/img/`, a `.txt` is 422; over 10 MB
-  is 413 `too_large`, an unknown or another user's session 404; two
-  concurrent same-name uploads (site file and draft asset) both succeed
-  with distinct paths. At the tool level
+  is 413 `too_large`, an unknown or another user's session 404.
+  `tests/assistant_attachments_race.rs`: two concurrent same-name uploads
+  (site file and draft asset) both succeed with distinct paths. Both share
+  the harness `tests/common/attachments_app.rs` (`#[path]`-included; the
+  including test declares `storage_fixture`). At the tool level
   (`site::ai::tools::registry(...).execute`), `file_read` with
   `include_content` and `design_read` on an image answer `[meta, image
   block]` downscaled to 1568 px, and a text note once the model row has
