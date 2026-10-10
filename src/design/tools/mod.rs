@@ -209,10 +209,17 @@ async fn read(ctx: &Ctx<'_>, args: PathArgs) -> Result<Output, ToolError> {
 fn write_bytes(args: &WriteArgs) -> Result<Bytes, ToolError> {
     let bytes = match (&args.data, &args.data_base64) {
         (Some(text), None) => Bytes::from(text.clone()),
-        (None, Some(b64)) => base64::engine::general_purpose::STANDARD
-            .decode(b64.trim())
-            .map(Bytes::from)
-            .map_err(|e| ToolError(format!("invalid data_base64: {e}")))?,
+        (None, Some(b64)) => {
+            // Refuse before decoding: base64 of MAX_FILE_SIZE bytes is longer.
+            let b64 = b64.trim();
+            if b64.len() > MAX_FILE_SIZE.div_ceil(3) * 4 {
+                return Err(too_large(b64.len() / 4 * 3));
+            }
+            base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map(Bytes::from)
+                .map_err(|e| ToolError(format!("invalid data_base64: {e}")))?
+        }
         _ => {
             return Err(ToolError(
                 "provide exactly one of data or data_base64".into(),
@@ -220,12 +227,15 @@ fn write_bytes(args: &WriteArgs) -> Result<Bytes, ToolError> {
         }
     };
     if bytes.len() > MAX_FILE_SIZE {
-        return Err(ToolError(format!(
-            "file too large: {} bytes (max {MAX_FILE_SIZE})",
-            bytes.len()
-        )));
+        return Err(too_large(bytes.len()));
     }
     Ok(bytes)
+}
+
+fn too_large(size: usize) -> ToolError {
+    ToolError(format!(
+        "file too large: about {size} bytes (max {MAX_FILE_SIZE})"
+    ))
 }
 
 async fn write(ctx: &Ctx<'_>, args: WriteArgs) -> Result<Output, ToolError> {

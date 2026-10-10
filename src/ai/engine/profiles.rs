@@ -65,10 +65,6 @@ const PAGE_WRITER_TOOLS: &[&str] = &[
     "gallery_update",
 ];
 
-/// Read-only site tools the designer gets next to every `design_*` tool, to
-/// look at the real content its templates render.
-const DESIGNER_SITE_TOOLS: &[&str] = &["page_read", "page_search", "file_list"];
-
 /// Appended to the site system prompt (`engine.rs`'s `system_prompt_resolver`)
 /// only for a session running under [`RESEARCHER_PROFILE`] — the model
 /// otherwise gets the exact same generic prompt regardless of profile.
@@ -153,11 +149,11 @@ pub(super) fn build_profiles() -> ProfileRegistry {
          supporting tags/files/galleries.",
         PAGE_WRITER_TOOLS,
     ));
-    let designer_tools: Vec<&str> = design_specs::TOOLS
-        .iter()
-        .map(|spec| spec.name)
-        .chain(DESIGNER_SITE_TOOLS.iter().copied())
-        .collect();
+    // Design tools only: nothing that ingests outside content (web, pages,
+    // files, MCP servers), because draft writes are approval-free under this
+    // profile (`tool_permissions::DESIGN_WRITE_TOOLS`) and the draft runs on
+    // the site's origin in an admin's preview.
+    let designer_tools: Vec<&str> = design_specs::TOOLS.iter().map(|spec| spec.name).collect();
     registry.insert(sub_agent_profile(
         DESIGNER_PROFILE,
         "Design sub-agent — edits the shared design draft (templates, CSS, JS, assets) and \
@@ -258,9 +254,18 @@ mod tests {
         for spec in design_specs::TOOLS {
             assert!(designer.advertises_tool(spec.name), "{}", spec.name);
         }
-        assert!(designer.advertises_tool("page_read"));
-        assert!(!designer.advertises_tool("page_edit"));
-        assert!(!designer.advertises_tool("file_create"));
+        // No tool that ingests outside content: its writes need no approval.
+        for tool in [
+            "web_fetch",
+            "web_search",
+            "page_read",
+            "page_search",
+            "file_read",
+            "file_list",
+            "srv__fetch",
+        ] {
+            assert!(!designer.advertises_tool(tool), "{tool}");
+        }
         assert!(SWITCHABLE_PROFILES.contains(&DESIGNER_PROFILE));
     }
 

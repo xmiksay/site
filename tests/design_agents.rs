@@ -129,6 +129,22 @@ async fn http(
     (status, bytes.to_vec())
 }
 
+/// The `WWW-Authenticate` challenge of an unauthenticated `GET uri`.
+async fn challenge(app: &Router, uri: &str, bearer: Option<&str>) -> Option<String> {
+    let mut req = Request::builder().uri(uri);
+    if let Some(t) = bearer {
+        req = req.header("authorization", format!("Bearer {t}"));
+    }
+    let resp = app
+        .clone()
+        .oneshot(req.body(Body::empty()).expect("request"))
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let value = resp.headers().get("www-authenticate")?;
+    value.to_str().ok().map(String::from)
+}
+
 #[tokio::test]
 async fn mcp_design_tools_edit_and_check_the_draft() {
     let Some(db_url) = mcp::test_db_url().await else {
@@ -267,6 +283,14 @@ async fn bearer_token_reaches_only_the_draft_routes() {
         let (status, _) = http(app, "GET", font_uri, auth, Vec::new()).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{what}");
     }
+    // Same OAuth discovery challenge as `/mcp`.
+    for bearer in [None, Some("garbage")] {
+        let www = challenge(app, font_uri, bearer).await.unwrap_or_default();
+        assert!(
+            www.starts_with("Bearer ") && www.contains("/.well-known/oauth-protected-resource"),
+            "{bearer:?}: {www:?}"
+        );
+    }
 
     // Publishing and the rest of the design admin stay session-only.
     let session_only = [
@@ -276,6 +300,8 @@ async fn bearer_token_reaches_only_the_draft_routes() {
         ("POST", "/api/design/reload"),
         ("GET", "/api/design/history"),
         ("POST", "/api/design/history/2026-10-10T12:00:00Z/restore"),
+        ("POST", "/api/design/preview"),
+        ("GET", "/api/design/preview/exit"),
     ];
     for (method, uri) in session_only {
         let (status, _) = http(

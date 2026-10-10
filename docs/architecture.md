@@ -309,7 +309,7 @@ Failure guarantees:
 
 **Startup** runs a reload (completing a pending publish first) before serving; unreachable storage or a broken override refuses the start rather than serving the baked design in place of the site's own. Every backend holds the design (`db` since #114). Reloads and the draft cache are per process (single replica assumed).
 
-**Agents (#118)** reach the draft — never publish — through the `design_*` tools (see [MCP Server](#mcp-server) and the AI assistant's `designer` profile) and, for external agents with the MCP Bearer token, the draft HTTP routes (`GET /api/design/draft`, `GET/PUT/DELETE /api/design/draft/{*path}`, raw bodies: `curl -T font.woff2 -H "Authorization: Bearer …" …/api/design/draft/assets/fonts/font.woff2`). Their writes broadcast `design.draft_changed` like the admin's.
+**Agents (#118)** reach the draft — never publish — through the `design_*` tools (see [MCP Server](#mcp-server) and the AI assistant's `designer` profile) and, for external agents with the MCP Bearer token, the draft HTTP routes (`GET /api/design/draft`, `GET/PUT/DELETE /api/design/draft/{*path}`, raw bodies: `curl -T font.woff2 -H "Authorization: Bearer …" …/api/design/draft/assets/fonts/font.woff2`). Their writes broadcast `design.draft_changed` like the admin's. The draft is invisible to the *public* site, but draft preview (#116) runs it for a logged-in admin on the site's origin — which is why the assistant's draft writes need approval outside the `designer` profile (see `tool_permissions/` under [AI Assistant](#ai-assistant-srcai)). The draft routes answer 401 with the same `WWW-Authenticate: Bearer resource_metadata=…` challenge as `/mcp`.
 
 ### Draft preview
 
@@ -389,7 +389,7 @@ section below).
 - **Tags:** `tag_list`, `tag_read`, `tag_create`, `tag_update`, `tag_delete`
 - **Files:** `file_list`, `file_create` (mimetype inferred from the path extension when omitted — `.pgn`/`.mmd`/`.fen`/`.json` get dedicated mimetypes, issue #57 — and the response's `embed` field is a ready-to-use directive derived from that extension/mimetype: `<pgn>`/`<mermaid>`/`<fen>`/`<json>` for those extensions, `<image>` for `image/*`, `<file>` otherwise — `files_repo::embed_hint`, issue #55), `file_read` (`include_content` returns the file's text for text-ish mimetypes — plain text, JSON, PGN, mermaid, FEN, per `files_repo::is_text_content`), `file_update` (path/description, plus optional `mimetype`/`data`/`data_base64` to replace the stored bytes in place — issue #56, so a bad upload is repairable instead of unrecoverable), `file_delete`
 - **Galleries:** `gallery_list`, `gallery_read`, `gallery_create`, `gallery_update`, `gallery_delete`
-- **Design draft (#118):** `design_list` (draft view: `path`/`baked`/`overridden`/`size` per file, optional `prefix`, plus `changes`), `design_read` (`path`, `source` = `draft`|`published`|`baked`; UTF-8 as `data`, else `data_base64`, with `mimetype`), `design_write` (`path` + exactly one of `data`/`data_base64`, 20 MB, path checked like the API), `design_delete` (a baked file reverts to its default), `design_changes` (`{path, kind: added|modified|deleted}` vs published), `design_contract` (the template contract Markdown, `schema: true` for the JSON Schema), `design_render_check` (compile + strict smoke render over the draft view → `{ok, compile_errors, render_errors: [{template, line, message, case}], cases}`). **No publish tool** — publishing is a human action in the admin. One implementation, `src/design/tools/` (`specs.rs` = names/descriptions/schemas), behind both `src/routes/mcp/design.rs` and the AI's `src/ai/tools/design.rs`; failures map storage/DB detail to `storage unavailable`/`database error` (`stored::status_error`), the rest to their client-safe message.
+- **Design draft (#118):** `design_list` (draft view: `path`/`baked`/`overridden`/`size` per file, optional `prefix`, plus `changes`), `design_read` (`path`, `source` = `draft`|`published`|`baked`; UTF-8 as `data`, else `data_base64`, with `mimetype`), `design_write` (`path` + exactly one of `data`/`data_base64`, path checked like the API; 20 MB per file, but over MCP the whole JSON-RPC request is bounded by axum's 2 MB `Json` limit, ≈1.5 MB of base64-decoded binary — larger files such as fonts go through `PUT /api/design/draft/{path}` with the same Bearer token, raw body; oversize base64 is refused by its length before decoding), `design_delete` (a baked file reverts to its default), `design_changes` (`{path, kind: added|modified|deleted}` vs published), `design_contract` (the template contract Markdown, `schema: true` for the JSON Schema), `design_render_check` (compile + strict smoke render over the draft view → `{ok, compile_errors, render_errors: [{template, line, message, case}], cases}`). **No publish tool** — publishing is a human action in the admin. One implementation, `src/design/tools/` (`specs.rs` = names/descriptions/schemas), behind both `src/routes/mcp/design.rs` and the AI's `src/ai/tools/design.rs`; failures map storage/DB detail to `storage unavailable`/`database error` (`stored::status_error`), the rest to their client-safe message.
 
 Tool names follow a `<resource>_<operation>` convention (issue #61); `web_search`/`web_fetch` (below) are the exception, already resource-first.
 
@@ -462,8 +462,9 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     `tag_list`/`file_list`/`gallery_list`) and `page-writer`
     (`page_read`/`page_search`/`page_edit`/`tag_create`/`file_create`/
     `gallery_list`/`gallery_create`/`gallery_update`) and (#118) `designer`
-    (every `design_*` tool plus read-only `page_read`/`page_search`/
-    `file_list`). `designer`'s prompt suffix carries the workflow (edit the
+    (the `design_*` tools **only** — no `web_*`, page, file or MCP-server
+    tool, nothing that ingests outside content, because its draft writes are
+    approval-free; see `tool_permissions/` below). `designer`'s prompt suffix carries the workflow (edit the
     draft → `design_render_check` until `ok` → `design_changes` → tell the
     human to preview and publish in the admin), `MARKDOWN_EXTENSIONS_DOC`, and
     the template contract without its example contexts
@@ -692,13 +693,30 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   annotation maps to it (ADR-0117, `mcp_capability_index` reads
   `user_mcp_servers.capabilities`). No site tool exposes a working directory
   yet, so a `tool{pattern}` rule is stored and matched like any other but
-  never fires (`SitePolicy` always passes `workdir = None`). `BUILTIN_ALLOW`
-  (#118) puts every `design_*` tool at **allow** by default, as the
-  lowest-precedence rules — the draft is invisible until a human publishes,
-  so draft edits need no approval; any user rule (`write: prompt`,
-  `design_write: deny`, `*`) still overrides it. The design tools are
-  `read`/`write` capability members, and `design_read`/`design_write`/
-  `design_delete` scope by `path` (`write(assets/*)`).
+  never fires (`SitePolicy` always passes `workdir = None`).
+  **Design tool defaults (#118), per agent profile:** `build_profile` puts
+  built-in **allow** rules under the user's rows (lowest precedence, so any
+  user rule — `write: prompt`, `design_write: allow`, `*: deny` — still
+  wins): `DESIGN_READ_TOOLS` (`design_list`/`read`/`changes`/`contract`/
+  `render_check`) in every profile, `DESIGN_WRITE_TOOLS` (`design_write`/
+  `design_delete`) **only when the session runs under `designer`**;
+  elsewhere they ask like any write. The draft is *not* harmless: draft
+  preview (#116) serves its templates and JS on the site's origin to a
+  logged-in admin, so a `<script>` written into `base.html` runs with the
+  admin's session (it could `POST /api/design/publish`). A profile that
+  ingests outside content (`web_fetch`/`web_search`, page text, MCP servers)
+  could be prompt-injected into such a write, so only `designer` — which has
+  nothing but the design tools — writes without approval. The profile comes
+  from `SitePolicy`'s `active` map, the very `HashMap<SessionId,
+  AgentProfile>` the tool executor folds from `SessionStarted`/
+  `AgentChanged` (`SitePolicy::active_profiles()`, passed to
+  `spawn_tool_executor_with_policy`); an unknown session gets no
+  profile-specific default. The executor grades a call as the minimum over
+  the session's whole ancestor chain, so a `designer` *spawned* by `build`
+  still asks (its task came from a profile that reads outside content): the
+  approval-free path is a chat switched to the Designer profile. The design
+  tools are `read`/`write` capability members, and `design_read`/
+  `design_write`/`design_delete` scope by `path` (`write(assets/*)`).
 - `handlers/` — `/api/assistant/*`: `sessions/` (CRUD + `messages`/`approve`,
   which drive a turn through `Holly` and project `assistant_events` on the
   way out, plus `compact.rs`'s `sessions/{id}/compact`, #40,

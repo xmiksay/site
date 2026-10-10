@@ -39,7 +39,9 @@ mod prompt_cache;
 mod session_tree;
 
 use live::LiveSessions;
-pub use profiles::{BUILD_PROFILE, PAGE_WRITER_PROFILE, RESEARCHER_PROFILE, SWITCHABLE_PROFILES};
+pub use profiles::{
+    BUILD_PROFILE, DESIGNER_PROFILE, PAGE_WRITER_PROFILE, RESEARCHER_PROFILE, SWITCHABLE_PROFILES,
+};
 use prompt_cache::load_system_prompt;
 use session_tree::evict_on_hibernate_or_end;
 pub use session_tree::{
@@ -47,7 +49,7 @@ pub use session_tree::{
 };
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -285,7 +287,7 @@ impl SiteEngine {
             Arc::new(StdRwLock::new(profiles.clone())),
             Arc::new(StdRwLock::new(Arc::new(SkillRegistry::default()))),
             PermissionProfile::new(Permission::Allow),
-            Arc::new(StdMutex::new(HashMap::new())),
+            policy.active_profiles(),
             resolver,
             grants,
             Hooks::default(),

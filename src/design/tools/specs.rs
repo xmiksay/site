@@ -60,7 +60,7 @@ pub const TOOLS: &[Spec] = &[
     },
     Spec {
         name: WRITE,
-        description: "Write one file of the design draft (never live; not validated — run design_render_check afterwards). Provide exactly one of `data` (text: templates, CSS, JS, SVG, TOML) or `data_base64` (binary: fonts, images).",
+        description: "Write one file of the design draft (never live; not validated — run design_render_check afterwards). Provide exactly one of `data` (text: templates, CSS, JS, SVG, TOML) or `data_base64` (binary: fonts, images). Over MCP the whole request is capped at 2 MB (about 1.5 MB of decoded binary): upload larger files (fonts) with `PUT /api/design/draft/{path}` and the same Bearer token, raw body.",
         schema: || {
             json!({
                 "type": "object",

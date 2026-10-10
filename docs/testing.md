@@ -164,7 +164,8 @@ executes on every PR rather than self-skipping.
   error mapping, a write/read/changes/delete round trip over fs storage, no
   DB, and that tool writes reach the cached preview `DraftSite`) is
   unit-tested in `src/design/tools/tests.rs`; the `designer` profile
-  and the design tools' default-allow permissions in
+  and the design tools' per-profile default permissions (writes
+  approval-free only under `designer`) in
   `src/ai/engine/profiles.rs` and `src/ai/tool_permissions/tests.rs`.
 - `tests/design_smoke.rs` — `templates::smoke::smoke_render` (#117): the baked
   design renders clean and every contract template is exercised; an
@@ -176,7 +177,8 @@ executes on every PR rather than self-skipping.
   render, and delete their rows before asserting.
 - `tests/policy_db.rs` — `SitePolicy`/`tool_permissions` resolution against a
   real `tool_permissions` table (FK to `users`, so it can't be faked
-  in-memory).
+  in-memory), including the design-write default that depends on the
+  session's agent profile from `SitePolicy::active_profiles` (#118).
 - `tests/oauth_authorize.rs`, `tests/oauth_token.rs`, `tests/oauth_refresh.rs`
   — the OAuth2/PKCE flow (`src/routes/oauth/`) end to end over real HTTP:
   `GET`/`POST /oauth/authorize` param validation and the login form, the

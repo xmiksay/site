@@ -19,9 +19,14 @@ fn rows(rules: &[(&str, Effect, i32, i32)]) -> Vec<tool_permission::Model> {
 /// first), so this test helper mirrors that ordering directly rather than
 /// asking every call site to re-sort.
 fn profile_from(rules: &[(&str, Effect, i32, i32)]) -> PermissionProfile {
+    profile_for(None, rules)
+}
+
+/// [`profile_from`] for a session running under agent profile `agent`.
+fn profile_for(agent: Option<&str>, rules: &[(&str, Effect, i32, i32)]) -> PermissionProfile {
     let mut rows = rows(rules);
     rows.sort_by_key(|r| std::cmp::Reverse((r.priority, r.id)));
-    build_profile(&rows, &McpCapabilityIndex::new())
+    build_profile(&rows, &McpCapabilityIndex::new(), agent)
 }
 
 #[test]
@@ -161,26 +166,55 @@ fn permission_arg_extracts_per_site_tool_shape() {
 }
 
 #[test]
-fn design_tools_default_to_allow_but_user_rules_win() {
-    let p = profile_from(&[]);
-    for tool in BUILTIN_ALLOW {
+fn design_reads_are_allowed_in_every_profile() {
+    let mut design_tools: Vec<&str> = DESIGN_READ_TOOLS.to_vec();
+    design_tools.extend(DESIGN_WRITE_TOOLS);
+    for spec in crate::design::tools::specs::TOOLS {
+        assert!(
+            design_tools.contains(&spec.name),
+            "{} has no default",
+            spec.name
+        );
+    }
+    for agent in [None, Some("build"), Some("researcher"), Some("designer")] {
+        let p = profile_for(agent, &[]);
+        for tool in DESIGN_READ_TOOLS {
+            assert_eq!(
+                p.resolve_scoped(tool, None, None),
+                Permission::Allow,
+                "{agent:?} {tool}"
+            );
+        }
+        assert_eq!(p.resolve_scoped("page_edit", None, None), Permission::Ask);
+    }
+}
+
+#[test]
+fn design_writes_are_approval_free_only_for_the_designer() {
+    for agent in [None, Some("build"), Some("researcher"), Some("page-writer")] {
+        let p = profile_for(agent, &[]);
+        for tool in DESIGN_WRITE_TOOLS {
+            assert_eq!(
+                p.resolve_scoped(tool, None, None),
+                Permission::Ask,
+                "{agent:?} {tool}"
+            );
+        }
+    }
+    let p = profile_for(Some("designer"), &[]);
+    for tool in DESIGN_WRITE_TOOLS {
         assert_eq!(
             p.resolve_scoped(tool, None, None),
             Permission::Allow,
             "{tool}"
         );
     }
-    for spec in crate::design::tools::specs::TOOLS {
-        assert!(
-            BUILTIN_ALLOW.contains(&spec.name),
-            "{} has no default",
-            spec.name
-        );
-    }
-    // Everything else still asks.
-    assert_eq!(p.resolve_scoped("page_edit", None, None), Permission::Ask);
-    // A user's own rule (here a capability) overrides the built-in default.
-    let p = profile_from(&[("write", Effect::Prompt, 10, 1)]);
+}
+
+#[test]
+fn user_rules_override_the_design_defaults_both_ways() {
+    // Tighter for the designer: a `write` capability rule or a literal rule.
+    let p = profile_for(Some("designer"), &[("write", Effect::Prompt, 10, 1)]);
     assert_eq!(
         p.resolve_scoped("design_write", None, None),
         Permission::Ask
@@ -189,16 +223,35 @@ fn design_tools_default_to_allow_but_user_rules_win() {
         p.resolve_scoped("design_read", None, None),
         Permission::Allow
     );
-    let p = profile_from(&[("design_delete", Effect::Deny, 10, 1)]);
+    let p = profile_for(Some("designer"), &[("design_delete", Effect::Deny, 10, 1)]);
     assert_eq!(
         p.resolve_scoped("design_delete", None, None),
+        Permission::Deny
+    );
+    // Looser for build: the user explicitly allows draft writes.
+    let p = profile_for(Some("build"), &[("design_write", Effect::Allow, 10, 1)]);
+    assert_eq!(
+        p.resolve_scoped("design_write", None, None),
+        Permission::Allow
+    );
+    assert_eq!(
+        p.resolve_scoped("design_delete", None, None),
+        Permission::Ask
+    );
+    // Reads can be denied too.
+    let p = profile_for(Some("build"), &[("read", Effect::Deny, 10, 1)]);
+    assert_eq!(
+        p.resolve_scoped("design_read", None, None),
         Permission::Deny
     );
 }
 
 #[test]
 fn design_tools_are_capability_members_scoped_by_path() {
-    let p = profile_from(&[("write(assets/*)", Effect::Deny, 10, 1)]);
+    let p = profile_for(
+        Some("designer"),
+        &[("write(assets/*)", Effect::Deny, 10, 1)],
+    );
     let arg = permission_arg("design_write", r#"{"path":"assets/css/x.css"}"#);
     assert_eq!(arg.as_deref(), Some("assets/css/x.css"));
     assert_eq!(

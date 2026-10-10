@@ -104,19 +104,39 @@ pub const CAPABILITIES: &[(&str, &[&str])] = &[
     ("call", &["web_search", "web_fetch"]),
 ];
 
-/// Tools allowed without approval unless the user's own rules say
-/// otherwise: the design tools (#118) only ever touch the shared design
-/// draft, which nothing serves until a human publishes it, so asking before
-/// every draft edit would only get in the designer's way.
-pub const BUILTIN_ALLOW: &[&str] = &[
+/// Design tools (#118) that only read: allowed without approval in every
+/// profile unless the user's own rules say otherwise.
+pub const DESIGN_READ_TOOLS: &[&str] = &[
     "design_list",
     "design_read",
-    "design_write",
-    "design_delete",
     "design_changes",
     "design_contract",
     "design_render_check",
 ];
+
+/// Design tools that change the draft: allowed without approval only in a
+/// session running under the `designer` profile, otherwise they ask like any
+/// write. The draft is not harmless — draft preview (#116) serves its
+/// templates and JS on the site's origin to a logged-in admin, so a
+/// `<script>` written into the draft runs with the admin's session (and can
+/// publish). A profile that ingests outside content (`web_fetch`, page text,
+/// MCP servers) could be steered into such a write by a prompt injection;
+/// `designer` has only the design tools. The executor grades a call across
+/// the whole session chain, so a `designer` spawned by `build` still asks —
+/// its task came from a profile that reads outside content.
+pub const DESIGN_WRITE_TOOLS: &[&str] = &["design_write", "design_delete"];
+
+/// The built-in defaults under every user's rules, for a session running
+/// under `profile` (`None` when unknown, which grants nothing extra).
+fn builtin_rules(profile: Option<&str>) -> Vec<(String, Permission)> {
+    let designer = profile == Some(crate::ai::engine::DESIGNER_PROFILE);
+    let writes = DESIGN_WRITE_TOOLS.iter().filter(|_| designer);
+    DESIGN_READ_TOOLS
+        .iter()
+        .chain(writes)
+        .map(|tool| (tool.to_string(), Permission::Allow))
+        .collect()
+}
 
 fn capability_members(cap: &str) -> Option<&'static [&'static str]> {
     CAPABILITIES
@@ -265,11 +285,13 @@ pub async fn mcp_capability_index(
 /// rows, ordered `priority DESC, id DESC` (ascending precedence, so
 /// `resolve_scoped`'s last-match-wins reproduces the old `priority ASC, id
 /// ASC` first-match-wins semantics) and expanded through
-/// [`expand_capabilities`], over the [`BUILTIN_ALLOW`] defaults. Unmatched
+/// [`expand_capabilities`], over the built-in defaults for the session's
+/// agent `profile` ([`DESIGN_READ_TOOLS`], [`DESIGN_WRITE_TOOLS`]). Unmatched
 /// calls default to [`Permission::Ask`] (the old `Effect::Prompt` default).
 pub fn build_profile(
     rows: &[tool_permission::Model],
     mcp: &McpCapabilityIndex,
+    profile: Option<&str>,
 ) -> PermissionProfile {
     let entries = rows
         .iter()
@@ -281,10 +303,7 @@ pub fn build_profile(
         })
         .collect();
     // First = lowest precedence (last match wins): any user rule beats these.
-    let mut rules: Vec<(String, Permission)> = BUILTIN_ALLOW
-        .iter()
-        .map(|tool| (tool.to_string(), Permission::Allow))
-        .collect();
+    let mut rules = builtin_rules(profile);
     rules.extend(expand_capabilities(entries, mcp));
     PermissionProfile {
         rules,
@@ -295,10 +314,12 @@ pub fn build_profile(
 /// Resolve the effective permission for a tool call: load `user_id`'s rules
 /// and MCP capability index, build the profile, and grade `tool_name` against
 /// it — `arg`/`workdir` scope an argument-/workdir-scoped rule to the actual
-/// call (#39, `PermissionProfile::resolve_scoped`).
+/// call (#39, `PermissionProfile::resolve_scoped`). `profile` is the session's
+/// agent profile, `None` when unknown.
 pub async fn resolve(
     db: &DatabaseConnection,
     user_id: i32,
+    profile: Option<&str>,
     tool_name: &str,
     arg: Option<&str>,
     workdir: Option<&str>,
@@ -310,8 +331,8 @@ pub async fn resolve(
         .all(db)
         .await?;
     let mcp = mcp_capability_index(db, user_id).await?;
-    let profile = build_profile(&rows, &mcp);
-    Ok(profile.resolve_scoped(tool_name, arg, workdir))
+    let rules = build_profile(&rows, &mcp, profile);
+    Ok(rules.resolve_scoped(tool_name, arg, workdir))
 }
 
 #[cfg(test)]

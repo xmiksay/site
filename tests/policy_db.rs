@@ -328,3 +328,62 @@ async fn sub_agent_child_session_resolves_against_its_spawning_users_rules() {
 
     cleanup_user(&db, user_id).await;
 }
+
+/// #118: draft writes are approval-free only for a session the executor
+/// records as running under `designer`; every other (or unknown) profile
+/// asks, design reads are allowed everywhere, and the user's rules win.
+#[tokio::test]
+async fn design_write_default_depends_on_the_session_profile() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let user_id = make_user(&db, "design-profile").await;
+    let policy = SitePolicy::new(db.clone());
+    let build = SiteEngine::session_id_for_user(user_id);
+    let designer = SiteEngine::session_id_for_user(user_id);
+    let unknown = SiteEngine::session_id_for_user(user_id);
+    let registry = entanglement_core::ProfileRegistry::new();
+    let mut profile = registry.get(engine::BUILD_PROFILE).cloned().expect("build");
+    {
+        let active = policy.active_profiles();
+        let mut active = active.lock().expect("active map");
+        active.insert(build.clone(), profile.clone());
+        profile.name = engine::DESIGNER_PROFILE.to_string();
+        active.insert(designer.clone(), profile);
+    }
+    let write = r#"{"path":"templates/base.html","data":"x"}"#;
+
+    assert_eq!(
+        policy.resolve(&build, "design_write", write).await,
+        Permission::Ask
+    );
+    assert_eq!(
+        policy.resolve(&unknown, "design_delete", write).await,
+        Permission::Ask
+    );
+    assert_eq!(
+        policy.resolve(&designer, "design_write", write).await,
+        Permission::Allow
+    );
+    for session in [&build, &unknown, &designer] {
+        assert_eq!(
+            policy.resolve(session, "design_read", write).await,
+            Permission::Allow
+        );
+    }
+
+    // The user's rules override the defaults both ways.
+    add_rule(&db, user_id, "design_write", Effect::Allow, 10).await;
+    add_rule(&db, user_id, "design_delete", Effect::Deny, 10).await;
+    assert_eq!(
+        policy.resolve(&build, "design_write", write).await,
+        Permission::Allow
+    );
+    assert_eq!(
+        policy.resolve(&designer, "design_delete", write).await,
+        Permission::Deny
+    );
+
+    cleanup_user(&db, user_id).await;
+}

@@ -3,11 +3,11 @@
 //! `tool_permissions` table / `crate::ai::tool_permissions::resolve` logic
 //! instead of the CLI's file-backed defaults.
 
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use entanglement_core::{ApprovalScope, Permission, SessionId};
+use entanglement_core::{AgentProfile, ApprovalScope, Permission, SessionId};
 use entanglement_runtime::policy::{GrantStore, PermissionResolver};
 use parking_lot::RwLock;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
@@ -40,14 +40,37 @@ pub struct SitePolicy {
     /// this is locked must not poison it and fail-closed every subsequent
     /// permission check for every user (issue #28).
     always_grants: RwLock<HashSet<(i32, String)>>,
+    /// Each live session's agent profile, maintained by the tool executor
+    /// (`spawn_tool_executor_with_policy`'s `active`, folded from
+    /// `SessionStarted`/`AgentChanged`), so a grade can depend on the profile
+    /// (`tool_permissions::DESIGN_WRITE_TOOLS`). `std::sync::Mutex` because
+    /// that is the executor's type.
+    active: ActiveProfiles,
 }
+
+/// The executor's session → active agent profile map.
+pub type ActiveProfiles = Arc<Mutex<HashMap<SessionId, AgentProfile>>>;
 
 impl SitePolicy {
     pub fn new(db: DatabaseConnection) -> Arc<Self> {
         Arc::new(SitePolicy {
             db,
             always_grants: RwLock::new(HashSet::new()),
+            active: ActiveProfiles::default(),
         })
+    }
+
+    /// The map the tool executor keeps current; hand it to
+    /// `spawn_tool_executor_with_policy`.
+    pub fn active_profiles(&self) -> ActiveProfiles {
+        self.active.clone()
+    }
+
+    /// `session`'s agent profile name, `None` when unknown (a poisoned map
+    /// included) — which grants nothing profile-specific.
+    fn profile_of(&self, session: &SessionId) -> Option<String> {
+        let active = self.active.lock().ok()?;
+        active.get(session).map(|p| p.name.clone())
     }
 
     /// Drop every cached "always allow" grant for `user_id` — call after the
@@ -83,7 +106,16 @@ impl PermissionResolver for SitePolicy {
         // `entanglement_runtime::permission::permission_arg`'s design over
         // this site's own tool vocabulary, see `tool_permissions`'s doc.
         let arg = tool_permissions::permission_arg(tool, input);
-        match tool_permissions::resolve(&self.db, user_id, tool, arg.as_deref(), NO_WORKDIR).await {
+        let profile = self.profile_of(session);
+        let graded = tool_permissions::resolve(
+            &self.db,
+            user_id,
+            profile.as_deref(),
+            tool,
+            arg.as_deref(),
+            NO_WORKDIR,
+        );
+        match graded.await {
             Ok(perm) => perm,
             Err(e) => {
                 tracing::error!(error = %e, user_id, tool, "tool_permissions lookup failed");

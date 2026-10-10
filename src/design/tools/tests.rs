@@ -88,6 +88,10 @@ fn write_bytes_takes_exactly_one_encoding() {
     assert!(write_bytes(&args(None, None)).is_err());
     assert!(write_bytes(&args(Some("a"), Some("AP8="))).is_err());
     assert!(write_bytes(&args(None, Some("not base64!"))).is_err());
+    // Oversize base64 is refused by its length, before decoding.
+    let huge = "A".repeat(MAX_FILE_SIZE.div_ceil(3) * 4 + 4);
+    let err = write_bytes(&args(None, Some(&huge))).expect_err("too large");
+    assert!(err.0.starts_with("file too large"), "{err:?}");
 }
 
 #[test]
