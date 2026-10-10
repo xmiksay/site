@@ -71,4 +71,4 @@
   --color-warning-bg: light-dark(var(--color-amber-50), oklch(22% 0.045 95)); /* dark: custom desaturated amber wash */
 }
 
-@custom-variant dark (&:where(html.dark, html.dark *));
+@custom-variant dark (&:where([data-scheme='dark'], [data-scheme='dark'] *));

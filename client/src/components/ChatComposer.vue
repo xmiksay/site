@@ -29,7 +29,8 @@ watch(
 
 // The draft is cleared up front: the composer stays usable for another chat
 // while this turn runs (`sending` is per session), so clearing it afterwards
-// could wipe text typed there. A failed send puts the text back.
+// could wipe text typed there. A failed send puts the text back — but only
+// while its own chat is still open, since the composer is shared.
 async function send() {
   const text = draft.value.trim()
   const id = assistant.current?.id
@@ -39,10 +40,18 @@ async function send() {
   try {
     await assistant.sendMessage(id, text)
   } catch (e) {
+    if (assistant.current?.id !== id) return
     if (!draft.value) draft.value = text
     error.value = e instanceof Error ? e.message : String(e)
   }
 }
+
+watch(
+  () => assistant.current?.id,
+  () => {
+    error.value = ''
+  },
+)
 
 /** Appends `text` to the composer (e.g. a note about an uploaded asset). */
 function insert(text: string) {

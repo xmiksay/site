@@ -16,12 +16,13 @@
   }
 
   /* Tailwind 4 leaves a bare `border`/`border-b` at currentColor, which in
-   * dark mode turns every divider into a bright text-coloured line. */
+   * dark mode turns every divider into a bright text-coloured line. line-1,
+   * not a fainter step, so bare-bordered form controls stay visible. */
   *,
   ::after,
   ::before,
   ::backdrop,
   ::file-selector-button {
-    border-color: var(--color-line-2);
+    border-color: var(--color-line-1);
   }
 }

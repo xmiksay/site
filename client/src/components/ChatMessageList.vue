@@ -9,6 +9,7 @@ import LiveSubAgentTurnCard from './LiveSubAgentTurn.vue'
 const assistant = useAssistantStore()
 const messageList = computed(() => assistant.current?.messages ?? [])
 const messageBox = ref<HTMLDivElement | null>(null)
+const error = ref('')
 
 function scrollToBottom() {
   nextTick(() => {
@@ -18,9 +19,23 @@ function scrollToBottom() {
   })
 }
 
+// Opening a sub-agent's card can fail (e.g. the child was deleted); show it
+// here rather than leave an unhandled rejection.
 async function selectSession(id: number) {
-  await assistant.loadSession(id)
+  error.value = ''
+  try {
+    await assistant.loadSession(id)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
 }
+
+watch(
+  () => assistant.current?.id,
+  () => {
+    error.value = ''
+  },
+)
 
 // The turn streaming live over WS for the open session, if any — see
 // `LiveTurn`'s doc in types.ts. `null` once it settles (`done`/`error`),
@@ -59,6 +74,9 @@ watch(
 
 <template>
   <div ref="messageBox" class="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+    <p v-if="error" class="text-sm text-danger-strong bg-danger-bg border border-danger-soft rounded p-2">
+      {{ error }}
+    </p>
     <AssistantMessageContent
       v-for="m in messageList"
       :key="m.id"

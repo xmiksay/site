@@ -66,4 +66,34 @@ describe('ChatComposer', () => {
     const wrapper = mount(ChatComposer, { props: { placeholder: 'Describe the design change…' } })
     expect(wrapper.find('textarea').attributes('placeholder')).toBe('Describe the design change…')
   })
+
+  it("a failed send does not land in another chat's composer", async () => {
+    const assistant = open(4)
+    let fail!: (e: Error) => void
+    vi.spyOn(assistant, 'sendMessage').mockReturnValue(new Promise((_, r) => (fail = r)))
+    const wrapper = mount(ChatComposer)
+    await wrapper.find('textarea').setValue('for chat 4')
+    await wrapper.find('form').trigger('submit')
+
+    open(5)
+    await nextTick()
+    fail(new Error('boom'))
+    await flushPromises()
+    expect(wrapper.find('textarea').element.value).toBe('')
+    expect(wrapper.text()).not.toContain('boom')
+  })
+
+  it('switching chats clears a shown send error', async () => {
+    const assistant = open(4)
+    vi.spyOn(assistant, 'sendMessage').mockRejectedValue(new Error('boom'))
+    const wrapper = mount(ChatComposer)
+    await wrapper.find('textarea').setValue('hello')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('boom')
+
+    open(5)
+    await nextTick()
+    expect(wrapper.text()).not.toContain('boom')
+  })
 })
