@@ -7,9 +7,11 @@ COPY client/ ./
 RUN npm run build
 
 # -- Backend build --
-FROM rust:1.97-bookworm AS backend
+# Keep the tag equal to `channel` in rust-toolchain.toml; copying that file in
+# makes rustup enforce the pin even if the two drift.
+FROM rust:1.99.0-bookworm AS backend
 WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
+COPY rust-toolchain.toml Cargo.toml Cargo.lock ./
 COPY src/ src/
 COPY design/ design/
 COPY --from=frontend /app/client/dist client/dist
