@@ -48,6 +48,9 @@
   
   /* --- accent (links, selected state) --- */
   --color-accent: light-dark(var(--color-blue-600), var(--color-blue-500)); /* lighter for vibrance against a dark bg */
+  --color-accent-strong: light-dark(var(--color-blue-800), var(--color-blue-300)); /* text on an accent wash */
+  --color-accent-soft: light-dark(var(--color-blue-200), var(--color-blue-800)); /* info banner border */
+  --color-accent-bg: light-dark(var(--color-blue-50), oklch(22% 0.045 260)); /* info banner, selected row; dark: custom desaturated blue wash */
 
   /* --- danger --- */
   --color-danger: light-dark(var(--color-red-600), var(--color-red-500));

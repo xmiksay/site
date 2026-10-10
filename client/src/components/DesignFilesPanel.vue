@@ -64,7 +64,7 @@ defineExpose({ confirmDiscard, reset })
 <template>
   <div class="flex flex-col gap-3 min-h-0 flex-1 overflow-auto">
     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2 *:min-w-0">
-      <div class="bg-white rounded shadow p-2 max-h-72 overflow-auto">
+      <div class="bg-surface rounded shadow p-2 max-h-72 overflow-auto">
         <DesignTree
           :files="design.files"
           :selected="selected"
@@ -75,20 +75,20 @@ defineExpose({ confirmDiscard, reset })
         />
       </div>
       <div class="space-y-3">
-        <section class="bg-white rounded shadow p-2 text-sm max-h-40 overflow-auto">
+        <section class="bg-surface rounded shadow p-2 text-sm max-h-40 overflow-auto">
           <h2 class="font-semibold px-1">Unpublished changes ({{ changes.length }})</h2>
-          <p v-if="changes.length === 0" class="px-1 text-gray-500">The draft matches the live design.</p>
+          <p v-if="changes.length === 0" class="px-1 text-fg-3">The draft matches the live design.</p>
           <ul v-else class="font-mono text-xs">
             <li v-for="c in changes" :key="c.path">
               <button
                 type="button"
-                class="w-full flex gap-2 text-left px-1 py-0.5 rounded hover:bg-gray-100 disabled:hover:bg-transparent"
+                class="w-full flex gap-2 text-left px-1 py-0.5 rounded hover:bg-surface-raised disabled:hover:bg-transparent"
                 :disabled="!paths.has(c.path)"
-                :class="{ 'line-through text-gray-400': !paths.has(c.path) }"
+                :class="{ 'line-through text-fg-4': !paths.has(c.path) }"
                 @click="select(c.path)"
               >
                 <span class="truncate">{{ c.path }}</span>
-                <span class="ml-auto shrink-0 font-sans text-blue-700">{{ changeLabel(c) }}</span>
+                <span class="ml-auto shrink-0 font-sans text-accent">{{ changeLabel(c) }}</span>
               </button>
             </li>
           </ul>
@@ -102,6 +102,6 @@ defineExpose({ confirmDiscard, reset })
       :file="selectedFile"
       @dirty="dirty = $event"
     />
-    <p v-else class="text-gray-400 text-sm">Select a file to view or edit it in the draft.</p>
+    <p v-else class="text-fg-4 text-sm">Select a file to view or edit it in the draft.</p>
   </div>
 </template>

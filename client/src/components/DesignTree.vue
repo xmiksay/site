@@ -41,8 +41,8 @@ function clickRow(row: DesignTreeRow) {
 }
 
 const badge: Record<string, { label: string; cls: string }> = {
-  overridden: { label: 'override', cls: 'bg-amber-100 text-amber-800' },
-  'override-only': { label: 'custom', cls: 'bg-emerald-100 text-emerald-800' },
+  overridden: { label: 'override', cls: 'bg-warning-bg text-warning' },
+  'override-only': { label: 'custom', cls: 'bg-success-bg text-success-strong' },
 }
 </script>
 
@@ -51,22 +51,22 @@ const badge: Record<string, { label: string; cls: string }> = {
     <li v-for="row in rows" :key="row.path">
       <button
         type="button"
-        class="w-full flex items-center gap-1 text-left px-2 py-1 rounded hover:bg-gray-100"
+        class="w-full flex items-center gap-1 text-left px-2 py-1 rounded hover:bg-surface-raised"
         :class="{
-          'bg-blue-50 text-blue-800': row.kind === 'file' && row.path === selected,
+          'bg-accent-bg text-accent-strong': row.kind === 'file' && row.path === selected,
           'font-semibold': row.kind === 'folder' && row.path === folder,
         }"
         :style="{ paddingLeft: `${0.5 + row.depth * 1}rem` }"
         :title="row.path"
         @click="clickRow(row)"
       >
-        <span class="w-3 text-gray-400 shrink-0">
+        <span class="w-3 text-fg-4 shrink-0">
           {{ row.kind === 'folder' ? (expanded.has(row.path) ? '▾' : '▸') : '' }}
         </span>
         <span class="truncate">{{ row.name }}{{ row.kind === 'folder' ? '/' : '' }}</span>
         <span
           v-if="changed.has(row.path)"
-          class="shrink-0 text-[10px] font-sans font-semibold text-blue-700"
+          class="shrink-0 text-[10px] font-sans font-semibold text-accent"
           :title="`Draft: ${changed.get(row.path)} (not live yet)`"
         >
           ● {{ changed.get(row.path) === 'added' ? 'new' : 'changed' }}
@@ -80,6 +80,6 @@ const badge: Record<string, { label: string; cls: string }> = {
         </span>
       </button>
     </li>
-    <li v-if="rows.length === 0" class="px-2 py-1 text-gray-400 font-sans">No design files.</li>
+    <li v-if="rows.length === 0" class="px-2 py-1 text-fg-4 font-sans">No design files.</li>
   </ul>
 </template>

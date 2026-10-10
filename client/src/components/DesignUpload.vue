@@ -46,20 +46,20 @@ async function submit() {
 </script>
 
 <template>
-  <form class="bg-white rounded shadow p-3 space-y-2 text-sm" @submit.prevent="submit">
+  <form class="bg-surface rounded shadow p-3 space-y-2 text-sm" @submit.prevent="submit">
     <h2 class="font-semibold">Upload to draft</h2>
     <input :key="inputKey" type="file" class="w-full" @change="pick" />
     <input
       v-model="target"
       placeholder="Target path (images → assets/img/, fonts → assets/fonts/)"
-      class="w-full rounded border border-gray-300 px-2 py-1.5 font-mono"
+      class="w-full rounded border border-line-1 px-2 py-1.5 font-mono"
     />
-    <p v-if="pathError" class="text-red-600">{{ pathError }}</p>
-    <p v-else-if="exists" class="text-amber-700">Replaces the existing {{ target }}.</p>
-    <p v-if="error" class="text-red-700 whitespace-pre-wrap font-mono">{{ error }}</p>
+    <p v-if="pathError" class="text-danger">{{ pathError }}</p>
+    <p v-else-if="exists" class="text-warning">Replaces the existing {{ target }}.</p>
+    <p v-if="error" class="text-danger whitespace-pre-wrap font-mono">{{ error }}</p>
     <button
       :disabled="!canSubmit"
-      class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 disabled:opacity-50"
+      class="rounded button-primary px-3 py-1.5 disabled:opacity-50"
     >
       {{ busy ? 'Uploading…' : 'Upload' }}
     </button>

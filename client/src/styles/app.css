@@ -14,4 +14,14 @@
   :root[data-scheme='dark'] {
     color-scheme: dark;
   }
+
+  /* Tailwind 4 leaves a bare `border`/`border-b` at currentColor, which in
+   * dark mode turns every divider into a bright text-coloured line. */
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-line-2);
+  }
 }

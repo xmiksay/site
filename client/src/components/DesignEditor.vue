@@ -185,37 +185,37 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="bg-white rounded shadow p-3 space-y-3">
+  <div class="bg-surface rounded shadow p-3 space-y-3">
     <div class="flex flex-wrap items-center gap-2">
       <h2 class="font-mono text-sm font-semibold break-all">{{ file.path }}</h2>
-      <span class="text-xs rounded px-1.5 py-0.5 bg-gray-100 text-gray-700">{{ status }}</span>
-      <span class="text-xs text-gray-500">{{ formatBytes(file.size) }}</span>
-      <span v-if="dirty" class="text-xs text-amber-700">● unsaved changes</span>
-      <select v-model="source" class="ml-auto rounded border border-gray-300 px-1 py-0.5 text-xs" aria-label="Version">
+      <span class="text-xs rounded px-1.5 py-0.5 bg-surface-raised text-fg-2">{{ status }}</span>
+      <span class="text-xs text-fg-3">{{ formatBytes(file.size) }}</span>
+      <span v-if="dirty" class="text-xs text-warning">● unsaved changes</span>
+      <select v-model="source" class="ml-auto rounded border border-line-1 px-1 py-0.5 text-xs" aria-label="Version">
         <option value="draft">Draft (editable)</option>
         <option value="published">Published</option>
         <option value="baked">Baked default</option>
       </select>
     </div>
 
-    <p v-if="error" class="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2 whitespace-pre-wrap font-mono">
+    <p v-if="error" class="text-sm text-danger-strong bg-danger-bg border border-danger-soft rounded p-2 whitespace-pre-wrap font-mono">
       {{ error }}
     </p>
-    <p v-if="loading" class="text-sm text-gray-400">Loading…</p>
+    <p v-if="loading" class="text-sm text-fg-4">Loading…</p>
 
     <template v-else-if="source !== 'draft'">
-      <p v-if="sourceMissing" class="text-sm text-gray-500">Not in the {{ source }} design.</p>
+      <p v-if="sourceMissing" class="text-sm text-fg-3">Not in the {{ source }} design.</p>
       <textarea
         v-else-if="isText"
         :value="sourceText"
         readonly
         spellcheck="false"
         rows="28"
-        class="w-full rounded border border-gray-300 px-2 py-1.5 text-xs font-mono leading-relaxed bg-gray-50 text-gray-600"
+        class="w-full rounded border border-line-1 px-2 py-1.5 text-xs font-mono leading-relaxed bg-surface-alt text-fg-2"
         data-test="source-view"
       ></textarea>
       <img v-else-if="isImage && sourceUrl" :src="sourceUrl" :alt="`${file.path} (${source})`" class="max-h-80 max-w-full" />
-      <p v-else class="text-sm text-gray-500">Binary file — no inline view.</p>
+      <p v-else class="text-sm text-fg-3">Binary file — no inline view.</p>
     </template>
 
     <template v-else-if="isText">
@@ -224,8 +224,8 @@ onBeforeUnmount(() => {
         :readonly="!editing"
         spellcheck="false"
         rows="28"
-        class="w-full rounded border border-gray-300 px-2 py-1.5 text-xs font-mono leading-relaxed"
-        :class="{ 'bg-gray-50 text-gray-600': !editing }"
+        class="w-full rounded border border-line-1 px-2 py-1.5 text-xs font-mono leading-relaxed"
+        :class="{ 'bg-surface-alt text-fg-2': !editing }"
         @keydown.ctrl.s.prevent="save"
         @keydown.meta.s.prevent="save"
       ></textarea>
@@ -236,16 +236,16 @@ onBeforeUnmount(() => {
         v-if="isImage && previewUrl"
         :src="previewUrl"
         :alt="file.path"
-        class="max-h-80 max-w-full border border-gray-200 bg-[repeating-conic-gradient(#eee_0_25%,#fff_0_50%)] bg-[length:16px_16px]"
+        class="max-h-80 max-w-full border border-line-2 bg-[repeating-conic-gradient(#eee_0_25%,#fff_0_50%)] bg-[length:16px_16px]"
       />
-      <p v-else class="text-sm text-gray-500">Binary file — no inline editor.</p>
+      <p v-else class="text-sm text-fg-3">Binary file — no inline editor.</p>
     </template>
 
     <div v-if="source === 'draft'" class="flex flex-wrap items-center gap-2 text-sm">
       <a
         :href="designFileUrl(file.path)"
         :download="file.path.split('/').pop()"
-        class="text-blue-600 hover:underline"
+        class="text-accent hover:underline"
       >
         Download
       </a>
@@ -253,7 +253,7 @@ onBeforeUnmount(() => {
         <button
           v-if="!editing && status === 'baked'"
           :disabled="busy"
-          class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 disabled:opacity-50"
+          class="rounded button-primary px-3 py-1.5 disabled:opacity-50"
           @click="startOverride"
         >
           Override
@@ -261,7 +261,7 @@ onBeforeUnmount(() => {
         <button
           v-if="editing"
           :disabled="busy || !dirty"
-          class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 disabled:opacity-50"
+          class="rounded button-primary px-3 py-1.5 disabled:opacity-50"
           @click="save"
         >
           {{ busy ? 'Saving…' : 'Save' }}
@@ -269,20 +269,20 @@ onBeforeUnmount(() => {
         <button
           v-if="editing && !file.overridden"
           :disabled="busy"
-          class="rounded border border-gray-300 px-3 py-1.5 hover:bg-gray-50"
+          class="rounded border border-line-1 px-3 py-1.5 hover:bg-surface-raised"
           @click="cancelOverride"
         >
           Cancel
         </button>
       </template>
-      <label v-else class="rounded border border-gray-300 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">
+      <label v-else class="rounded border border-line-1 px-3 py-1.5 hover:bg-surface-raised cursor-pointer">
         Replace…
         <input type="file" class="hidden" :disabled="busy" @change="replace" />
       </label>
       <button
         v-if="file.overridden"
         :disabled="busy"
-        class="ml-auto text-red-600 hover:underline disabled:opacity-50"
+        class="ml-auto text-danger hover:underline disabled:opacity-50"
         @click="removeOverride"
       >
         {{ file.baked ? 'Revert to baked' : 'Delete override' }}

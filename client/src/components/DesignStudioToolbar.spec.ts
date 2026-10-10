@@ -83,7 +83,7 @@ describe('DesignStudioToolbar', () => {
     await button(wrapper, 'Publikovat').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('Nothing to publish')
-    expect(wrapper.find('.text-red-700').exists()).toBe(false)
+    expect(wrapper.find('.text-danger-strong').exists()).toBe(false)
   })
 
   it('unsaved editor changes ask before publishing', async () => {
