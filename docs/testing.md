@@ -24,13 +24,18 @@ make verify          # pre-"done" gate: lint + all tests
 Pure-logic tests live **in-module** in a `#[cfg(test)] mod tests` block at the
 bottom of the file under test — no `tests/` directory, no dev-dependencies.
 Good targets are dependency-free functions. Most modules carry one by now
-(`src/ai/*`, `src/export/*`, `src/routes/oauth/security.rs`, `src/templates.rs`,
+(`src/ai/*`, `src/export/*`, `src/routes/oauth/security.rs`, `src/templates/`,
 …); representative examples:
 
 - `src/path_util.rs` — `normalize` / `normalize_prefix` (slug canonicalization).
 - `src/files.rs` — `hash_blob` (SHA-256 content addressing) against known vectors.
 - `src/markdown/tests.rs` — the largest suite: directive parsing, tag allow-listing,
   container collection.
+- `src/templates/tests_render.rs` — every baked template renders byte-identically
+  from its typed context and from the `context!{}` map it replaced, leniently
+  and strictly. `src/templates/contract.rs` snapshot-tests
+  `docs/design-contract.md`: after changing a context struct (or
+  `contract_intro.md`), run `make contract` and commit the result.
 - `src/ai/projection/tests/` — event-log → transcript folding, a pure function
   of the persisted `assistant_events` rows.
 
@@ -146,6 +151,10 @@ executes on every PR rather than self-skipping.
   page renders, raw binary files and the `design.*` WS events, registered
   straight on `AppState.ws_hub` (fs, and db with the state's storage swapped
   for a scoped one after startup).
+- `tests/design_smoke.rs` — `templates::smoke::smoke_render` (#117): the baked
+  design renders clean and every contract template is exercised; an
+  undefined variable (in a partial and in `base.html`, reported once) and a
+  syntax error come back with template and line.
 - `tests/policy_db.rs` — `SitePolicy`/`tool_permissions` resolution against a
   real `tool_permissions` table (FK to `users`, so it can't be faked
   in-memory).

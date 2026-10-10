@@ -1,14 +1,13 @@
 //! `<fen>`, `<pgn>`, `<mermaid>` directives — file-backed or inline-body forms.
 
-use bytes::Bytes;
-use chess_diagram::Renderer as _;
-use minijinja::context;
-
 use super::super::RenderCtx;
 use super::super::directives::Directive;
 use super::super::lookup::{fetch_file, lookup_label, parse_file_lookup};
 use super::super::renderer::{block, render_md_template};
 use super::{TextBlob, inline_body, markdown_image, parse_size_class, read_text_blob};
+use crate::templates::context::{FenPartial, MermaidPartial, PgnPartial};
+use bytes::Bytes;
+use chess_diagram::Renderer as _;
 
 // ---------------------------------------------------------------------------
 // <fen path|id|hash=... size=small|large>  — file-backed, or
@@ -63,12 +62,11 @@ pub(in crate::markdown) async fn directive_fen(d: &Directive, ctx: &mut RenderCt
         };
     }
 
-    let html = render_md_template(
-        ctx,
-        "fen",
-        context! { fen => fen.trim(), size_class => size_class },
-    );
-    block(html)
+    let partial = FenPartial {
+        fen: fen.trim().to_string(),
+        size_class: size_class.to_string(),
+    };
+    block(render_md_template(ctx, "fen", &partial))
 }
 
 /// Which ply a `<pgn move="...">` attribute is asking for, before resolving
@@ -178,16 +176,12 @@ pub(in crate::markdown) async fn directive_pgn(d: &Directive, ctx: &mut RenderCt
         };
     }
 
-    let html = render_md_template(
-        ctx,
-        "pgn",
-        context! {
-            pgn => pgn.as_str(),
-            size_class => size_class,
-            move => move_attr,
-        },
-    );
-    block(html)
+    let partial = PgnPartial {
+        pgn,
+        size_class: size_class.to_string(),
+        move_attr: move_attr.map(str::to_owned),
+    };
+    block(render_md_template(ctx, "pgn", &partial))
 }
 
 // ---------------------------------------------------------------------------
@@ -272,10 +266,10 @@ pub(in crate::markdown) async fn directive_mermaid(
         };
     }
 
-    let html = render_md_template(
-        ctx,
-        "mermaid",
-        context! { svg => svg, source => source, size_class => size_class },
-    );
-    block(html)
+    let partial = MermaidPartial {
+        svg,
+        source,
+        size_class: size_class.to_string(),
+    };
+    block(render_md_template(ctx, "mermaid", &partial))
 }

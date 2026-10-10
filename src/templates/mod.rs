@@ -1,7 +1,14 @@
+pub mod context;
+pub mod contract;
+mod samples;
+pub mod smoke;
+#[cfg(test)]
+mod tests_render;
+
 use std::sync::Arc;
 
-use minijinja::Environment;
 use minijinja::value::Value;
+use minijinja::{Environment, UndefinedBehavior};
 use parking_lot::RwLock;
 
 use crate::design::DesignStore;
@@ -82,19 +89,35 @@ fn compile_all(design: &Arc<DesignStore>) -> Environment<'static> {
 /// The loader is kept even on frozen environments as a safety fallback; in
 /// release builds it still resolves entirely from RAM.
 fn build_environment(design: Arc<DesignStore>) -> Environment<'static> {
+    environment_from(move |path| design.load(path))
+}
+
+/// The environment the smoke render uses: the same filters, templates
+/// resolved through `load` (a design path such as `templates/base.html` →
+/// bytes), and any use of an undefined value is an error.
+pub fn strict_environment(load: impl DesignLoader) -> Environment<'static> {
+    let mut env = environment_from(load);
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env
+}
+
+/// Resolves a design path (`templates/…`) to its bytes — a [`DesignStore`]
+/// (`move |p| design.load(p)`) or any other template set, such as a draft.
+pub trait DesignLoader: Fn(&str) -> Option<Vec<u8>> + Send + Sync + 'static {}
+impl<F: Fn(&str) -> Option<Vec<u8>> + Send + Sync + 'static> DesignLoader for F {}
+
+fn environment_from(load: impl DesignLoader) -> Environment<'static> {
     let mut env = Environment::new();
-    env.set_loader(
-        move |name| match design.load(&format!("templates/{name}")) {
-            Some(data) => match String::from_utf8(data) {
-                Ok(src) => Ok(Some(src)),
-                Err(e) => Err(minijinja::Error::new(
-                    minijinja::ErrorKind::InvalidOperation,
-                    format!("template '{name}' is not valid UTF-8: {e}"),
-                )),
-            },
-            None => Ok(None),
+    env.set_loader(move |name| match load(&format!("templates/{name}")) {
+        Some(data) => match String::from_utf8(data) {
+            Ok(src) => Ok(Some(src)),
+            Err(e) => Err(minijinja::Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                format!("template '{name}' is not valid UTF-8: {e}"),
+            )),
         },
-    );
+        None => Ok(None),
+    });
     env.add_filter("timeformat", timeformat);
     env
 }
@@ -134,15 +157,15 @@ mod tests {
     #[test]
     fn env_renders_a_template() {
         let env = Templates::new(store()).env();
-        let empty: Vec<Value> = Vec::new();
+        let layout = context::Layout {
+            menu_list: Vec::new(),
+            menu_tree: Vec::new(),
+            logged_in: false,
+        };
         let rendered = env
             .get_template("404.html")
             .unwrap()
-            .render(minijinja::context! {
-                logged_in => false,
-                menu_list => &empty,
-                menu_tree => &empty,
-            })
+            .render(&layout)
             .unwrap();
         assert!(!rendered.is_empty());
     }

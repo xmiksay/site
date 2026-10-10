@@ -8,13 +8,13 @@ pub mod tags;
 use axum::extract::{Request, State};
 use axum::response::Html;
 use axum_extra::extract::CookieJar;
-use minijinja::context;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::entity::{menu, page, tag};
 use crate::path_util;
-use crate::routes::{Menu, build_menu};
+use crate::routes::build_menu;
 use crate::state::AppState;
+use crate::templates::context::{Layout, PageView, PathPageContext, TagView};
 use crate::{auth, markdown};
 
 /// Log the real error and serve a generic page — template paths and DB/SQL
@@ -85,7 +85,7 @@ pub async fn catch_all(
 ) -> Html<String> {
     let path = path_util::normalize(req.uri().path());
     let logged_in = auth::is_logged_in(&state, &jar).await.is_some();
-    let nav = build_menu(&state.db, logged_in).await;
+    let layout = Layout::new(build_menu(&state.db, logged_in).await, logged_in);
 
     let env = state.tmpl.env();
     let tmpl = match env.get_template("path_page.html") {
@@ -94,76 +94,72 @@ pub async fn catch_all(
     };
 
     let Some(content) = lookup_content(&state.db, &path).await else {
-        return render_404(&state, &nav, logged_in);
+        return render_404(&state, layout);
     };
+    if content.private() && !logged_in {
+        return render_404(&state, layout);
+    }
 
-    match content {
-        PathContent::Menu(menu_item) => {
-            if menu_item.private && !logged_in {
-                return render_404(&state, &nav, logged_in);
-            }
-            let body_html = markdown::render(
-                &menu_item.markdown,
-                &state.db,
-                &state.storage,
-                &env,
-                logged_in,
-            )
-            .await;
-            match tmpl.render(context! {
-                body_html,
-                menu_list => nav.list,
-                menu_tree => nav.tree,
-                logged_in,
-                menu_id => menu_item.id,
-            }) {
-                Ok(html) => Html(html),
-                Err(e) => error_page("render error", e),
-            }
-        }
-        PathContent::Page(pg) => {
-            if pg.private && !logged_in {
-                return render_404(&state, &nav, logged_in);
-            }
-
-            let body_html =
-                markdown::render(&pg.markdown, &state.db, &state.storage, &env, logged_in).await;
-            let page_view = pages::PageView::from(&pg);
-
-            let tags = tag::Entity::find()
-                .filter(tag::Column::Id.is_in(pg.tag_ids.clone()))
-                .all(&state.db)
-                .await
-                .unwrap_or_default();
-
-            match tmpl.render(context! {
-                page => page_view,
-                breadcrumbs => pages::breadcrumbs(&pg.path),
-                body_html,
-                tags,
-                menu_list => nav.list,
-                menu_tree => nav.tree,
-                logged_in,
-            }) {
-                Ok(html) => Html(html),
-                Err(e) => error_page("render error", e),
-            }
-        }
+    let body_html = markdown::render(
+        content.markdown(),
+        &state.db,
+        &state.storage,
+        &env,
+        logged_in,
+    )
+    .await;
+    let ctx = match content {
+        PathContent::Menu(m) => menu_context(layout, &m, body_html),
+        PathContent::Page(pg) => page_context(&state.db, layout, &pg, body_html).await,
+    };
+    match tmpl.render(&ctx) {
+        Ok(html) => Html(html),
+        Err(e) => error_page("render error", e),
     }
 }
 
-fn render_404(state: &AppState, nav: &Menu, logged_in: bool) -> Html<String> {
+/// `path_page.html` context for a menu item.
+pub(crate) fn menu_context(layout: Layout, m: &menu::Model, body_html: String) -> PathPageContext {
+    PathPageContext {
+        layout,
+        body_html,
+        page: None,
+        breadcrumbs: Vec::new(),
+        tags: Vec::new(),
+        menu_id: Some(m.id),
+    }
+}
+
+/// `path_page.html` context for a page; a failed tag lookup renders no tags.
+pub(crate) async fn page_context(
+    db: &DatabaseConnection,
+    layout: Layout,
+    pg: &page::Model,
+    body_html: String,
+) -> PathPageContext {
+    let tags = tag::Entity::find()
+        .filter(tag::Column::Id.is_in(pg.tag_ids.clone()))
+        .all(db)
+        .await
+        .unwrap_or_default();
+    PathPageContext {
+        layout,
+        body_html,
+        page: Some(PageView::from(pg)),
+        breadcrumbs: pages::breadcrumbs(&pg.path),
+        tags: tags.into_iter().map(TagView::from).collect(),
+        menu_id: None,
+    }
+}
+
+fn render_404(state: &AppState, layout: Layout) -> Html<String> {
     let env = state.tmpl.env();
     // A partial DESIGN_DIR bundle may lack 404.html — fall back rather than
     // panic on every not-found.
     let Ok(tmpl) = env.get_template("404.html") else {
         return Html("<h1>Page not found</h1>".to_string());
     };
-    match tmpl.render(context! {
-        menu_list => &nav.list,
-        menu_tree => &nav.tree,
-        logged_in,
-    }) {
+    match tmpl.render(&layout) {
         Ok(html) => Html(html),
         Err(_) => Html("<h1>Page not found</h1>".to_string()),
     }

@@ -84,7 +84,7 @@ mod renderer;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use bytes::Bytes;
 use minijinja::Environment;
@@ -106,6 +106,18 @@ struct RenderCtx<'a> {
     /// `file_blobs` row of their own) is pushed here for the caller to
     /// resolve through an `AssetProvider` overlay (#66).
     export: Option<&'a mut Vec<(String, Bytes)>>,
+    checks: PartialChecks,
+}
+
+/// The `markdown/*.html` partials one render used. A partial failure is
+/// logged and replaced by an inline error in the page; this keeps it for the
+/// design smoke render (`templates::smoke`).
+#[derive(Debug, Default)]
+pub struct PartialChecks {
+    /// Template names (`markdown/fen.html`, …) rendered successfully or not.
+    pub rendered: BTreeSet<String>,
+    /// Each failure with the template name that was being rendered.
+    pub errors: Vec<(String, minijinja::Error)>,
 }
 
 pub async fn render(
@@ -115,6 +127,17 @@ pub async fn render(
     tmpl: &Environment<'static>,
     logged_in: bool,
 ) -> String {
+    render_checked(md, db, storage, tmpl, logged_in).await.0
+}
+
+/// [`render`], also returning which partials ran and how they failed.
+pub async fn render_checked(
+    md: &str,
+    db: &DatabaseConnection,
+    storage: &Storage,
+    tmpl: &Environment<'static>,
+    logged_in: bool,
+) -> (String, PartialChecks) {
     let mut ctx = RenderCtx {
         db,
         storage,
@@ -122,6 +145,7 @@ pub async fn render(
         logged_in,
         visited_pages: HashSet::new(),
         export: None,
+        checks: PartialChecks::default(),
     };
 
     let expanded = renderer::expand_directives(md, &mut ctx).await;
@@ -135,7 +159,7 @@ pub async fn render(
     let mut out = String::new();
     html::push_html(&mut out, events.into_iter());
 
-    links::rewrite_internal_links(&out)
+    (links::rewrite_internal_links(&out), ctx.checks)
 }
 
 /// Markdown ready for `mdcast`'s `PageSplitter`, plus any directive-rendered
@@ -170,6 +194,7 @@ pub async fn render_for_export(
         logged_in,
         visited_pages: HashSet::new(),
         export: Some(&mut assets),
+        checks: PartialChecks::default(),
     };
 
     let markdown = renderer::expand_directives(md, &mut ctx).await;

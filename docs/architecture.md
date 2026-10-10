@@ -9,7 +9,8 @@ src/
   bin/
     site_server.rs        # HTTP server, port 3000
     site_migration.rs     # Migration CLI (up/down/fresh/status)
-    site_cli.rs           # create-user, change-password
+    site_cli.rs           # create-user, change-password, storage migrate,
+                          # design push, design contract
   routes/
     public/               # catch-all, export.rs (GET /{*path}?format=...,
                           # #67), images.rs (file serving), search,
@@ -79,7 +80,13 @@ src/
                           # (tag parsing), renderer.rs (expansion pipeline),
                           # lookup.rs (file/gallery/page resolution), highlight.rs
                           # (syntect), links.rs, handlers/ (simple/media/json)
-  mcp_args.rs path_util.rs state.rs templates.rs
+  templates/             # mod.rs: Templates (frozen/live environments,
+                          # timeformat, strict_environment, DesignLoader);
+                          # context.rs: typed render contexts, one per
+                          # template/partial; contract.rs (+ contract_intro.md):
+                          # the design contract generator; samples.rs: example
+                          # contexts; smoke.rs: strict smoke render (#117)
+  mcp_args.rs path_util.rs state.rs
                           # mcp_args.rs: shared tool-argument JSON parsing for
                           # the MCP server and the AI assistant's tools (#25)
 
@@ -99,9 +106,40 @@ Design/template resolution (see `src/design/`, `DesignStore`):
 (`templates/`, `assets/{css,js,img}`, `mdcast/`); only paths under those three
 roots are served or accepted. See [Design overrides](#design-overrides).
 
-Templates (`src/templates.rs`, `Templates`) sit on top of the same `DesignStore`:
+Templates (`src/templates/`, `Templates`) sit on top of the same `DesignStore`:
 release builds compile every template once at startup (frozen, shared); debug
 builds rebuild the environment from the assets on each render (live reload).
+
+### Template contract
+
+Every template is rendered with a typed context struct
+(`src/templates/context.rs`, `#[derive(Serialize, JsonSchema)]`): `Layout`
+(flattened into each page context; `404.html`/`base.html` get it alone),
+`PathPageContext`, `PageSearchContext`, and one `*Partial` per directive
+partial under `templates/markdown/`. Every field is always serialized (absent =
+`none`), so templates render under `UndefinedBehavior::Strict`.
+
+`templates::contract` turns the structs (doc comments = descriptions) plus the
+conventions (resolution order, `timeformat`, URLs) into the
+**[design contract](design-contract.md)** — `markdown()` (Markdown with example
+contexts and the embedded schema) and `json_schema()` (one JSON Schema
+document: `templates.<name>` + shared `$defs`); `TEMPLATES` is the registry
+(name, kind, schema, example contexts). `docs/design-contract.md` is generated
+by `make contract` (`site_cli design contract`); a unit test fails when it
+drifts from the code, another when a baked template is missing from
+`TEMPLATES`.
+
+`templates::smoke::smoke_render(db, storage, load)` renders a design given as
+a `DesignLoader` (`templates/…` path → bytes: a `DesignStore`, a draft, …)
+through `strict_environment`: `404.html`, `base.html`, the home menu item, the
+newest page plus the first page using each directive, and search with and
+without a tag — each anonymous and logged in; markdown goes through
+`markdown::render_checked`, which reports the partials it rendered and their
+failures (normally logged and replaced by an inline error). Partials no real
+page reaches, and a missing menu item/page, render with `TEMPLATES`' example
+contexts. Returns a `SmokeReport` (`cases`, `errors`: deduplicated
+`SmokeError { template, line, message, case }`); `Err` only on a DB failure.
+Consumers (publish #115, `design_render_check` #118) come later.
 
 ## Data Model
 
@@ -349,7 +387,7 @@ The renderer recognizes exactly 8 HTML-tag directives — the `DIRECTIVE_NAMES` 
 | `<mermaid>` | `path` \| `id` \| `hash` \| body | `theme`, `size` (`small`/`large`, `sm`/`lg`) | yes |
 | `<json>` | `path` \| `id` \| `hash` \| body | `query` (jq, required), `type` (`table`) | yes |
 
-A fenced code block with info string `mermaid` also renders as a diagram. **Single source of truth:** the human/AI-facing description is the `MARKDOWN_EXTENSIONS_DOC` const (`src/markdown/mod.rs`), reused verbatim by the MCP server instructions, the AI system prompt, and the local `site_tools` description — edit it there, not in each surface.
+A fenced code block with info string `mermaid` also renders as a diagram. **Single source of truth:** the human/AI-facing description is the `MARKDOWN_EXTENSIONS_DOC` const (`src/markdown/mod.rs`), reused verbatim by the MCP server instructions, the AI system prompt, and the local `site_tools` description — edit it there, not in each surface. Each directive renders through a `templates/markdown/*.html` partial with a typed context (`*Partial` in `src/templates/context.rs`); a new directive or partial also needs an entry in `templates::contract::TEMPLATES` and `make contract`.
 
 Auth: `Authorization: Bearer <token>` — accepts both service tokens (legacy, no expiry) and OAuth2 access tokens (1 h, refreshable). Handler resolves to `user_id` for audit fields.
 

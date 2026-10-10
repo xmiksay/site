@@ -1,13 +1,12 @@
 //! `<json>` directive — run a jq query (via jaq) over a JSON file blob or
 //! inline body, and render the result as an HTML table.
 
-use minijinja::context;
-
 use super::super::RenderCtx;
 use super::super::directives::Directive;
 use super::super::lookup::{fetch_file, lookup_label, parse_file_lookup};
 use super::super::renderer::{block, render_md_template};
 use super::{TextBlob, inline_body, read_text_blob};
+use crate::templates::context::JsonPartial;
 
 // ---------------------------------------------------------------------------
 // <json path|id|hash=... query=".rows[]" type="table">  — file-backed, or
@@ -76,12 +75,12 @@ pub(in crate::markdown) async fn directive_json(d: &Directive, ctx: &mut RenderC
         };
     }
 
-    let html = render_md_template(
-        ctx,
-        "json",
-        context! { kind => kind, columns => columns, rows => rows },
-    );
-    block(html)
+    let partial = JsonPartial {
+        kind: kind.to_string(),
+        columns,
+        rows,
+    };
+    block(render_md_template(ctx, "json", &partial))
 }
 
 /// Render a jq result as a real markdown pipe table (rather than the HTML

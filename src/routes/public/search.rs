@@ -3,7 +3,6 @@ use axum::extract::{Query, State};
 use axum::response::Html;
 use axum::routing::get;
 use axum_extra::extract::CookieJar;
-use minijinja::context;
 use sea_orm::EntityTrait;
 
 use crate::auth;
@@ -11,9 +10,9 @@ use crate::entity::tag;
 use crate::repo::pages_search::{self as pages_search_repo, SearchError};
 use crate::routes::build_menu;
 use crate::state::AppState;
+use crate::templates::context::{Layout, PageSearchContext, PageView, TagView};
 
 use super::error_page;
-use super::pages::PageView;
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/", get(search))
@@ -81,16 +80,7 @@ pub async fn search(
         }
     };
 
-    let prev_offset = if offset == 0 {
-        None
-    } else {
-        Some(offset.saturating_sub(limit))
-    };
-    let next_offset = if offset + limit < total {
-        Some(offset + limit)
-    } else {
-        None
-    };
+    let (prev_offset, next_offset) = page_window(offset, limit, total);
 
     // Resolve tag (if filtering by name) for display
     let tag_model = if let Some(name) = tag_name {
@@ -111,22 +101,42 @@ pub async fn search(
         Err(e) => return error_page("search template error", e),
     };
 
-    match tmpl.render(context! {
-        q => q.unwrap_or(""),
-        tag_name => tag_name.unwrap_or(""),
-        tag => tag_model,
-        path_prefix => path_prefix.unwrap_or(""),
+    let ctx = PageSearchContext {
+        layout: Layout::new(nav, logged_in),
+        q: q.unwrap_or("").to_string(),
+        tag_name: tag_name.unwrap_or("").to_string(),
+        tag: tag_model.map(TagView::from),
+        path_prefix: path_prefix.unwrap_or("").to_string(),
         pages,
         total,
         limit,
         offset,
         prev_offset,
         next_offset,
-        menu_list => nav.list,
-        menu_tree => nav.tree,
-        logged_in,
-    }) {
+    };
+    match tmpl.render(&ctx) {
         Ok(html) => Html(html),
         Err(e) => error_page("search render error", e),
+    }
+}
+
+/// `(prev_offset, next_offset)` around the result page at `offset`.
+pub(crate) fn page_window(offset: u64, limit: u64, total: u64) -> (Option<u64>, Option<u64>) {
+    let prev = (offset != 0).then(|| offset.saturating_sub(limit));
+    let next = (offset + limit < total).then_some(offset + limit);
+    (prev, next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::page_window;
+
+    #[test]
+    fn page_window_has_neighbours_only_where_results_exist() {
+        assert_eq!(page_window(0, 20, 5), (None, None));
+        assert_eq!(page_window(0, 20, 45), (None, Some(20)));
+        assert_eq!(page_window(20, 20, 45), (Some(0), Some(40)));
+        assert_eq!(page_window(40, 20, 45), (Some(20), None));
+        assert_eq!(page_window(5, 20, 45), (Some(0), Some(25)));
     }
 }
