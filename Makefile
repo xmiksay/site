@@ -14,7 +14,7 @@ $(foreach v,$(TEST_S3_VARS),$(eval $(v) ?= $$(shell sed -n 's/^$(v)=//p' .env 2>
 export $(TEST_S3_VARS)
 
 .DEFAULT_GOAL := help
-.PHONY: help client build run migrate dev check fmt lint test test-unit test-integration test-client verify clean
+.PHONY: help client build run migrate contract dev check fmt lint test test-unit test-integration test-client verify clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -30,6 +30,15 @@ run: client ## Run site_server on :3000 (embeds client/dist; needs DATABASE_URL)
 
 migrate: ## Apply database migrations
 	cargo run --bin site_migration
+
+# Write to a temp file first: a failed build must not truncate the contract.
+contract: ## Regenerate docs/design-contract.{md,schema.json} from the typed template contexts
+	cargo run -q --bin site_cli -- design contract > docs/design-contract.md.tmp \
+		|| { rm -f docs/design-contract.md.tmp; exit 1; }
+	cargo run -q --bin site_cli -- design contract --schema > docs/design-contract.schema.json.tmp \
+		|| { rm -f docs/design-contract.md.tmp docs/design-contract.schema.json.tmp; exit 1; }
+	mv docs/design-contract.md.tmp docs/design-contract.md
+	mv docs/design-contract.schema.json.tmp docs/design-contract.schema.json
 
 dev: ## Hot-reload the admin SPA (vite)
 	cd client && npm run dev

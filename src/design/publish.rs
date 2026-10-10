@@ -5,7 +5,8 @@
 //! draft, never straight to live.
 //!
 //! A publish runs under `reload_lock` and the draft lock: complete any
-//! pending publish → check the draft (initialized, valid, something to
+//! pending publish → check the draft (initialized, compiles and passes the
+//! strict smoke render (`templates::smoke`) as it would go live, something to
 //! publish, live `design/` still at the draft's base unless forced) →
 //! snapshot → pending marker → mirror the draft to `design/` → reload →
 //! `meta.json`, drop the marker, re-base the draft. Visitors switch designs
@@ -18,6 +19,7 @@
 use bytes::Bytes;
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use futures_util::future::try_join_all;
+use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
 use super::DesignStore;
@@ -27,6 +29,7 @@ use super::stored::{
 };
 use crate::storage::Storage;
 use crate::templates::Templates;
+use crate::templates::smoke::{SmokeError, smoke_render};
 
 /// Storage key prefix of the version history.
 pub const HISTORY_PREFIX: &str = "design-history";
@@ -68,13 +71,50 @@ fn version_id(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Micros, true)
 }
 
+/// Validate exactly what would go live (`view` = the draft over the baked
+/// bundle): every template compiles, then the strict smoke render against
+/// the site's real data reports no template error.
+async fn check_view(
+    db: &DatabaseConnection,
+    storage: &Storage,
+    view: &Files,
+) -> Result<(), DesignError> {
+    let errors = validate_for_publish(view);
+    if !errors.is_empty() {
+        return Err(DesignError::Invalid(errors));
+    }
+    let files = view.clone();
+    let load = move |path: &str| files.get(path).map(|bytes| bytes.to_vec());
+    let report = smoke_render(db, storage, load).await.map_err(|e| {
+        tracing::error!("design publish: smoke render failed: {e:#}");
+        DesignError::RenderCheck
+    })?;
+    if report.is_ok() {
+        return Ok(());
+    }
+    Err(DesignError::Invalid(
+        report.errors.iter().map(smoke_message).collect(),
+    ))
+}
+
+/// `templates/{name}:{line}: {message} (rendering {case})`, in the same
+/// `templates/…` path form as the compile errors.
+fn smoke_message(e: &SmokeError) -> String {
+    let line = e.line.map(|l| format!(":{l}")).unwrap_or_default();
+    format!(
+        "templates/{}{line}: {} (rendering {})",
+        e.template, e.message, e.case
+    )
+}
+
 impl DesignStore {
     /// Publish the draft as user `by`; `force` overwrites `design/` changes
     /// made outside the draft ([`DesignError::Conflict`]). Every rejection
-    /// (`Invalid`, `Conflict`, `NothingToPublish`) leaves everything
+    /// (`Invalid`, `RenderCheck`, `Conflict`, `NothingToPublish`) leaves everything
     /// untouched; see the module doc for the failure guarantees.
     pub async fn publish(
         &self,
+        db: &DatabaseConnection,
         storage: &Storage,
         templates: &Templates,
         by: &str,
@@ -89,10 +129,7 @@ impl DesignStore {
             return Err(DesignError::NothingToPublish);
         };
         let files = self.draft_files(storage, &mut cache).await?;
-        let errors = validate_for_publish(&self.with_baked(&files));
-        if !errors.is_empty() {
-            return Err(DesignError::Invalid(errors));
-        }
+        check_view(db, storage, &self.with_baked(&files)).await?;
         let live = self.live_files(storage).await?;
         if changes(&self.with_baked(&files), &self.with_baked(&live)).is_empty() {
             return Err(DesignError::NothingToPublish);
@@ -284,6 +321,22 @@ async fn finish(storage: &Storage, entry: &HistoryEntry) -> Result<(), DesignErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smoke_errors_read_like_compile_errors() {
+        let mut e = SmokeError {
+            template: "markdown/fen.html".into(),
+            line: Some(2),
+            message: "undefined value".into(),
+            case: "page `x` (anonymous)".into(),
+        };
+        assert_eq!(
+            smoke_message(&e),
+            "templates/markdown/fen.html:2: undefined value (rendering page `x` (anonymous))"
+        );
+        e.line = None;
+        assert!(smoke_message(&e).starts_with("templates/markdown/fen.html: undefined"));
+    }
 
     #[test]
     fn version_ids_are_single_segment_rfc3339() {

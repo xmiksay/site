@@ -9,6 +9,10 @@ Rendering happens in Node with [minijinja-js](https://github.com/mitsuhiko/minij
 build writes one ready-to-open page per render target. Edit a template, rebuild
 (or just refresh under the dev server), and see the change.
 
+What each template actually receives is specified by the generated
+[design contract](../docs/design-contract.md); the hand-written `fixtures.mjs`
+data is only an approximation and may differ from it.
+
 ## Bundle layout
 
 The design bundle is split by how the server handles each part:

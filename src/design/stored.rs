@@ -84,6 +84,9 @@ pub enum DesignError {
     Conflict(Vec<String>),
     #[error("nothing to publish: the draft matches the live design")]
     NothingToPublish,
+    /// The smoke render could not query the site's data (detail logged).
+    #[error("the design render check failed")]
+    RenderCheck,
     /// The mirror to `design/` or the reload after it failed. `restored`:
     /// the previous `design/` objects were put back; `pending`: the publish
     /// marker is still set, so the next reload, publish or start completes

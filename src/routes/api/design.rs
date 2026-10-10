@@ -74,6 +74,7 @@ impl From<DesignError> for ApiError {
             DesignError::Conflict(_) | DesignError::NothingToPublish => {
                 Self::Conflict(err.to_string())
             }
+            DesignError::RenderCheck => Self::Internal(err.to_string()),
             DesignError::PublishFailed { ref error, .. } => {
                 let msg = status_error(&err);
                 match **error {
@@ -196,7 +197,7 @@ async fn publish(
         .map_or_else(|| format!("user #{user_id}"), |u| u.username);
     let entry = state
         .design
-        .publish(&state.storage, &state.tmpl, &by, query.force)
+        .publish(&state.db, &state.storage, &state.tmpl, &by, query.force)
         .await?;
     broadcast::design_published(&state.ws_hub, &entry);
     Ok(Json(entry))

@@ -10,16 +10,23 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOr
 
 use crate::entity::menu;
 
-#[derive(serde::Serialize, Clone)]
+/// One menu entry.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema, Clone)]
 pub struct MenuItem {
+    /// `/{path}`; the home item (path `""`) is not listed — link `/` explicitly.
     pub path: String,
+    /// The menu item's title.
     pub label: String,
 }
 
-#[derive(serde::Serialize, Clone)]
+/// A menu entry with the entries nested under its path.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema, Clone)]
 pub struct MenuNode {
+    /// `/{path}`; the home item (path `""`) is not listed — link `/` explicitly.
     pub path: String,
+    /// The menu item's title.
     pub label: String,
+    /// Entries whose path continues this one; empty for a leaf.
     pub children: Vec<MenuNode>,
 }
 

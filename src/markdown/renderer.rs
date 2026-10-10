@@ -260,24 +260,30 @@ pub(super) fn block(html: String) -> String {
 /// Render a `markdown/<name>.html` template; on failure, log and emit a
 /// visible inline error so authors can spot it.
 pub(super) fn render_md_template(
-    ctx: &RenderCtx<'_>,
+    ctx: &mut RenderCtx<'_>,
     name: &str,
-    tctx: minijinja::value::Value,
+    tctx: &impl serde::Serialize,
 ) -> String {
     let path = format!("markdown/{name}.html");
-    match ctx.tmpl.get_template(&path) {
+    ctx.checks.rendered.insert(path.clone());
+    let (err, html) = match ctx.tmpl.get_template(&path) {
         Ok(t) => match t.render(tctx) {
-            Ok(s) => s,
+            Ok(s) => return s,
             Err(e) => {
                 tracing::error!(template = %path, error = %e, "markdown template render failed");
-                format!("<p><em>[template `{path}` render failed]</em></p>")
+                (
+                    e,
+                    format!("<p><em>[template `{path}` render failed]</em></p>"),
+                )
             }
         },
         Err(e) => {
             tracing::error!(template = %path, error = %e, "markdown template missing");
-            format!("<p><em>[template `{path}` missing]</em></p>")
+            (e, format!("<p><em>[template `{path}` missing]</em></p>"))
         }
-    }
+    };
+    ctx.checks.errors.push((path, err));
+    html
 }
 
 /// Render nested page markdown (already directive-expanded) to inner HTML.

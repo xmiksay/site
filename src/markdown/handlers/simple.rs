@@ -1,10 +1,12 @@
 //! `<page>`, `<file>`, `<image>`, `<gallery>` directives.
 
-use minijinja::context;
 use sea_orm::EntityTrait;
 
 use crate::entity::file as file_entity;
 use crate::repo::files::title_from_path;
+use crate::templates::context::{
+    FilePartial, GalleryItem, GalleryPartial, ImgPartial, PagePartial,
+};
 
 use super::super::RenderCtx;
 use super::super::directives::Directive;
@@ -58,11 +60,7 @@ pub(in crate::markdown) async fn directive_page(d: &Directive, ctx: &mut RenderC
 
     let inner_html = render_expanded_to_html(&nested);
 
-    let html = render_md_template(
-        ctx,
-        "page",
-        context! { path => &path, inner_html => &inner_html },
-    );
+    let html = render_md_template(ctx, "page", &PagePartial { path, inner_html });
     block(html)
 }
 
@@ -98,20 +96,20 @@ pub(in crate::markdown) async fn directive_file(d: &Directive, ctx: &mut RenderC
     }
 
     if file.mimetype.starts_with("image/") {
-        let html = render_md_template(
-            ctx,
-            "img",
-            context! { hash => &file.hash, title => &title, alt => &title },
-        );
-        return block(html);
+        let partial = ImgPartial {
+            hash: file.hash,
+            alt: title.clone(),
+            title,
+        };
+        return block(render_md_template(ctx, "img", &partial));
     }
 
-    let html = render_md_template(
-        ctx,
-        "file",
-        context! { hash => &file.hash, title => &title, description },
-    );
-    block(html)
+    let partial = FilePartial {
+        hash: file.hash,
+        description: description.to_string(),
+        title,
+    };
+    block(render_md_template(ctx, "file", &partial))
 }
 
 // ---------------------------------------------------------------------------
@@ -140,12 +138,12 @@ pub(in crate::markdown) async fn directive_img(d: &Directive, ctx: &mut RenderCt
         return block(markdown_image(alt, &file.path));
     }
 
-    let html = render_md_template(
-        ctx,
-        "img",
-        context! { hash => &file.hash, title => &title, alt },
-    );
-    block(html)
+    let partial = ImgPartial {
+        hash: file.hash,
+        alt: alt.to_string(),
+        title,
+    };
+    block(render_md_template(ctx, "img", &partial))
 }
 
 // ---------------------------------------------------------------------------
@@ -170,13 +168,6 @@ pub(in crate::markdown) async fn directive_gallery(
         return block(html);
     };
 
-    #[derive(serde::Serialize)]
-    struct GalleryItem {
-        hash: String,
-        title: String,
-        path: String,
-    }
-
     let mut items: Vec<GalleryItem> = Vec::with_capacity(gal.file_ids.len());
     for file_id in &gal.file_ids {
         if let Ok(Some(img)) = file_entity::Entity::find_by_id(*file_id).one(ctx.db).await {
@@ -200,10 +191,10 @@ pub(in crate::markdown) async fn directive_gallery(
         return md;
     }
 
-    let html = render_md_template(
-        ctx,
-        "gallery",
-        context! { id => gal.id, title => &gal.title, items => &items },
-    );
-    block(html)
+    let partial = GalleryPartial {
+        id: gal.id,
+        title: gal.title,
+        items,
+    };
+    block(render_md_template(ctx, "gallery", &partial))
 }
