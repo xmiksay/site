@@ -1,3 +1,4 @@
+pub mod attachments;
 pub mod mcp_servers;
 pub mod models;
 pub mod permissions;
@@ -5,6 +6,7 @@ pub mod providers;
 pub mod sessions;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, patch, post};
 
 use crate::state::AppState;
@@ -24,6 +26,10 @@ pub fn router() -> Router<AppState> {
             post(sessions::approve),
         )
         .route("/sessions/{id}/compact", post(sessions::compact))
+        .route(
+            "/sessions/{id}/attachments",
+            post(attachments::upload).layer(DefaultBodyLimit::max(attachments::BODY_LIMIT)),
+        )
         .route(
             "/mcp-servers",
             get(mcp_servers::list).post(mcp_servers::create),

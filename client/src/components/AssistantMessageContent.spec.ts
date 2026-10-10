@@ -74,6 +74,26 @@ describe('AssistantMessageContent', () => {
     expect(approveToolCalls).toHaveBeenCalledWith(1, 0, [{ tool_call_id: 'a', approve: true, remember: false }])
   })
 
+  it("renders a user message's attachment note as links, with a thumbnail for images", () => {
+    const text =
+      'What is this?\n\nAttached files (look at one with file_read {"path": …, "include_content": true}):\n' +
+      '- uploads/chat/2026-10/shot.png\n- uploads/chat/2026-10/notes.pdf'
+    const wrapper = mount(AssistantMessageContent, {
+      props: { role: 'user', content: { text }, messageId: 0 },
+    })
+    expect(wrapper.text()).toContain('What is this?')
+    expect(wrapper.text()).not.toContain('Attached files')
+    const links = wrapper.findAll('a')
+    expect(links.map((a) => a.attributes('href'))).toEqual([
+      '/api/files/by-path/uploads/chat/2026-10/shot.png',
+      '/api/files/by-path/uploads/chat/2026-10/notes.pdf',
+    ])
+    expect(links.map((a) => a.text())).toEqual(['shot.png', 'notes.pdf'])
+    expect(wrapper.findAll('img').map((i) => i.attributes('src'))).toEqual([
+      '/api/files/by-path/uploads/chat/2026-10/shot.png?thumbnail=true',
+    ])
+  })
+
   it('renders a closed "Thinking" disclosure when the message carries reasoning', () => {
     const wrapper = mount(AssistantMessageContent, {
       props: {

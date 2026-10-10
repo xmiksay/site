@@ -230,6 +230,33 @@ impl DesignStore {
         Ok(())
     }
 
+    /// Put `bytes` at the first of `candidates` the draft view lacks; `None`
+    /// when every one is taken. Picked under the draft lock, so two
+    /// concurrent uploads of one name cannot claim the same path.
+    pub async fn draft_put_new(
+        &self,
+        storage: &Storage,
+        candidates: impl IntoIterator<Item = String> + Send,
+        bytes: Bytes,
+    ) -> Result<Option<String>, DesignError> {
+        let mut cache = self.draft.lock().await;
+        ensure_init(storage).await?;
+        let view = self.with_baked(&self.draft_files(storage, &mut cache).await?);
+        let Some(path) = candidates.into_iter().find(|p| !view.contains_key(p)) else {
+            return Ok(None);
+        };
+        check_path(&path)?;
+        storage
+            .put(&key(DRAFT_PREFIX, &path), bytes.clone())
+            .await?;
+        let file = StoredFile {
+            bytes,
+            version: None,
+        };
+        cache.insert(path.clone(), file);
+        Ok(Some(path))
+    }
+
     /// Remove the draft's copy of `path`: a baked file reverts to its
     /// default, any other file is gone.
     pub async fn draft_delete(&self, storage: &Storage, path: &str) -> Result<(), DesignError> {

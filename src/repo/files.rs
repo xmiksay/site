@@ -139,6 +139,14 @@ pub fn infer_mimetype(path: &str) -> String {
     }
 }
 
+/// An upload's declared content type, unless the browser only shrugged
+/// (`application/octet-stream`) — then the path's extension decides.
+pub fn resolve_mimetype(declared: Option<String>, path: &str) -> String {
+    declared
+        .filter(|m| !m.is_empty() && m != "application/octet-stream")
+        .unwrap_or_else(|| infer_mimetype(path))
+}
+
 /// Whether a mimetype's bytes are safe to decode and return as UTF-8 text —
 /// covers the site's own text-ish directive formats (`.pgn`/`.mmd`/`.fen`/
 /// `.json`, per `infer_mimetype`/`embed_hint` above) plus generic `text/*`.
@@ -194,7 +202,7 @@ pub async fn create_file(
     .insert(db)
     .await?;
 
-    let has_thumbnail = store_thumbnail(db, storage, model.id, &input.data, &input.mimetype).await;
+    let has_thumbnail = store_thumbnail(db, storage, model.id, input.data, &input.mimetype).await;
 
     Ok(CreatedFile {
         model,
@@ -251,6 +259,17 @@ pub async fn find_with_thumbnail(
     }))
 }
 
+/// `path` is normalized first, like every stored path.
+pub async fn find_by_path(
+    db: &DatabaseConnection,
+    path: &str,
+) -> Result<Option<file::Model>, DbErr> {
+    file::Entity::find()
+        .filter(file::Column::Path.eq(path_util::normalize(path)))
+        .one(db)
+        .await
+}
+
 pub async fn find_by_hash(
     db: &DatabaseConnection,
     hash: &str,
@@ -298,7 +317,7 @@ pub async fn update_metadata(
 
     let has_thumbnail = if let Some(data) = new_data {
         file_thumbnail::Entity::delete_by_id(id).exec(db).await?;
-        store_thumbnail(db, storage, id, &data, &updated.mimetype).await
+        store_thumbnail(db, storage, id, data, &updated.mimetype).await
     } else {
         has_thumbnail(db, id).await?
     };
@@ -315,10 +334,16 @@ async fn store_thumbnail(
     db: &DatabaseConnection,
     storage: &Storage,
     file_id: i32,
-    data: &[u8],
+    data: Vec<u8>,
     mimetype: &str,
 ) -> bool {
-    let Some(thumb) = make_thumbnail(data, mimetype) else {
+    // Decoding a large photo is CPU-heavy; keep it off the async workers.
+    let mime = mimetype.to_string();
+    let thumb = tokio::task::spawn_blocking(move || make_thumbnail(&data, &mime))
+        .await
+        .ok()
+        .flatten();
+    let Some(thumb) = thumb else {
         return false;
     };
     let hash = match storage.put_blob(&thumb.data).await {

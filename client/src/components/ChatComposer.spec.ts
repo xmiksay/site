@@ -15,16 +15,6 @@ function open(id: number, messages: unknown[] = [{ id: 1 }]) {
 describe('ChatComposer', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
-  it('insert() appends a line to the draft', async () => {
-    open(1)
-    const wrapper = mount(ChatComposer)
-    const textarea = wrapper.find('textarea')
-    await textarea.setValue('Make the header blue. ')
-    ;(wrapper.vm as unknown as { insert(t: string): void }).insert('I uploaded assets/img/a.png to the draft.')
-    await nextTick()
-    expect(textarea.element.value).toBe('Make the header blue.\nI uploaded assets/img/a.png to the draft.')
-  })
-
   it('sends the trimmed draft to the open session and clears it up front', async () => {
     const assistant = open(4)
     let finish!: () => void

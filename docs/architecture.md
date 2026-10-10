@@ -83,6 +83,8 @@ src/
                           # rows on db; config.rs: STORAGE_KIND/STORAGE_DIR/S3_*;
                           # migrate.rs: `site_cli storage migrate`
   auth.rs config.rs files.rs
+                          # files.rs: hash_blob, thumbnails, image_for_model
+                          # (≤ 1568 px image blocks for the assistant, #132)
   markdown/              # mod.rs (entry + MARKDOWN_EXTENSIONS_DOC), directives.rs
                           # (tag parsing), renderer.rs (expansion pipeline),
                           # lookup.rs (file/gallery/page resolution), highlight.rs
@@ -104,6 +106,7 @@ client/                   # Vue 3 SPA
                           # colour tokens (light-dark()); button.css:
                           # button-*/button-outline-* utilities; markdown.css
     components/ChatPanel* # the shared chat (header, message list, composer)
+    lib/chatAttachments.ts # attachment note format, transcript links (#132)
 
 design/                   # Baked default design bundle (via rust-embed)
   templates/              # rendered by the template engine
@@ -124,7 +127,39 @@ the title and `AssistantSessionToolbar` plus an `actions` slot,
 `ChatComposer`), used by `AssistantView.vue`, the page editor
 (`PageEditView.vue`'s *AI* toggle — with `pageContext` the panel opens or
 creates that page's own chat, remembered per page in `localStorage`) and the
-Design studio's `DesignChat.vue`; it exposes `insert(text)` into the composer.
+Design studio's `DesignChat.vue`.
+
+**Chat attachments (#132):** the composer takes files from its attach button,
+a paste into the textarea, or a drop anywhere on `ChatPanel` (multiple, 10 MB
+each, checked client- and server-side), shown as removable chips. On send
+each file is uploaded first (`POST /api/assistant/sessions/{id}/attachments`,
+`src/ai/handlers/attachments.rs`), then the message goes out with a trailing
+note `Attached files (look at one with file_read …):` listing the stored paths
+(`client/src/lib/chatAttachments.ts`) — images are never pushed into the
+prompt; the model opens a file on request (`file_read` with
+`include_content`, `design_read`, see the AI `tools/`). A failed upload sends
+nothing and keeps the text and chips; files already stored are not
+re-uploaded on retry. The server routes by the session's profile: a normal
+chat's file becomes a regular site file at `uploads/chat/YYYY-MM/<name>`
+through `files_repo::create_file` (content-addressed, thumbnail for images,
+`file.created` broadcast); a **Designer** chat's goes into the design draft —
+images (`png jpg jpeg gif webp avif svg ico`) to `assets/img/`, fonts
+(`woff woff2 ttf otf eot`) to `assets/fonts/`, anything else is refused with
+422 — via `DesignStore::draft_put_new` + `design.draft_changed`. The name is
+sanitized to one lowercase `[a-z0-9_-]` segment plus extension (no
+separators or traversal; empty → `file`), and a taken path gets `-2`, `-3`, …
+before the extension. Concurrent uploads of one name get distinct paths: the
+draft picks the free name and writes it under its lock (`draft_put_new`); a
+site file that loses the race on the unique `files.path` index retries with
+the next free name (3 attempts, then 409). In the transcript,
+`AssistantMessageContent.vue` turns that note back into links (with a
+thumbnail for images) — only for paths in `uploads/chat/` or
+`assets/{img,fonts}/` without empty/`.`/`..` segments, since the note is
+plain message text: site files via `GET /api/files/by-path/{path}` (a
+redirect to `/files/{hash}`, or `/nahled` with `?thumbnail=true`), draft
+assets via the raw draft API. A Designer chat's file picker offers exactly
+the server's image/font extensions (`DESIGNER_ACCEPT`). This replaced the
+Design studio's separate *Attach asset…* action.
 
 Design/template resolution (see `src/design/`, `DesignStore`):
 `DESIGN_DIR` (dev-only, live) → storage overrides (`design/…` keys) → baked
@@ -215,7 +250,9 @@ llm_models          id, provider_id, label, model wire-id, is_default,
                     (default true), supports_reasoning_effort, supports_thinking
                     (both default false; m_029) — gate the matching
                     GenerationParams knob per model so an unsupported one is
-                    rejected with 400 instead of reaching the provider, #53
+                    rejected with 400 instead of reaching the provider, #53;
+                    supports_images (default true; m_035) — whether
+                    file_read/design_read may answer with an image block, #132
 assistant_sessions  id, user_id, title, provider/model snapshots, model_id?,
                     enabled_mcp_server_ids JSONB (m_018),
                     engine_session_id? unique (m_023 — the engine's root
@@ -339,7 +376,7 @@ An admin sees the real site rendered with the draft (#116): `POST /api/design/pr
 
 `/admin/design` (`client/src/views/DesignView.vue`, #119) is where an admin tunes the design with AI and publishes it. Three panels side by side on wide screens (`xl`), tabs (Chat / Files / Preview) below — hidden panels stay mounted, so switching keeps their state:
 
-- **Chat** (`DesignChat.vue`): an assistant session under the `designer` profile. *New Designer chat* creates one (`POST /api/assistant/sessions {agent_profile: "designer"}`) — it never switches the open chat, since a chat with history cannot enter `designer` (409); earlier Designer chats (root sessions with that profile) are listed to resume. The transcript and composer are the shared `ChatPanel.vue` (as in `AssistantView.vue` and the page editor), with *Attach asset…* / *← Back to the Designer chat* in its header's `actions` slot. *Attach asset…* uploads an image/font into the draft (`assets/img/` / `assets/fonts/`) and notes the path in the composer.
+- **Chat** (`DesignChat.vue`): an assistant session under the `designer` profile. *New Designer chat* creates one (`POST /api/assistant/sessions {agent_profile: "designer"}`) — it never switches the open chat, since a chat with history cannot enter `designer` (409); earlier Designer chats (root sessions with that profile) are listed to resume. The transcript and composer are the shared `ChatPanel.vue` (as in `AssistantView.vue` and the page editor), with *← Back to the Designer chat* in its header's `actions` slot. Images and fonts are attached through the composer (button, paste, drop); the server stores a Designer chat's attachments in the draft's `assets/img/` / `assets/fonts/` and the message names their paths for `design_read` (#132, see "Chat attachments").
 - **Files** (`DesignFilesPanel.vue`): the draft tree (`DesignTree.vue`: override / custom / unpublished-change markers), the unpublished changes list (deleted files included), upload (`DesignUpload.vue`, images → `assets/img/`, fonts → `assets/fonts/` by default) and the editor (`DesignEditor.vue`: edit text, replace binaries, revert to baked / delete, view the published or baked version read-only).
 - **Preview** (`DesignPreview.vue`): the public site in an iframe in [draft preview](#draft-preview) mode — the studio turns preview on when it opens (`POST /api/design/preview {on: true}`, again on the manual refresh, since the banner's exit link inside the frame turns it off); editable path (kept on the site's origin), open in a new tab. It is not turned off on leaving — the banner offers the exit.
 
@@ -371,7 +408,7 @@ The toolbar (`DesignStudioToolbar.vue`) shows the change count ("Draft — not l
 
 Errors answer `{error}` (human-readable); rejections a client acts on by kind add `code` and, when they list items, `details: [string]` (`ApiError::Detailed`, so far the design publish/reload rejections). Everything below needs the session cookie (`require_login_api`), except the design **draft** routes (`/api/design/draft`, `/api/design/draft/{*path}`), which also accept the MCP Bearer token — OAuth access token or service token (`require_login_or_bearer_api`, #118). Publish, discard, history/restore, reload and the draft preview toggle (`POST /api/design/preview`, `GET /api/design/preview/exit`) stay session-only: a Bearer request gets 401.
 
-`auth/{login,logout,me}`, `users` (`GET/POST /`, `DELETE /{id}`, `PUT /{id}/password`), `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, `export/pages/{id}` (below), and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve` + `sessions/{id}/compact` (manual context compaction, #40), `mcp-servers` CRUD, `providers` CRUD + `providers/status` (live per-provider throttle posture, #89), `models` CRUD (`context_window` field, #40), `permissions` CRUD (tool-permission rules).
+`auth/{login,logout,me}`, `users` (`GET/POST /`, `DELETE /{id}`, `PUT /{id}/password`), `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB) + `files/by-path/{*path}` (redirect to `/files/{hash}`, `?thumbnail=true` → its `/nahled`; the chat transcript links attachments this way), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, `export/pages/{id}` (below), and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve` + `sessions/{id}/compact` (manual context compaction, #40) + `sessions/{id}/attachments` (multipart `file`, 10 MB → 413 `too_large`; answers `{path, mimetype, size, target: file|design, file_id?}`, #132 — see "Chat attachments" above), `mcp-servers` CRUD, `providers` CRUD + `providers/status` (live per-provider throttle posture, #89), `models` CRUD (`context_window` field, #40; `supports_*` flags incl. `supports_images`, #132), `permissions` CRUD (tool-permission rules).
 
 | Path | Method | Description |
 |---|---|---|
@@ -417,7 +454,7 @@ section below).
 - **Tags:** `tag_list`, `tag_read`, `tag_create`, `tag_update`, `tag_delete`
 - **Files:** `file_list`, `file_create` (mimetype inferred from the path extension when omitted — `.pgn`/`.mmd`/`.fen`/`.json` get dedicated mimetypes, issue #57 — and the response's `embed` field is a ready-to-use directive derived from that extension/mimetype: `<pgn>`/`<mermaid>`/`<fen>`/`<json>` for those extensions, `<image>` for `image/*`, `<file>` otherwise — `files_repo::embed_hint`, issue #55), `file_read` (`include_content` returns the file's text for text-ish mimetypes — plain text, JSON, PGN, mermaid, FEN, per `files_repo::is_text_content`), `file_update` (path/description, plus optional `mimetype`/`data`/`data_base64` to replace the stored bytes in place — issue #56, so a bad upload is repairable instead of unrecoverable), `file_delete`
 - **Galleries:** `gallery_list`, `gallery_read`, `gallery_create`, `gallery_update`, `gallery_delete`
-- **Design draft (#118):** `design_list` (draft view: `path`/`baked`/`overridden`/`size` per file, optional `prefix`, plus `changes`), `design_read` (`path`, `source` = `draft`|`published`|`baked`; UTF-8 as `data`, else `data_base64`, with `mimetype`), `design_write` (`path` + exactly one of `data`/`data_base64`, path checked like the API; 20 MB per file, but over MCP the whole JSON-RPC request is bounded by axum's 2 MB `Json` limit, ≈1.5 MB of base64-decoded binary — larger files such as fonts go through `PUT /api/design/draft/{path}` with the same Bearer token, raw body; oversize base64 is refused by its length before decoding), `design_delete` (a baked file reverts to its default), `design_changes` (`{path, kind: added|modified|deleted}` vs published), `design_contract` (the template contract Markdown, `schema: true` for the JSON Schema), `design_render_check` (compile + strict smoke render over the draft view → `{ok, compile_errors, render_errors: [{template, line, message, case}], cases}`). **No publish tool** — publishing is a human action in the admin. One implementation, `src/design/tools/` (`specs.rs` = names/descriptions/schemas), behind both `src/routes/mcp/design.rs` and the AI's `src/ai/tools/design.rs`; failures map storage/DB detail to `storage unavailable`/`database error` (`stored::status_error`), the rest to their client-safe message.
+- **Design draft (#118):** `design_list` (draft view: `path`/`baked`/`overridden`/`size` per file, optional `prefix`, plus `changes`), `design_read` (`path`, `source` = `draft`|`published`|`baked`; UTF-8 as `data`, else `data_base64`, with `mimetype` — over MCP always; the site's own assistant is shown a draft PNG/JPEG/WebP/GIF as an image block instead, #132), `design_write` (`path` + exactly one of `data`/`data_base64`, path checked like the API; 20 MB per file, but over MCP the whole JSON-RPC request is bounded by axum's 2 MB `Json` limit, ≈1.5 MB of base64-decoded binary — larger files such as fonts go through `PUT /api/design/draft/{path}` with the same Bearer token, raw body; oversize base64 is refused by its length before decoding), `design_delete` (a baked file reverts to its default), `design_changes` (`{path, kind: added|modified|deleted}` vs published), `design_contract` (the template contract Markdown, `schema: true` for the JSON Schema), `design_render_check` (compile + strict smoke render over the draft view → `{ok, compile_errors, render_errors: [{template, line, message, case}], cases}`). **No publish tool** — publishing is a human action in the admin. One implementation, `src/design/tools/` (`specs.rs` = names/descriptions/schemas), behind both `src/routes/mcp/design.rs` and the AI's `src/ai/tools/design.rs`; failures map storage/DB detail to `storage unavailable`/`database error` (`stored::status_error`), the rest to their client-safe message.
 
 Tool names follow a `<resource>_<operation>` convention (issue #61); `web_search`/`web_fetch` (below) are the exception, already resource-first.
 
@@ -705,7 +742,33 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   galleries `list`/`create`/`update`, plus `web_search`/`web_fetch` and the
   seven `design_*` draft tools (`tools/design.rs`, one generic adapter over
   the shared `crate::design::tools`, #118). Tool names follow the
-  `<resource>_<operation>` convention (issue #61).
+  `<resource>_<operation>` convention (issue #61). **Image results (#132,
+  `tools/image.rs`):** `file_read` takes `id` or `path` (a chat attachment's
+  `uploads/chat/…` path), and with `include_content` on a PNG/JPEG/WebP/GIF
+  file answers `[metadata JSON text, image block]` instead of text — an
+  `entanglement_provider::ContentPart::Image { source: Base64 }` built by
+  `files::image_for_model` (on a blocking thread; the format is sniffed from
+  the bytes, never taken from the stored mimetype, since a mislabelled image
+  block makes the provider reject it and that tool result would then break
+  every later turn; dimensions come from the header, decoding runs under
+  explicit `image::Limits` — 16384 px a side, 512 MB; downscaled with a
+  Triangle filter so the longest side is ≤ 1568 px; passed through
+  byte-for-byte only when it fits, is ≤ 1 MB and is really PNG/JPEG/WebP/GIF,
+  otherwise re-encoded: PNG when it has alpha, else JPEG q85). Thumbnails
+  (`make_thumbnail`) use the same sniffing reader and limits, and
+  `files_repo` now builds them on a blocking thread too. `design_read` does the same for
+  draft images: the shared `design::tools::read` returns `Output::File`,
+  which the AI adapter renders as an image and MCP (unchanged) as the
+  `data`/`data_base64` JSON (`tools::file_json`). All three provider
+  adapters serialize image tool results (Anthropic inside `tool_result`,
+  OpenAI-compat as a follow-up `role: user` message with an `image_url`
+  data URL, Gemini as `inlineData` beside the `functionResponse`); there is
+  no capability probe, so the session's model row decides: with
+  `llm_models.supports_images = false` (toggle on the Models page) the tool
+  answers the metadata with `content: null` and a `content_error` note
+  instead, since a text-only model would reject the whole turn. The session
+  → model lookup takes the row whose `engine_session_id` is the calling
+  session, else its root's; unknown means "sees".
 - `tool_permissions/` — the allow/deny/prompt rule evaluator `policy.rs`
   wraps (#39): a user's rows (ordered `priority DESC, id DESC` — ascending
   precedence, so `PermissionProfile::resolve_scoped`'s last-match-wins
@@ -769,7 +832,9 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   resolution — see below), `mcp_servers.rs`, `providers.rs` (CRUD +
   `providers/status`, live per-provider throttle posture from
   `SiteCatalog::throttle_statuses()`, #89), `models.rs` (`context_window`
-  field, #40), `permissions.rs`.
+  field, #40; `supports_images`, #132), `permissions.rs`, `attachments.rs`
+  (`sessions/{id}/attachments`, #132 — see "Chat attachments" under Admin
+  UI).
   - **Reading a session (#100):** `GET /sessions/{id}` resumes and loads the
     *tree's* log by the row's `root_engine_session_id`, then projects the
     row's own `engine_session_id` out of it — identical for a root row (the

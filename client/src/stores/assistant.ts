@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { reactive, ref, watch } from 'vue'
 import { api, apiVoid } from '../api'
 import { useLiveTurns } from './assistantLiveTurns'
+import type { ChatAttachment } from '../lib/chatAttachments'
 import type {
   AssistantSession,
   AssistantSessionDetail,
@@ -127,6 +128,14 @@ export const useAssistantStore = defineStore('assistant', () => {
         body: JSON.stringify({ text }),
       }),
     )
+  }
+
+  /** Stores `file` for a message in session `id` — a site file, or a draft
+   *  asset in a Designer chat (the server decides by the session's profile). */
+  function uploadAttachment(id: number, file: File) {
+    const body = new FormData()
+    body.append('file', file)
+    return api<ChatAttachment>(`/api/assistant/sessions/${id}/attachments`, { method: 'POST', body })
   }
 
   function compactSession(
@@ -317,6 +326,7 @@ export const useAssistantStore = defineStore('assistant', () => {
     deleteSession,
     updateTitle,
     sendMessage,
+    uploadAttachment,
     compactSession,
     approveToolCalls,
     mcpServers,

@@ -42,6 +42,7 @@ pub(super) async fn call(
     match tools::call(&ctx, name, arguments).await {
         Ok(Output::Text(text)) => tool_result(id, text),
         Ok(Output::Json(value)) => json_result(id, value),
+        Ok(Output::File { path, bytes }) => json_result(id, tools::file_json(&path, &bytes)),
         Err(e) => tool_error(id, &e.0),
     }
 }

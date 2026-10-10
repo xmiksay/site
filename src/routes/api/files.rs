@@ -2,6 +2,7 @@ use axum::Json;
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Extension, Multipart, Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::Redirect;
 use axum::routing::get;
 
 use crate::repo::files::{self as files_repo, FileMetaUpdate, FileSaveError, NewFile};
@@ -15,6 +16,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list).post(upload))
         .route("/{id}", get(read).put(update).delete(delete_one))
+        .route("/by-path/{*path}", get(by_path))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE))
 }
 
@@ -63,6 +65,26 @@ pub async fn read(
     Ok(Json(FileSummary::new(&f.model, f.has_thumbnail)))
 }
 
+#[derive(serde::Deserialize)]
+pub struct ByPathQuery {
+    #[serde(default)]
+    pub thumbnail: bool,
+}
+
+/// Redirects a stored path to its content-addressed public URL (or its
+/// thumbnail) — the chat transcript only knows an attachment by path.
+pub async fn by_path(
+    State(state): State<AppState>,
+    Path(path): Path<String>,
+    Query(query): Query<ByPathQuery>,
+) -> ApiResult<Redirect> {
+    let f = files_repo::find_by_path(&state.db, &path)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let suffix = if query.thumbnail { "/nahled" } else { "" };
+    Ok(Redirect::to(&format!("/files/{}{suffix}", f.hash)))
+}
+
 pub async fn upload(
     State(state): State<AppState>,
     Extension(user_id): Extension<i32>,
@@ -101,9 +123,7 @@ pub async fn upload(
 
     let data = data.ok_or_else(|| ApiError::BadRequest("missing file field".into()))?;
     let path = path.ok_or_else(|| ApiError::BadRequest("missing path field".into()))?;
-    let mimetype = mimetype
-        .filter(|m| !m.is_empty() && m != "application/octet-stream")
-        .unwrap_or_else(|| files_repo::infer_mimetype(&path));
+    let mimetype = files_repo::resolve_mimetype(mimetype, &path);
 
     let created = files_repo::create_file(
         &state.db,

@@ -12,8 +12,10 @@
 
 mod common;
 mod design;
+mod file_read;
 mod files;
 mod galleries;
+mod image;
 mod pages;
 mod tags;
 mod web;
@@ -74,7 +76,7 @@ pub fn registry(
         storage: storage.clone(),
         ws_hub: ws_hub.clone(),
     });
-    reg.register(files::ReadFileTool {
+    reg.register(file_read::ReadFileTool {
         db: db.clone(),
         storage: storage.clone(),
     });

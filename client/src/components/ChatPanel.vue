@@ -21,11 +21,22 @@ const assistant = useAssistantStore()
 const composer = ref<InstanceType<typeof ChatComposer> | null>(null)
 const pageSessionKey = (id: number) => `assistant_page_session_${id}`
 
-/** Appends `text` to the composer (e.g. a note about an uploaded asset). */
-function insert(text: string) {
-  composer.value?.insert(text)
+// Files dropped anywhere on the open chat become composer attachments.
+const dragging = ref(false)
+function hasFiles(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes('Files')
 }
-defineExpose({ insert })
+function onDragOver(e: DragEvent) {
+  if (!assistant.current || !hasFiles(e)) return
+  e.preventDefault()
+  dragging.value = true
+}
+function onDrop(e: DragEvent) {
+  dragging.value = false
+  if (!assistant.current || !hasFiles(e)) return
+  e.preventDefault()
+  composer.value?.addFiles(Array.from(e.dataTransfer?.files ?? []))
+}
 
 // The assistant view and the studio load these themselves; the page editor
 // has nobody else to do it.
@@ -52,7 +63,13 @@ async function loadOrInitPageSession(page: { id: number; path: string }) {
 </script>
 
 <template>
-  <div class="flex flex-col min-h-0">
+  <div
+    class="flex flex-col min-h-0"
+    :class="{ 'ring-2 ring-inset ring-accent': dragging }"
+    @dragover="onDragOver"
+    @dragleave.self="dragging = false"
+    @drop="onDrop"
+  >
     <ChatPanelHeader :show-back="showBack" @back="emit('back')">
       <slot name="actions" />
     </ChatPanelHeader>

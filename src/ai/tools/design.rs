@@ -10,11 +10,13 @@ use entanglement_core::SessionId;
 use entanglement_provider::ContentPart;
 use entanglement_runtime::{Tool, ToolRegistry};
 use sea_orm::DatabaseConnection;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::common::{ok_json, ok_text, parse_args};
+use super::image::{image_result, session_sees_images};
 use crate::design::DesignStore;
 use crate::design::tools::{self, Ctx, Output, specs};
+use crate::files::is_model_image;
 use crate::routes::ws::WsHub;
 use crate::storage::Storage;
 
@@ -58,7 +60,7 @@ impl Tool for DesignTool {
     }
     async fn run_for_session(
         &self,
-        _session: &SessionId,
+        session: &SessionId,
         _request_id: &str,
         input: &str,
     ) -> anyhow::Result<Vec<ContentPart>> {
@@ -73,6 +75,15 @@ impl Tool for DesignTool {
         match tools::call(&ctx, self.spec.name, args).await {
             Ok(Output::Text(text)) => Ok(ok_text(text)),
             Ok(Output::Json(value)) => Ok(ok_json(value)),
+            Ok(Output::File { path, bytes }) => {
+                let mimetype = tools::file_mimetype(&path);
+                if !is_model_image(&mimetype) {
+                    return Ok(ok_json(tools::file_json(&path, &bytes)));
+                }
+                let meta = json!({ "path": path, "mimetype": mimetype, "size": bytes.len() });
+                let sees = session_sees_images(&deps.db, session).await;
+                Ok(image_result(meta, bytes, mimetype, sees).await)
+            }
             Err(e) => anyhow::bail!("{}", e.0),
         }
     }

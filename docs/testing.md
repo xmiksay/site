@@ -170,6 +170,33 @@ executes on every PR rather than self-skipping.
   and the design tools' per-profile default permissions (writes
   approval-free only under `designer`) in
   `src/ai/engine/profiles.rs` and `src/ai/tool_permissions/tests.rs`.
+- `tests/assistant_attachments.rs` — chat attachments (#132) over fs
+  storage (so the shared draft is the test's own):
+  `POST /api/assistant/sessions/{id}/attachments` in a normal chat stores a
+  site file under `uploads/chat/YYYY-MM/` (sanitized name, a second upload
+  of the same name gets `-2`), `GET /api/files/by-path/…?thumbnail=true`
+  redirects to its thumbnail; in a Designer chat a font lands in the draft's
+  `assets/fonts/`, an image in `assets/img/`, a `.txt` is 422; over 10 MB
+  is 413 `too_large`, an unknown or another user's session 404.
+  `tests/assistant_attachments_race.rs`: two concurrent same-name uploads
+  (site file and draft asset) both succeed with distinct paths. Both share
+  the harness `tests/common/attachments_app.rs` (`#[path]`-included; the
+  including test declares `storage_fixture`). At the tool level
+  (`site::ai::tools::registry(...).execute`), `file_read` with
+  `include_content` and `design_read` on an image answer `[meta, image
+  block]` downscaled to 1568 px, and a text note once the model row has
+  `supports_images = false`. The pure parts — `files::image_for_model`
+  (passthrough, downscale, alpha → PNG, media type from the bytes for a
+  JPEG labelled `image/png`, BMP bytes re-encoded), `ai::tools::image::image_result`
+  and the name sanitizing / collision suffixing in
+  `ai::handlers::attachments` — are unit-tested in-module. Client side:
+  `ChatComposer.attachments.spec.ts` (chips, 10 MB refusal, paste,
+  upload-then-send with the note, failed upload keeps text and chips, no
+  re-upload on retry, Designer accept/`design_read`), `ChatPanel.spec.ts`
+  (drop), `AssistantMessageContent.spec.ts` (transcript links/thumbnail),
+  `lib/chatAttachments.spec.ts` (note round trip, link URLs, no link
+  outside `uploads/chat/` / `assets/{img,fonts}/` or with `..`,
+  `DESIGNER_ACCEPT` = the server's extensions).
 - `tests/assistant_session_designer.rs` — a chat may enter `designer` only
   before its first prompt (#118): `PATCH` to `designer` on a fresh session
   succeeds, on one with a persisted prompt answers 409 with the profile

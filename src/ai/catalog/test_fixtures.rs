@@ -44,6 +44,7 @@ pub(crate) fn model_row(id: i32, is_default: bool) -> llm_model::Model {
         supports_temperature: true,
         supports_reasoning_effort: false,
         supports_thinking: false,
+        supports_images: true,
         created_at: chrono::Utc::now().fixed_offset(),
     }
 }

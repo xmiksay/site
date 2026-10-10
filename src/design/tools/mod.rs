@@ -35,6 +35,36 @@ pub struct Ctx<'a> {
 pub enum Output {
     Text(String),
     Json(Value),
+    /// One design file (`design_read`). Each edge renders it: MCP always
+    /// as [`file_json`], the assistant shows an image as an image block.
+    File {
+        path: String,
+        bytes: Bytes,
+    },
+}
+
+/// A design file as JSON: UTF-8 content as `data`, anything else as
+/// `data_base64`, with its `mimetype`.
+pub fn file_json(path: &str, bytes: &[u8]) -> Value {
+    let (key, data) = match std::str::from_utf8(bytes) {
+        Ok(text) => ("data", text.to_string()),
+        Err(_) => (
+            "data_base64",
+            base64::engine::general_purpose::STANDARD.encode(bytes),
+        ),
+    };
+    json!({
+        "path": path,
+        "mimetype": file_mimetype(path),
+        "size": bytes.len(),
+        key: data,
+    })
+}
+
+pub fn file_mimetype(path: &str) -> String {
+    mime_guess::from_path(path)
+        .first_or_octet_stream()
+        .to_string()
 }
 
 /// A failure as the caller may see it: storage and DB detail is logged,
@@ -189,20 +219,10 @@ async fn read(ctx: &Ctx<'_>, args: PathArgs) -> Result<Output, ToolError> {
     let bytes = read_source(ctx.design, ctx.storage, &args.path, source)
         .await?
         .ok_or_else(|| ToolError(format!("{} not found", args.path)))?;
-    let mimetype = mime_guess::from_path(&args.path).first_or_octet_stream();
-    let (key, data) = match std::str::from_utf8(&bytes) {
-        Ok(text) => ("data", text.to_string()),
-        Err(_) => (
-            "data_base64",
-            base64::engine::general_purpose::STANDARD.encode(&bytes),
-        ),
-    };
-    Ok(Output::Json(json!({
-        "path": args.path,
-        "mimetype": mimetype.to_string(),
-        "size": bytes.len(),
-        key: data,
-    })))
+    Ok(Output::File {
+        path: args.path,
+        bytes,
+    })
 }
 
 /// The bytes of a write: exactly one of `data` / `data_base64`.

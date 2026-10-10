@@ -7,6 +7,8 @@ import { computed, ref } from 'vue'
 import { useAssistantStore } from '../stores/assistant'
 import { renderMarkdown } from '../composables/useMarkdown'
 import type { AssistantSubAgent } from '../types'
+import { attachmentUrl, splitAttachments } from '../lib/chatAttachments'
+import { isImagePath } from '../lib/designPaths'
 import {
   decisionFor,
   messageReasoning,
@@ -35,6 +37,9 @@ const assistant = useAssistantStore()
 // `v-for` over an un-narrowed `any` makes vue-tsc infer the index as
 // `string | number` instead of `number` (the object-iteration overload).
 const subAgents = computed<AssistantSubAgent[]>(() => props.content?.sub_agents ?? [])
+
+// A user message's trailing attachment note renders as links (#132).
+const userMessage = computed(() => splitAttachments(messageText(props.content)))
 
 // Only the calls that still genuinely need a decision — see `needsDecision`'s
 // doc for why this is narrower than "every tool_call in a message flagged
@@ -98,7 +103,29 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
 <template>
   <div v-if="role === 'user'" class="flex justify-end">
     <div class="max-w-2xl whitespace-pre-wrap rounded-lg px-3 py-2 bg-accent text-fg-inverse">
-      {{ messageText(content) }}
+      {{ userMessage.body }}
+      <ul v-if="userMessage.paths.length" class="mt-2 flex flex-wrap gap-2 whitespace-normal" aria-label="Attachments">
+        <li v-for="path in userMessage.paths" :key="path">
+          <span v-if="!attachmentUrl(path)" class="text-xs">{{ path }}</span>
+          <a
+            v-else
+            :href="attachmentUrl(path)!"
+            target="_blank"
+            rel="noopener"
+            class="inline-flex items-center gap-1 text-xs underline"
+            :title="path"
+          >
+            <img
+              v-if="isImagePath(path)"
+              :src="attachmentUrl(path, true) ?? undefined"
+              alt=""
+              class="h-12 w-12 rounded object-cover bg-surface"
+              @error="($event.target as HTMLImageElement).hidden = true"
+            />
+            {{ path.slice(path.lastIndexOf('/') + 1) }}
+          </a>
+        </li>
+      </ul>
     </div>
   </div>
   <div v-else-if="role === 'assistant'" class="space-y-1">
