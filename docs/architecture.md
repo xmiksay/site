@@ -140,7 +140,7 @@ template renders with each of `TEMPLATES`' example contexts (both login
 states; search with and without a tag/query, pagination), covering branches the
 real data does not reach. Returns a `SmokeReport` (`cases`, `errors`:
 deduplicated `SmokeError { template, line, message, case }`); `Err` when one of
-its own queries fails — the helpers it shares with live requests treat DB
+its own queries fails (a tag deleted mid-run just skips its search case) — the helpers it shares with live requests treat DB
 errors as live requests do (empty menu, no tags, directive "not found").
 Consumers (publish #115, `design_render_check` #118) come later.
 

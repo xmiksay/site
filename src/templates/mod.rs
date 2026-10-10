@@ -125,6 +125,14 @@ fn environment_from(load: impl DesignLoader) -> Environment<'static> {
 fn timeformat(value: Value, format: Option<String>) -> Result<String, minijinja::Error> {
     let s = value.to_string();
     let fmt = format.as_deref().unwrap_or("%d. %m. %Y %H:%M");
+    // What `PageView` actually carries (`DateTimeWithTimeZone::to_string`);
+    // formatted in its own offset.
+    if let Ok(dt) = chrono::DateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f %:z") {
+        return Ok(dt.format(fmt).to_string());
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+        return Ok(dt.format(fmt).to_string());
+    }
     if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f") {
         return Ok(dt.format(fmt).to_string());
     }
@@ -168,5 +176,42 @@ mod tests {
             .render(&layout)
             .unwrap();
         assert!(!rendered.is_empty());
+    }
+
+    fn format_with(value: &str, fmt: &str) -> String {
+        timeformat(Value::from(value), Some(fmt.to_string())).unwrap()
+    }
+
+    #[test]
+    fn timeformat_formats_page_timestamps_as_serialized() {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-03-04T12:30:05.123456+02:00").unwrap();
+        let page = crate::entity::page::Model {
+            id: 1,
+            path: "p".to_string(),
+            summary: None,
+            markdown: String::new(),
+            tag_ids: Vec::new(),
+            private: false,
+            created_at: at,
+            created_by: 1,
+            modified_at: at,
+            modified_by: 1,
+        };
+        let view = context::PageView::from(&page);
+        assert_eq!(view.modified_at, "2026-03-04 12:30:05.123456 +02:00");
+        assert_eq!(
+            format_with(&view.modified_at, "%d. %m. %Y %H:%M"),
+            "04. 03. 2026 12:30"
+        );
+    }
+
+    #[test]
+    fn timeformat_accepts_other_shapes_and_passes_the_rest_through() {
+        let fmt = "%d.%m.%Y";
+        assert_eq!(format_with("2026-03-04T12:30:00+00:00", fmt), "04.03.2026");
+        assert_eq!(format_with("2026-03-04 12:30:00.5", fmt), "04.03.2026");
+        assert_eq!(format_with("2026-03-04T12:30:00", fmt), "04.03.2026");
+        assert_eq!(format_with("2026-03-04", fmt), "04.03.2026");
+        assert_eq!(format_with("yesterday", fmt), "yesterday");
     }
 }

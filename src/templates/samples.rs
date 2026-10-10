@@ -41,8 +41,8 @@ fn page_view() -> PageView {
         summary: Some("Notes on Rust".to_string()),
         tag_ids: vec![1],
         private: false,
-        created_at: "2026-01-02 10:00:00".to_string(),
-        modified_at: "2026-03-04 12:30:00.123456".to_string(),
+        created_at: "2026-01-02 10:00:00 +00:00".to_string(),
+        modified_at: "2026-03-04 12:30:00.123456 +00:00".to_string(),
     }
 }
 

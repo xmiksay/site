@@ -4,7 +4,8 @@
 //! also in branches only the contract's example contexts reach.
 //!
 //! Gated on `DATABASE_URL` (skips when unset). Creates its own throwaway
-//! `users`/`pages`/`tags` rows and deletes them when done.
+//! `users`/`pages`/`tags` rows and deletes them before asserting, so a failed
+//! assertion leaks nothing.
 
 use std::sync::Arc;
 
@@ -13,6 +14,11 @@ use site::design::DesignStore;
 use site::entity::{page, tag, user};
 use site::storage::Storage;
 use site::templates::smoke::{SmokeReport, smoke_render};
+use tokio::sync::Mutex;
+
+/// Held for each whole test: one test's throwaway rows (a tag, a page) must
+/// not appear and vanish under another test's smoke render.
+static DB_ROWS: Mutex<()> = Mutex::const_new(());
 
 async fn test_db() -> Option<DatabaseConnection> {
     let url = std::env::var("DATABASE_URL").ok()?;
@@ -24,7 +30,7 @@ async fn test_db() -> Option<DatabaseConnection> {
 }
 
 /// The baked design with `overrides` (`templates/…` → source) on top.
-async fn smoke(db: &DatabaseConnection, overrides: &[(&str, &str)]) -> SmokeReport {
+async fn smoke(db: &DatabaseConnection, overrides: &[(&str, &str)]) -> anyhow::Result<SmokeReport> {
     let design = Arc::new(DesignStore::new(None));
     let overrides: Vec<(String, String)> = overrides
         .iter()
@@ -34,9 +40,7 @@ async fn smoke(db: &DatabaseConnection, overrides: &[(&str, &str)]) -> SmokeRepo
         Some((_, src)) => Some(src.clone().into_bytes()),
         None => design.load(path),
     };
-    smoke_render(db, &Storage::db(db.clone()), load)
-        .await
-        .expect("smoke render")
+    smoke_render(db, &Storage::db(db.clone()), load).await
 }
 
 const DIRECTIVES_MD: &str = r#"# Smoke
@@ -53,10 +57,12 @@ graph TD
 <json query=".rows[]" type="table">{"rows": [{"a": 1, "b": "x"}]}</json>
 "#;
 
-async fn with_page<F: AsyncFnOnce(&DatabaseConnection, &str)>(db: &DatabaseConnection, f: F) {
-    let tag = uuid::Uuid::new_v4();
+/// Smoke-render with a throwaway page using every inline directive in the
+/// DB, removed again before the report is returned.
+async fn smoke_with_page(db: &DatabaseConnection, overrides: &[(&str, &str)]) -> SmokeReport {
+    let id = uuid::Uuid::new_v4();
     let user_id = user::ActiveModel {
-        username: Set(format!("design-smoke-{tag}")),
+        username: Set(format!("design-smoke-{id}")),
         password_hash: Set("unused".to_string()),
         ..Default::default()
     }
@@ -65,9 +71,8 @@ async fn with_page<F: AsyncFnOnce(&DatabaseConnection, &str)>(db: &DatabaseConne
     .expect("insert throwaway user")
     .id;
     let now = chrono::Utc::now().fixed_offset();
-    let path = format!("design-smoke/{tag}");
     let pg = page::ActiveModel {
-        path: Set(path.clone()),
+        path: Set(format!("design-smoke/{id}")),
         summary: Set(Some("smoke".to_string())),
         markdown: Set(DIRECTIVES_MD.to_string()),
         tag_ids: Set(vec![]),
@@ -79,13 +84,21 @@ async fn with_page<F: AsyncFnOnce(&DatabaseConnection, &str)>(db: &DatabaseConne
         ..Default::default()
     }
     .insert(db)
-    .await
-    .expect("insert throwaway page");
+    .await;
 
-    f(db, &path).await;
+    let report = match &pg {
+        Ok(_) => Some(smoke(db, overrides).await),
+        Err(_) => None,
+    };
 
-    page::Entity::delete_by_id(pg.id).exec(db).await.unwrap();
+    if let Ok(pg) = &pg {
+        page::Entity::delete_by_id(pg.id).exec(db).await.unwrap();
+    }
     user::Entity::delete_by_id(user_id).exec(db).await.unwrap();
+    pg.expect("insert throwaway page");
+    report
+        .expect("rendered once the page exists")
+        .expect("smoke render")
 }
 
 #[tokio::test]
@@ -94,22 +107,20 @@ async fn baked_design_renders_clean_and_covers_every_template() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    with_page(&db, async |db, _path| {
-        let report = smoke(db, &[]).await;
-        assert!(report.is_ok(), "{:#?}", report.errors);
-        for spec in site::templates::contract::TEMPLATES {
-            assert!(
-                report
-                    .cases
-                    .iter()
-                    .any(|c| c.starts_with(&format!("{}: ", spec.name))),
-                "{} never rendered: {:#?}",
-                spec.name,
-                report.cases
-            );
-        }
-    })
-    .await;
+    let _rows = DB_ROWS.lock().await;
+    let report = smoke_with_page(&db, &[]).await;
+    assert!(report.is_ok(), "{:#?}", report.errors);
+    for spec in site::templates::contract::TEMPLATES {
+        assert!(
+            report
+                .cases
+                .iter()
+                .any(|c| c.starts_with(&format!("{}: ", spec.name))),
+            "{} never rendered: {:#?}",
+            spec.name,
+            report.cases
+        );
+    }
 }
 
 #[tokio::test]
@@ -118,44 +129,46 @@ async fn undefined_variables_are_reported_with_template_and_line() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    with_page(&db, async |db, _path| {
-        let report = smoke(
-            db,
-            &[
-                (
-                    "templates/markdown/fen.html",
-                    "<div>{{ fen }}</div>\n<p>{{ no_such_var }}</p>",
-                ),
-                (
-                    "templates/base.html",
-                    "<title>{% block title %}{% endblock %}</title>\n{{ site.name }}\n{% block content %}{% endblock %}",
-                ),
-            ],
-        )
-        .await;
-        let fen = report
-            .errors
-            .iter()
-            .find(|e| e.template == "markdown/fen.html")
-            .unwrap_or_else(|| panic!("fen error missing: {:#?}", report.errors));
-        assert_eq!(fen.line, Some(2));
-        assert!(fen.message.contains("undefined"), "{}", fen.message);
-
-        let base = report
-            .errors
-            .iter()
-            .find(|e| e.template == "base.html")
-            .unwrap_or_else(|| panic!("base error missing: {:#?}", report.errors));
-        assert_eq!(base.line, Some(2));
-        // Reported once although every page template extends it.
-        assert_eq!(
-            report.errors.iter().filter(|e| e.template == "base.html").count(),
-            1,
-            "{:#?}",
-            report.errors
-        );
-    })
+    let _rows = DB_ROWS.lock().await;
+    let report = smoke_with_page(
+        &db,
+        &[
+            (
+                "templates/markdown/fen.html",
+                "<div>{{ fen }}</div>\n<p>{{ no_such_var }}</p>",
+            ),
+            (
+                "templates/base.html",
+                "<title>{% block title %}{% endblock %}</title>\n{{ site.name }}\n{% block content %}{% endblock %}",
+            ),
+        ],
+    )
     .await;
+    let fen = report
+        .errors
+        .iter()
+        .find(|e| e.template == "markdown/fen.html")
+        .unwrap_or_else(|| panic!("fen error missing: {:#?}", report.errors));
+    assert_eq!(fen.line, Some(2));
+    assert!(fen.message.contains("undefined"), "{}", fen.message);
+
+    let base = report
+        .errors
+        .iter()
+        .find(|e| e.template == "base.html")
+        .unwrap_or_else(|| panic!("base error missing: {:#?}", report.errors));
+    assert_eq!(base.line, Some(2));
+    // Reported once although every page template extends it.
+    assert_eq!(
+        report
+            .errors
+            .iter()
+            .filter(|e| e.template == "base.html")
+            .count(),
+        1,
+        "{:#?}",
+        report.errors
+    );
 }
 
 #[tokio::test]
@@ -164,6 +177,7 @@ async fn syntax_errors_are_reported_with_template_and_line() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
+    let _rows = DB_ROWS.lock().await;
     let report = smoke(
         &db,
         &[(
@@ -171,7 +185,8 @@ async fn syntax_errors_are_reported_with_template_and_line() {
             "{% extends \"base.html\" %}\n{% block content %}\n{% if %}\n{% endblock %}",
         )],
     )
-    .await;
+    .await
+    .expect("smoke render");
     let err = report
         .errors
         .iter()
@@ -192,6 +207,16 @@ async fn branches_only_examples_reach_are_checked_too() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
+    let _rows = DB_ROWS.lock().await;
+    let baked = String::from_utf8(
+        DesignStore::new(None)
+            .load("templates/page_search.html")
+            .expect("baked page_search.html"),
+    )
+    .unwrap();
+    let broken = baked.replacen("{% elif q %}{{ q }}", "{% elif q %}{{ qq }}", 1);
+    assert_ne!(broken, baked, "baked page_search.html changed shape");
+
     // With a tag in the DB the real-data search renders the `tag` branch and
     // never a query; only the example contexts reach `{% elif q %}`.
     let t = tag::ActiveModel {
@@ -202,18 +227,9 @@ async fn branches_only_examples_reach_are_checked_too() {
     .insert(&db)
     .await
     .expect("insert throwaway tag");
-
-    let baked = String::from_utf8(
-        DesignStore::new(None)
-            .load("templates/page_search.html")
-            .expect("baked page_search.html"),
-    )
-    .unwrap();
-    let broken = baked.replacen("{% elif q %}{{ q }}", "{% elif q %}{{ qq }}", 1);
-    assert_ne!(broken, baked, "baked page_search.html changed shape");
     let report = smoke(&db, &[("templates/page_search.html", &broken)]).await;
-
     tag::Entity::delete_by_id(t.id).exec(&db).await.unwrap();
+    let report = report.expect("smoke render");
 
     let err = report
         .errors

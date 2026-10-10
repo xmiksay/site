@@ -91,9 +91,9 @@ pub struct PageView {
     pub tag_ids: Vec<i32>,
     /// Private pages are only rendered for logged-in visitors.
     pub private: bool,
-    /// `YYYY-MM-DD HH:MM:SS[.f]` — format it with the `timeformat` filter.
+    /// `YYYY-MM-DD HH:MM:SS[.f] ±HH:MM` (e.g. `2026-03-04 12:30:00.123456 +00:00`) — format it with the `timeformat` filter.
     pub created_at: String,
-    /// `YYYY-MM-DD HH:MM:SS[.f]` — format it with the `timeformat` filter.
+    /// `YYYY-MM-DD HH:MM:SS[.f] ±HH:MM` (e.g. `2026-03-04 12:30:00.123456 +00:00`) — format it with the `timeformat` filter.
     pub modified_at: String,
 }
 

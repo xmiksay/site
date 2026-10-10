@@ -89,7 +89,7 @@
       "description": "A page as templates see it.",
       "properties": {
         "created_at": {
-          "description": "`YYYY-MM-DD HH:MM:SS[.f]` — format it with the `timeformat` filter.",
+          "description": "`YYYY-MM-DD HH:MM:SS[.f] ±HH:MM` (e.g. `2026-03-04 12:30:00.123456 +00:00`) — format it with the `timeformat` filter.",
           "type": "string"
         },
         "id": {
@@ -98,7 +98,7 @@
           "type": "integer"
         },
         "modified_at": {
-          "description": "`YYYY-MM-DD HH:MM:SS[.f]` — format it with the `timeformat` filter.",
+          "description": "`YYYY-MM-DD HH:MM:SS[.f] ±HH:MM` (e.g. `2026-03-04 12:30:00.123456 +00:00`) — format it with the `timeformat` filter.",
           "type": "string"
         },
         "path": {

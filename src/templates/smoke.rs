@@ -13,7 +13,7 @@ use super::contract::TEMPLATES;
 use super::{DesignLoader, strict_environment};
 use crate::entity::{menu, page, tag};
 use crate::markdown;
-use crate::repo::pages_search;
+use crate::repo::pages_search::{self, SearchError};
 use crate::routes::build_menu;
 use crate::routes::public::{menu_context, page_context, search::page_window};
 use crate::storage::Storage;
@@ -111,7 +111,9 @@ pub async fn smoke_render(
         .await
         .context("smoke render: load a tag")?;
     for tag in [None, first_tag] {
-        let ctx = search_context(db, layout(true), tag).await?;
+        let Some(ctx) = search_context(db, layout(true), tag).await? else {
+            continue;
+        };
         let case = match &ctx.tag {
             Some(t) => format!("search tag `{}`", t.name),
             None => "search".to_string(),
@@ -237,19 +239,34 @@ async fn sample_pages(db: &DatabaseConnection) -> anyhow::Result<Vec<page::Model
 
 /// Search as `/search` builds it: a second result page of one result (so
 /// both pagination links show when there are enough pages), optionally
-/// filtered by `tag`.
+/// filtered by `tag`. `None` when the tag was deleted meanwhile — a concurrent
+/// admin edit must not fail the whole smoke render.
 async fn search_context(
     db: &DatabaseConnection,
     layout: Layout,
     tag: Option<tag::Model>,
-) -> anyhow::Result<PageSearchContext> {
+) -> anyhow::Result<Option<PageSearchContext>> {
     let (limit, offset) = (1, 1);
     let tag_name = tag.as_ref().map(|t| t.name.clone());
-    let result = pages_search::search(db, None, tag_name.as_deref(), None, true, limit, offset)
-        .await
-        .map_err(|e| anyhow::anyhow!("smoke render: search: {e}"))?;
+    let result = match pages_search::search(
+        db,
+        None,
+        tag_name.as_deref(),
+        None,
+        true,
+        limit,
+        offset,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(SearchError::UnknownTag) => return Ok(None),
+        Err(SearchError::Db(e)) => {
+            return Err(anyhow::Error::new(e).context("smoke render: search"));
+        }
+    };
     let (prev_offset, next_offset) = page_window(offset, limit, result.total);
-    Ok(PageSearchContext {
+    Ok(Some(PageSearchContext {
         layout,
         q: String::new(),
         tag_name: tag_name.unwrap_or_default(),
@@ -261,5 +278,5 @@ async fn search_context(
         offset,
         prev_offset,
         next_offset,
-    })
+    }))
 }

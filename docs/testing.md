@@ -156,7 +156,9 @@ executes on every PR rather than self-skipping.
   undefined variable (in a partial and in `base.html`, reported once) and a
   syntax error come back with template and line; a typo in a branch only an
   example context reaches (`{% elif q %}` in `page_search.html`) is caught
-  even when the DB has tags.
+  even when the DB has tags. The tests hold one static mutex each, so a
+  test's throwaway tag/page never appears or vanishes under another's smoke
+  render, and delete their rows before asserting.
 - `tests/policy_db.rs` — `SitePolicy`/`tool_permissions` resolution against a
   real `tool_permissions` table (FK to `users`, so it can't be faked
   in-memory).

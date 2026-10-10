@@ -34,8 +34,10 @@ not listed here is an error.
 
 Besides MiniJinja's built-in filters:
 
-- `timeformat(format="%d. %m. %Y %H:%M")` — formats a `YYYY-MM-DD HH:MM:SS[.f]`
-  (or `T`-separated) timestamp or a `YYYY-MM-DD` date with a
+- `timeformat(format="%d. %m. %Y %H:%M")` — formats a timestamp as the
+  templates receive it (`YYYY-MM-DD HH:MM:SS[.f] ±HH:MM`, kept in its own
+  offset), an RFC 3339 one, one without offset (space- or `T`-separated) or a
+  `YYYY-MM-DD` date with a
   [chrono `strftime`](https://docs.rs/chrono/latest/chrono/format/strftime/)
   format; any other value is returned unchanged.
   Example: `{{ page.modified_at | timeformat("%d. %m. %Y") }}`.

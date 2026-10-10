@@ -34,8 +34,10 @@ not listed here is an error.
 
 Besides MiniJinja's built-in filters:
 
-- `timeformat(format="%d. %m. %Y %H:%M")` — formats a `YYYY-MM-DD HH:MM:SS[.f]`
-  (or `T`-separated) timestamp or a `YYYY-MM-DD` date with a
+- `timeformat(format="%d. %m. %Y %H:%M")` — formats a timestamp as the
+  templates receive it (`YYYY-MM-DD HH:MM:SS[.f] ±HH:MM`, kept in its own
+  offset), an RFC 3339 one, one without offset (space- or `T`-separated) or a
+  `YYYY-MM-DD` date with a
   [chrono `strftime`](https://docs.rs/chrono/latest/chrono/format/strftime/)
   format; any other value is returned unchanged.
   Example: `{{ page.modified_at | timeformat("%d. %m. %Y") }}`.
@@ -172,9 +174,9 @@ Any other path: the menu item, else the page stored at that path.
     }
   ],
   "page": {
-    "created_at": "2026-01-02 10:00:00",
+    "created_at": "2026-01-02 10:00:00 +00:00",
     "id": 7,
-    "modified_at": "2026-03-04 12:30:00.123456",
+    "modified_at": "2026-03-04 12:30:00.123456 +00:00",
     "path": "notes/rust",
     "private": false,
     "summary": "Notes on Rust",
@@ -256,9 +258,9 @@ Any other path: the menu item, else the page stored at that path.
   "offset": 1,
   "pages": [
     {
-      "created_at": "2026-01-02 10:00:00",
+      "created_at": "2026-01-02 10:00:00 +00:00",
       "id": 7,
-      "modified_at": "2026-03-04 12:30:00.123456",
+      "modified_at": "2026-03-04 12:30:00.123456 +00:00",
       "path": "notes/rust",
       "private": false,
       "summary": "Notes on Rust",
@@ -566,9 +568,9 @@ A page as templates see it.
 
 | Field | Type | Description |
 |---|---|---|
-| `created_at` | string | `YYYY-MM-DD HH:MM:SS[.f]` — format it with the `timeformat` filter. |
+| `created_at` | string | `YYYY-MM-DD HH:MM:SS[.f] ±HH:MM` (e.g. `2026-03-04 12:30:00.123456 +00:00`) — format it with the `timeformat` filter. |
 | `id` | integer | Page id (admin editor at `/admin/pages/{id}/edit`). |
-| `modified_at` | string | `YYYY-MM-DD HH:MM:SS[.f]` — format it with the `timeformat` filter. |
+| `modified_at` | string | `YYYY-MM-DD HH:MM:SS[.f] ±HH:MM` (e.g. `2026-03-04 12:30:00.123456 +00:00`) — format it with the `timeformat` filter. |
 | `path` | string | Canonical path without a leading slash; the page is served at `/{path}`. |
 | `private` | boolean | Private pages are only rendered for logged-in visitors. |
 | `summary` | string or none | Short description for listings. |
