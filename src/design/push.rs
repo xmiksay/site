@@ -3,6 +3,9 @@
 //! the draft first if needed. Files the folder lacks stay in the draft.
 //! Idempotent; templates are syntax-checked before anything is written. It
 //! goes live like any draft edit: published from the admin Design page.
+//! Another process than the server: no WS event, and no lock shared with the
+//! server's draft mutex, so it must not run during an admin publish, discard
+//! or restore.
 
 use std::path::{Path, PathBuf};
 

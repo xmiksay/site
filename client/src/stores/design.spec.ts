@@ -82,7 +82,7 @@ describe('design store', () => {
   it('reload POSTs and adopts the returned state', async () => {
     const store = useDesignStore()
     const fresh = designState({
-      last_reload: { at: '2026-10-09T18:00:00Z', ok: true, files: 12, error: null },
+      last_reload: { at: '2026-10-09T18:00:00Z', ok: true, files: 12, error: null, completed_publish: null },
     })
     apiMock.mockResolvedValueOnce(fresh)
     await store.reload()
@@ -93,7 +93,7 @@ describe('design store', () => {
   it('a failed reload refreshes the state to pick up last_reload, then rethrows', async () => {
     const store = useDesignStore()
     const failed = designState({
-      last_reload: { at: '2026-10-09T18:00:00Z', ok: false, files: 0, error: 'bucket down' },
+      last_reload: { at: '2026-10-09T18:00:00Z', ok: false, files: 0, error: 'bucket down', completed_publish: null },
     })
     apiMock.mockRejectedValueOnce(new ApiError(503, 'storage unavailable'))
     apiMock.mockResolvedValueOnce(failed)

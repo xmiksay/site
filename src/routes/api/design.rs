@@ -117,8 +117,13 @@ async fn draft(State(state): State<AppState>) -> ApiResult<Json<DraftState>> {
     draft_state(&state).await
 }
 
+/// The answer's `last_reload.completed_publish` names a pending publish
+/// this reload completed first.
 async fn reload(State(state): State<AppState>) -> ApiResult<Json<DraftState>> {
-    state.design.reload(&state.storage, &state.tmpl).await?;
+    let status = state.design.reload(&state.storage, &state.tmpl).await?;
+    if let Some(entry) = &status.completed_publish {
+        broadcast::design_published(&state.ws_hub, entry);
+    }
     draft_state(&state).await
 }
 

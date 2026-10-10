@@ -105,7 +105,7 @@ impl DesignStore {
         let entry = HistoryEntry {
             files: files.len(),
             by: by.to_string(),
-            ..unused_version(storage).await?
+            ..unused_version(storage, Utc::now()).await?
         };
         let snapshot = snapshot_prefix(&entry.id);
         for (path, bytes) in &files {
@@ -153,8 +153,9 @@ impl DesignStore {
     }
 
     /// Complete a publish whose marker is still set: mirror its snapshot to
-    /// `design/`, record it and re-base the draft on it. The caller holds
-    /// `reload_lock` and reloads afterwards.
+    /// `design/`, record it and re-base the draft on it if the draft still
+    /// is that snapshot. The caller holds `reload_lock` (not the draft lock)
+    /// and reloads afterwards.
     pub(super) async fn recover_locked(
         &self,
         storage: &Storage,
@@ -186,8 +187,18 @@ impl DesignStore {
         }
         let live = files_of(&load_prefix(storage, DESIGN_PREFIX, &Cache::new()).await?);
         mirror(storage, DESIGN_PREFIX, &files, &live).await?;
-        if read_meta(storage).await?.is_some() {
-            rebase(storage, &files).await?;
+        {
+            // Lock order reload_lock → draft, as in `publish`.
+            let mut cache = self.draft.lock().await;
+            // Only a draft that still is this snapshot moves its base along;
+            // one changed since (discarded, restored, edited) keeps its base,
+            // so its next publish reports the rolled-forward paths as a
+            // conflict instead of silently reverting them.
+            if read_meta(storage).await?.is_some()
+                && self.draft_files(storage, &mut cache).await? == files
+            {
+                rebase(storage, &files).await?;
+            }
         }
         finish(storage, &entry).await?;
         tracing::warn!(id = %entry.id, "completed an unfinished design publish");
@@ -241,10 +252,12 @@ impl DesignStore {
     }
 }
 
-/// A history entry stamped now, its id bumped by a microsecond while
+/// A history entry stamped `at`, its id bumped by a microsecond while
 /// `design-history/{id}/` already holds anything (a clock that went back).
-async fn unused_version(storage: &Storage) -> Result<HistoryEntry, DesignError> {
-    let mut at = Utc::now();
+async fn unused_version(
+    storage: &Storage,
+    mut at: DateTime<Utc>,
+) -> Result<HistoryEntry, DesignError> {
     while !storage
         .list(&snapshot_prefix(&version_id(at)))
         .await?
@@ -292,5 +305,23 @@ mod tests {
         let later: DateTime<Utc> = "2026-10-10T10:00:00Z".parse().expect("ts");
         assert!(version_id(earlier) < version_id(later));
         assert!(version_id(later) < version_id(later + TimeDelta::microseconds(1)));
+    }
+
+    #[tokio::test]
+    async fn version_id_collisions_are_bumped() {
+        let dir = std::env::temp_dir().join(format!("design-ids-{}", uuid::Uuid::new_v4()));
+        let storage =
+            Storage::local(&dir, sea_orm::DatabaseConnection::Disconnected).expect("fs storage");
+        let at: DateTime<Utc> = "2026-10-10T12:00:00Z".parse().expect("ts");
+        let taken = |t| key(&snapshot_prefix(&version_id(t)), "templates/x.html");
+        for t in [at, at + TimeDelta::microseconds(1)] {
+            storage.put(&taken(t), "x".into()).await.expect("put");
+        }
+        let entry = unused_version(&storage, at).await.expect("version");
+        assert_eq!(entry.id, version_id(at + TimeDelta::microseconds(2)));
+        assert_eq!(entry.at, at + TimeDelta::microseconds(2));
+        let free = unused_version(&storage, at - TimeDelta::seconds(1)).await;
+        assert_eq!(free.expect("version").at, at - TimeDelta::seconds(1));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -137,8 +137,10 @@ executes on every PR rather than self-skipping.
   edit, edits invisible until publish, failed validation leaving `design/`
   untouched, mirror deletions and baked reverts, history, restore into the
   draft, discard, no-op publish, 409 on a bucket edit + force / discard to
-  adopt it), a pending publish completed by the next reload or publish (db,
-  fs), and a mirror failing midway restoring the previous `design/` (fs, via a
+  adopt it), a pending publish completed by the next reload or publish with
+  the draft re-based only when it is that snapshot (else a 409), files added
+  and deleted in `design/` outside the draft as conflicts (db, fs), the
+  version-id collision bump (unit test in `publish.rs`), and a mirror failing midway restoring the previous `design/` (fs, via a
   read-only directory — skipped when running as root); and the
   `/api/design/*` routes over a full `AppState` driving what the public 404
   page renders, raw binary files and the `design.*` WS events, registered

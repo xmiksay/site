@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use super::DesignStore;
+use super::publish::HistoryEntry;
 use crate::storage::{self, Storage, Version};
 use crate::templates::Templates;
 
@@ -58,6 +59,8 @@ pub struct ReloadStatus {
     pub ok: bool,
     pub files: usize,
     pub error: Option<String>,
+    /// A publish left pending that this reload completed first.
+    pub completed_publish: Option<HistoryEntry>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -210,11 +213,11 @@ impl DesignStore {
         templates: &Templates,
     ) -> Result<ReloadStatus, DesignError> {
         let _guard = self.reload_lock.lock().await;
-        let result = match self.recover_locked(storage).await {
-            Ok(_) => self.swap_in(storage).await,
-            Err(e) => Err(e),
+        let (result, completed) = match self.recover_locked(storage).await {
+            Ok(completed) => (self.swap_in(storage).await, completed),
+            Err(e) => (Err(e), None),
         };
-        self.record_reload(templates, result)
+        self.record_reload(templates, result, completed)
     }
 
     /// A plain reload for a caller already holding `reload_lock`.
@@ -224,19 +227,21 @@ impl DesignStore {
         templates: &Templates,
     ) -> Result<ReloadStatus, DesignError> {
         let result = self.swap_in(storage).await;
-        self.record_reload(templates, result)
+        self.record_reload(templates, result, None)
     }
 
     fn record_reload(
         &self,
         templates: &Templates,
         result: Result<(), DesignError>,
+        completed_publish: Option<HistoryEntry>,
     ) -> Result<ReloadStatus, DesignError> {
         let status = ReloadStatus {
             at: Utc::now(),
             ok: result.is_ok(),
             files: self.stored.read().files.len(),
             error: result.as_ref().err().map(status_error),
+            completed_publish,
         };
         if result.is_ok() {
             templates.refresh();

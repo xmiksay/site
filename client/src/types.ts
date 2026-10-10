@@ -350,6 +350,8 @@ export interface DesignReloadStatus {
   ok: boolean
   files: number
   error: string | null
+  /** A publish left pending that this reload completed first. */
+  completed_publish: DesignHistoryEntry | null
 }
 
 export interface DesignFile {

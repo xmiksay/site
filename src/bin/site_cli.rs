@@ -88,7 +88,7 @@ async fn main() {
                 "  storage migrate --from db | --from-dir <path>\n                                          Copy every blob and object into the configured STORAGE_KIND"
             );
             eprintln!(
-                "  design push <dir>                       Upload a design folder into the design draft"
+                "  design push <dir>                       Upload a design folder into the design draft\n                                          (not while an admin publishes, discards or restores)"
             );
             std::process::exit(1);
         }
@@ -143,7 +143,7 @@ async fn design_push(args: &[String]) -> anyhow::Result<()> {
         println!("  skipped (outside templates/, assets/, mdcast/): {skipped}");
     }
     println!(
-        "{} uploaded into the draft, {} unchanged, {} skipped — review and publish it in the admin Design page",
+        "{} uploaded into the draft, {} unchanged, {} skipped — review and publish it in the admin Design page (refresh open tabs: a push sends no live update)",
         report.uploaded.len(),
         report.unchanged.len(),
         report.skipped.len()
