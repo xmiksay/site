@@ -164,6 +164,7 @@ async fn exercise(app: &App, ts: &TestStorage, kind: &str) {
     assert_eq!(status, StatusCode::OK, "{state}");
     assert_eq!(state["storage"], kind);
     assert_eq!(state["changes"], json!([]));
+    assert_eq!(state["initialized"], false, "a GET never initializes");
     assert_eq!(entry(&state, "templates/404.html")["baked"], true);
     assert_eq!(entry(&state, "templates/404.html")["overridden"], false);
 
@@ -171,6 +172,7 @@ async fn exercise(app: &App, ts: &TestStorage, kind: &str) {
         .json("PUT", "/api/design/draft/templates/404.html", &marker)
         .await;
     assert_eq!(status, StatusCode::OK, "{state}");
+    assert_eq!(state["initialized"], true);
     assert_eq!(entry(&state, "templates/404.html")["overridden"], true);
     assert_eq!(
         state["changes"],
@@ -295,6 +297,15 @@ async fn exercise(app: &App, ts: &TestStorage, kind: &str) {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(state["changes"], json!([]));
     assert_eq!(next_design_event(&mut rx).1, json!({ "action": "discard" }));
+    let (status, body) = app.json("POST", "/api/design/publish", "").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("nothing to publish"),
+        "{body}"
+    );
 
     let (status, _) = app
         .call(
@@ -325,6 +336,20 @@ async fn exercise(app: &App, ts: &TestStorage, kind: &str) {
         json!([{ "path": "templates/404.html", "kind": "modified" }]),
         "the draft still holds the last published version"
     );
+    // Publishing it would revert the bucket edit: 409 unless forced.
+    let (status, body) = app.json("POST", "/api/design/publish", "").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("changed outside the draft since it was started: templates/404.html"),
+        "{body}"
+    );
+    assert_eq!(app.public_404().await, "EXTERNAL");
+    let (status, _) = app.json("POST", "/api/design/publish?force=true", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(app.public_404().await, "SECOND");
 }
 
 #[tokio::test]

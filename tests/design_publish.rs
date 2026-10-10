@@ -1,7 +1,8 @@
 //! The shared design draft, publish and version history (#115) over db, fs
 //! and S3: draft init, edits invisible until publish, a failed validation
 //! leaving live untouched, mirror deletions, history, restore into the
-//! draft, discard. The failure paths (crash recovery, mirror rollback) are in
+//! draft, discard, no-op publish, and the conflict with a bucket edit (force,
+//! or discard to adopt it). The failure paths (crash recovery, mirror rollback) are in
 //! `tests/design_publish_failures.rs`.
 //!
 //! Gated on `DATABASE_URL` like every DB test; the S3 test fails, not skips,
@@ -64,18 +65,34 @@ async fn exercise(ts: &TestStorage) {
     design.reload(storage, &tmpl).await.expect("reload");
     let baked_404 = design.baked("templates/404.html").expect("baked 404");
 
-    // First access copies the published view (here: baked) into the draft.
-    let draft = design.draft(storage).await.expect("draft init");
-    assert!(draft.changes.is_empty(), "{:?}", draft.changes);
+    // Reading an uninitialized draft shows the published view and writes
+    // nothing; there is nothing to publish.
+    let draft = design.draft(storage).await.expect("draft");
+    assert!(!draft.initialized && draft.changes.is_empty());
     assert_eq!(draft.files, design.published_view());
-    let stored = storage.get("design-draft/templates/404.html").await;
+    assert!(storage.list("design-draft").await.expect("list").is_empty());
+    assert!(
+        storage
+            .get("design-draft.json")
+            .await
+            .expect("get")
+            .is_none()
+    );
+    let err = design
+        .publish(storage, &tmpl, "alice", false)
+        .await
+        .expect_err("uninitialized");
+    assert!(matches!(err, DesignError::NothingToPublish), "{err:?}");
+
+    // The first mutation copies the published view (here: baked) in.
+    put(&design, storage, "templates/404.html", "DRAFT-1").await;
+    let stored = storage.get("design-draft/templates/base.html").await;
     assert_eq!(
         stored.expect("get").map(|b| b.to_vec()),
-        Some(baked_404.clone())
+        design.baked("templates/base.html")
     );
 
     // Draft edits are invisible live.
-    put(&design, storage, "templates/404.html", "DRAFT-1").await;
     put(&design, storage, "assets/css/extra.css", "a{}").await;
     let binary = Bytes::from_static(&[0, 159, 146, 150]);
     design
@@ -111,7 +128,7 @@ async fn exercise(ts: &TestStorage) {
     // A broken template fails validation: nothing written, nothing live.
     put(&design, storage, "templates/404.html", "{% if %}").await;
     let err = design
-        .publish(storage, &tmpl, "alice")
+        .publish(storage, &tmpl, "alice", false)
         .await
         .expect_err("broken publish");
     assert!(matches!(err, DesignError::Invalid(_)), "{err:?}");
@@ -127,7 +144,7 @@ async fn exercise(ts: &TestStorage) {
 
     put(&design, storage, "templates/404.html", "DRAFT-1").await;
     let first = design
-        .publish(storage, &tmpl, "alice")
+        .publish(storage, &tmpl, "alice", false)
         .await
         .expect("publish");
     assert_eq!(first.by, "alice");
@@ -171,7 +188,7 @@ async fn exercise(ts: &TestStorage) {
         "a reverted baked file equal to its published copy is no change"
     );
     let second = design
-        .publish(storage, &tmpl, "bob")
+        .publish(storage, &tmpl, "bob", false)
         .await
         .expect("publish 2");
     assert!(live(&design, "assets/css/extra.css").is_none());
@@ -208,6 +225,50 @@ async fn exercise(ts: &TestStorage) {
     assert!(changes(&design, storage).await.is_empty());
     let read = design.draft_read(storage, "templates/404.html").await;
     assert_eq!(read.expect("read").as_deref(), Some(&b"DRAFT-2"[..]));
+    let err = design
+        .publish(storage, &tmpl, "bob", false)
+        .await
+        .expect_err("no-op");
+    assert!(matches!(err, DesignError::NothingToPublish), "{err:?}");
+
+    // A bucket edit after the draft's base: publishing would revert it.
+    storage
+        .put("design/templates/404.html", "BUCKET".into())
+        .await
+        .expect("bucket edit");
+    put(&design, storage, "assets/css/new.css", "n{}").await;
+    let err = design
+        .publish(storage, &tmpl, "bob", false)
+        .await
+        .expect_err("conflict");
+    match &err {
+        DesignError::Conflict(paths) => assert_eq!(paths, &["templates/404.html"]),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    design
+        .publish(storage, &tmpl, "bob", true)
+        .await
+        .expect("forced publish");
+    assert_eq!(
+        live(&design, "templates/404.html").as_deref(),
+        Some(&b"DRAFT-2"[..]),
+        "force overwrote the bucket edit"
+    );
+    // Discard re-bases the draft on a bucket edit, adopting it.
+    storage
+        .put("design/templates/404.html", "BUCKET-2".into())
+        .await
+        .expect("bucket edit");
+    design.draft_discard(storage).await.expect("discard");
+    put(&design, storage, "assets/css/new.css", "n2{}").await;
+    design
+        .publish(storage, &tmpl, "bob", false)
+        .await
+        .expect("publish after discard");
+    assert_eq!(
+        live(&design, "templates/404.html").as_deref(),
+        Some(&b"BUCKET-2"[..])
+    );
 
     for missing in ["2001-01-01T00:00:00.000000Z", "latest", "../x"] {
         let err = design.restore(storage, missing).await.expect_err("missing");
@@ -222,7 +283,7 @@ async fn exercise(ts: &TestStorage) {
     let (other, other_tmpl) = setup();
     other.reload(storage, &other_tmpl).await.expect("reload");
     assert!(changes(&other, storage).await.is_empty());
-    assert_eq!(other.history(storage).await.expect("history").len(), 2);
+    assert_eq!(other.history(storage).await.expect("history").len(), 4);
 }
 
 #[tokio::test]

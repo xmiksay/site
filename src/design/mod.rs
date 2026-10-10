@@ -95,18 +95,9 @@ impl DesignStore {
         Baked::get(path).map(|file| file.data.into_owned())
     }
 
-    /// `files` over the baked bundle: every baked file under the bundle
-    /// roots, replaced or extended by `files`.
+    /// `files` over the baked bundle: see [`baked_view`].
     pub fn with_baked(&self, files: &Files) -> Files {
-        let mut view: Files = Baked::iter()
-            .filter(|path| stored::check_path(path).is_ok())
-            .filter_map(|path| {
-                let data = Baked::get(&path)?.data.into_owned();
-                Some((path.into_owned(), Bytes::from(data)))
-            })
-            .collect();
-        view.extend(files.iter().map(|(p, b)| (p.clone(), b.clone())));
-        view
+        baked_view(files)
     }
 
     pub fn last_reload(&self) -> Option<ReloadStatus> {
@@ -158,6 +149,20 @@ impl DesignStore {
         }
         Baked::get(path).map(|file| file.data.into_owned())
     }
+}
+
+/// `files` over the baked bundle: every baked file under the bundle roots,
+/// replaced or extended by `files`.
+pub fn baked_view(files: &Files) -> Files {
+    let mut view: Files = Baked::iter()
+        .filter(|path| stored::check_path(path).is_ok())
+        .filter_map(|path| {
+            let data = Baked::get(&path)?.data.into_owned();
+            Some((path.into_owned(), Bytes::from(data)))
+        })
+        .collect();
+    view.extend(files.iter().map(|(p, b)| (p.clone(), b.clone())));
+    view
 }
 
 impl Overlay {

@@ -72,17 +72,37 @@ pub enum DesignError {
     NoVersion(String),
     #[error("{}", .0.join("; "))]
     Invalid(Vec<String>),
-    /// The mirror to `design/` or the reload after it failed; `restored`
-    /// tells whether the previous `design/` objects were put back.
+    /// Live `design/` changed outside the draft since the draft's base
+    /// (bucket edit, another publish): publishing would revert these paths.
     #[error(
-        "publish failed ({}): {}",
-        if *.restored { "previous design restored" } else { "restoring the previous design failed too; the next start completes this publish" },
-        status_error(.error)
+        "design/ changed outside the draft since it was started: {}; discard the draft to adopt those changes, or publish with force=true to overwrite them",
+        .0.join(", ")
     )]
+    Conflict(Vec<String>),
+    #[error("nothing to publish: the draft matches the live design")]
+    NothingToPublish,
+    /// The mirror to `design/` or the reload after it failed. `restored`:
+    /// the previous `design/` objects were put back; `pending`: the publish
+    /// marker is still set, so the next reload, publish or start completes
+    /// this publish.
+    #[error("publish failed ({}): {}", rollback_note(*.restored, *.pending), status_error(.error))]
     PublishFailed {
         error: Box<DesignError>,
         restored: bool,
+        pending: bool,
     },
+}
+
+fn rollback_note(restored: bool, pending: bool) -> &'static str {
+    match (restored, pending) {
+        (true, false) => "previous design restored",
+        (true, true) => {
+            "previous design restored, but the publish marker could not be cleared: the next reload, publish or start completes this publish"
+        }
+        (false, _) => {
+            "restoring the previous design failed: the next reload, publish or start completes this publish"
+        }
+    }
 }
 
 /// `path` names a file under one of the [`ROOTS`] and makes a valid key.
@@ -180,24 +200,38 @@ pub fn validate_for_publish(view: &Files) -> Vec<String> {
 }
 
 impl DesignStore {
-    /// Reload the published design from storage and recompile `templates`
-    /// on success, recording the outcome for the admin either way.
+    /// Complete an unfinished publish if one is pending (see
+    /// [`publish`](super::publish)), then reload the published design from
+    /// storage and recompile `templates` on success, recording the outcome
+    /// for the admin either way. Startup runs this before serving.
     pub async fn reload(
         &self,
         storage: &Storage,
         templates: &Templates,
     ) -> Result<ReloadStatus, DesignError> {
         let _guard = self.reload_lock.lock().await;
-        self.reload_locked(storage, templates).await
+        let result = match self.recover_locked(storage).await {
+            Ok(_) => self.swap_in(storage).await,
+            Err(e) => Err(e),
+        };
+        self.record_reload(templates, result)
     }
 
-    /// [`reload`](Self::reload) for a caller already holding `reload_lock`.
+    /// A plain reload for a caller already holding `reload_lock`.
     pub(super) async fn reload_locked(
         &self,
         storage: &Storage,
         templates: &Templates,
     ) -> Result<ReloadStatus, DesignError> {
         let result = self.swap_in(storage).await;
+        self.record_reload(templates, result)
+    }
+
+    fn record_reload(
+        &self,
+        templates: &Templates,
+        result: Result<(), DesignError>,
+    ) -> Result<ReloadStatus, DesignError> {
         let status = ReloadStatus {
             at: Utc::now(),
             ok: result.is_ok(),
@@ -229,6 +263,15 @@ impl DesignStore {
     /// The published design files currently live (without `DESIGN_DIR`).
     pub(super) fn published_files(&self) -> Files {
         files_of(&self.stored.read().files)
+    }
+
+    /// The `design/` objects in storage now (which a bucket edit may have
+    /// moved ahead of the RAM copy), reusing the RAM copy's bytes.
+    pub(super) async fn live_files(&self, storage: &Storage) -> Result<Files, DesignError> {
+        let current = self.stored.read().clone();
+        Ok(files_of(
+            &load_prefix(storage, DESIGN_PREFIX, &current.files).await?,
+        ))
     }
 }
 
@@ -285,11 +328,29 @@ mod tests {
         let err = DesignError::PublishFailed {
             error: Box::new(DesignError::Storage(storage::Error::Db(db))),
             restored: true,
+            pending: false,
         };
         let msg = status_error(&err);
-        assert!(msg.contains("previous design restored"), "{msg}");
+        assert!(msg.contains("(previous design restored)"), "{msg}");
         assert!(msg.ends_with("database error"), "{msg}");
         assert!(!msg.contains("storage_objects"), "{msg}");
+    }
+
+    #[test]
+    fn publish_failure_reports_the_rollback_accurately() {
+        let fail = |restored, pending| {
+            DesignError::PublishFailed {
+                error: Box::new(DesignError::Invalid(vec!["x".into()])),
+                restored,
+                pending,
+            }
+            .to_string()
+        };
+        let marker_left = fail(true, true);
+        assert!(marker_left.contains("previous design restored, but the publish marker"));
+        assert!(marker_left.contains("next reload, publish or start completes"));
+        assert!(fail(false, true).contains("restoring the previous design failed"));
+        assert!(!fail(true, false).contains("completes"));
     }
 
     #[test]

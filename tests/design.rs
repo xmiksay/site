@@ -1,4 +1,4 @@
-//! The published design in storage (#110, #114): the reload contract of
+//! The published design in storage (#110, #114, #115): the reload contract of
 //! `DesignStore::reload` over db, fs and S3 (and a dead S3), and `design
 //! push` over db and fs. The draft/publish/history flow is in
 //! `tests/design_publish.rs`, the HTTP routes in `tests/design_api.rs`.
@@ -128,6 +128,21 @@ async fn exercise_push(ts: &TestStorage) {
         ["assets/css/style.css", "templates/404.html"]
     );
     assert_eq!(report.skipped, ["README.md"]);
+    // Into the (now initialized) draft, never live.
+    let storage = &ts.storage;
+    assert!(storage.list("design").await.expect("list").is_empty());
+    assert!(
+        storage
+            .get("design-draft.json")
+            .await
+            .expect("get")
+            .is_some()
+    );
+    let draft_404 = storage.get("design-draft/templates/404.html").await;
+    assert_eq!(draft_404.expect("get").as_deref(), Some(&b"pushed"[..]));
+    // The init copied the rest of the bundle in.
+    let draft_base = storage.get("design-draft/templates/base.html").await;
+    assert!(draft_base.expect("get").is_some());
     let again = site::design::push::push(&ts.storage, &src)
         .await
         .expect("re-push");
@@ -144,7 +159,7 @@ async fn exercise_push(ts: &TestStorage) {
     assert!(err.to_string().contains("templates/404.html"), "{err}");
     let css = ts
         .storage
-        .get("design/assets/css/style.css")
+        .get("design-draft/assets/css/style.css")
         .await
         .expect("get");
     assert_eq!(

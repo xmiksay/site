@@ -133,11 +133,13 @@ executes on every PR rather than self-skipping.
   design in storage (#110, #114, #115): `DesignStore::reload` over db, fs and
   S3 (bucket edit + reload, failed reload keeps the design, delete), dead S3 →
   503, `design push` over db and fs; the draft/publish/history flow over db,
-  fs and S3 (draft init, edits invisible until publish, failed validation
-  leaving `design/` untouched, mirror deletions and baked reverts, history,
-  restore into the draft, discard), crash recovery of an interrupted publish
-  (db, fs), and a mirror failing midway restoring the previous `design/` (fs,
-  via a read-only directory — skipped when running as root); and the
+  fs and S3 (read-only GETs of an uninitialized draft, init on the first
+  edit, edits invisible until publish, failed validation leaving `design/`
+  untouched, mirror deletions and baked reverts, history, restore into the
+  draft, discard, no-op publish, 409 on a bucket edit + force / discard to
+  adopt it), a pending publish completed by the next reload or publish (db,
+  fs), and a mirror failing midway restoring the previous `design/` (fs, via a
+  read-only directory — skipped when running as root); and the
   `/api/design/*` routes over a full `AppState` driving what the public 404
   page renders, raw binary files and the `design.*` WS events, registered
   straight on `AppState.ws_hub` (fs, and db with the state's storage swapped

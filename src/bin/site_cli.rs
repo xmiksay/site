@@ -88,7 +88,7 @@ async fn main() {
                 "  storage migrate --from db | --from-dir <path>\n                                          Copy every blob and object into the configured STORAGE_KIND"
             );
             eprintln!(
-                "  design push <dir>                       Upload a design folder as storage overrides"
+                "  design push <dir>                       Upload a design folder into the design draft"
             );
             std::process::exit(1);
         }
@@ -125,7 +125,8 @@ async fn storage_migrate(args: &[String]) -> anyhow::Result<bool> {
     Ok(ok)
 }
 
-/// Upload a design folder; the server applies it on its next reload.
+/// Upload a design folder into the shared draft; it goes live when an admin
+/// publishes the draft.
 async fn design_push(args: &[String]) -> anyhow::Result<()> {
     use anyhow::{Context as _, bail};
     use site::storage::{Storage, StorageConfig};
@@ -142,7 +143,7 @@ async fn design_push(args: &[String]) -> anyhow::Result<()> {
         println!("  skipped (outside templates/, assets/, mdcast/): {skipped}");
     }
     println!(
-        "{} uploaded, {} unchanged, {} skipped — click Reload in the admin Design page",
+        "{} uploaded into the draft, {} unchanged, {} skipped — review and publish it in the admin Design page",
         report.uploaded.len(),
         report.unchanged.len(),
         report.skipped.len()

@@ -4,22 +4,24 @@
 //! ([`HistoryEntry`]), never deleted. Restoring a version copies it into the
 //! draft, never straight to live.
 //!
-//! A publish runs under `reload_lock` and the draft lock: validate the draft
-//! view → snapshot the draft → write the pending marker → mirror the draft to
-//! `design/` → reload → write `meta.json` and drop the marker. Visitors switch
-//! designs only in the reload's RAM swap, so the running site never serves a
+//! A publish runs under `reload_lock` and the draft lock: complete any
+//! pending publish → check the draft (initialized, valid, something to
+//! publish, live `design/` still at the draft's base unless forced) →
+//! snapshot → pending marker → mirror the draft to `design/` → reload →
+//! `meta.json`, drop the marker, re-base the draft. Visitors switch designs
+//! only in the reload's RAM swap, so the running site never serves a
 //! half-mirrored `design/`. A failed mirror or reload puts the previous
-//! `design/` objects back; a crash after the marker is completed by the next
-//! start ([`DesignStore::recover_publish`]), which rolls the validated
+//! `design/` objects back; a marker left behind (crash, failed restore) is
+//! completed by the next reload, publish or start, which rolls the validated
 //! snapshot forward.
 
 use bytes::Bytes;
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use futures_util::future::try_join_all;
 use serde::{Deserialize, Serialize};
 
 use super::DesignStore;
-use super::draft::mirror;
+use super::draft::{changes, mirror, read_meta, rebase};
 use super::stored::{
     Cache, DESIGN_PREFIX, DesignError, Files, files_of, key, load_prefix, validate_for_publish,
 };
@@ -62,32 +64,48 @@ fn valid_id(id: &str) -> bool {
     !id.contains('/') && DateTime::parse_from_rfc3339(id).is_ok()
 }
 
+fn version_id(at: DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(SecondsFormat::Micros, true)
+}
+
 impl DesignStore {
-    /// Publish the draft as user `by`. A draft that fails validation leaves
-    /// everything untouched ([`DesignError::Invalid`]); see the module doc
-    /// for the failure guarantees.
+    /// Publish the draft as user `by`; `force` overwrites `design/` changes
+    /// made outside the draft ([`DesignError::Conflict`]). Every rejection
+    /// (`Invalid`, `Conflict`, `NothingToPublish`) leaves everything
+    /// untouched; see the module doc for the failure guarantees.
     pub async fn publish(
         &self,
         storage: &Storage,
         templates: &Templates,
         by: &str,
+        force: bool,
     ) -> Result<HistoryEntry, DesignError> {
         let _reload = self.reload_lock.lock().await;
+        if self.recover_locked(storage).await?.is_some() {
+            self.reload_locked(storage, templates).await?;
+        }
         let mut cache = self.draft.lock().await;
+        let Some(meta) = read_meta(storage).await? else {
+            return Err(DesignError::NothingToPublish);
+        };
         let files = self.draft_files(storage, &mut cache).await?;
         let errors = validate_for_publish(&self.with_baked(&files));
         if !errors.is_empty() {
             return Err(DesignError::Invalid(errors));
         }
-        let current = self.stored.read().clone();
-        let live = files_of(&load_prefix(storage, DESIGN_PREFIX, &current.files).await?);
+        let live = self.live_files(storage).await?;
+        if changes(&self.with_baked(&files), &self.with_baked(&live)).is_empty() {
+            return Err(DesignError::NothingToPublish);
+        }
+        let external = meta.external_changes(&live);
+        if !external.is_empty() && !force {
+            return Err(DesignError::Conflict(external));
+        }
 
-        let at = Utc::now();
         let entry = HistoryEntry {
-            id: at.to_rfc3339_opts(SecondsFormat::Micros, true),
-            at,
-            by: by.to_string(),
             files: files.len(),
+            by: by.to_string(),
+            ..unused_version(storage).await?
         };
         let snapshot = snapshot_prefix(&entry.id);
         for (path, bytes) in &files {
@@ -102,35 +120,45 @@ impl DesignStore {
         if let Err(error) = went_live {
             // Partially mirrored paths hold either `live` or `files`.
             let restored = match mirror(storage, DESIGN_PREFIX, &live, &files).await {
-                Ok(()) => storage.delete(PENDING_KEY).await.is_ok(),
+                Ok(()) => true,
                 Err(e) => {
                     tracing::error!("design publish {}: restoring design/ failed: {e}", entry.id);
                     false
                 }
             };
+            // Only a restored design/ may drop the marker: otherwise the next
+            // reload must roll the half-mirrored design/ forward.
+            let pending = !restored || storage.delete(PENDING_KEY).await.is_err();
             tracing::error!("design publish {} failed: {error}", entry.id);
             return Err(DesignError::PublishFailed {
                 error: Box::new(error),
                 restored,
+                pending,
             });
         }
         // Live already: a failure here only delays the history entry to the
-        // next start, which finds the marker and completes it.
+        // next reload, publish or start, which finds the marker and completes
+        // it; a stale draft base only makes the next publish ask for force.
         if let Err(e) = finish(storage, &entry).await {
             tracing::error!("design publish {}: recording it failed: {e}", entry.id);
+        }
+        if let Err(e) = rebase(storage, &files).await {
+            tracing::error!(
+                "design publish {}: re-basing the draft failed: {e}",
+                entry.id
+            );
         }
         tracing::info!(id = %entry.id, by, files = entry.files, "design published");
         Ok(entry)
     }
 
-    /// Complete a publish interrupted by a crash (the pending marker is
-    /// set): mirror its snapshot to `design/` and record it. Run at startup,
-    /// before the first reload.
-    pub async fn recover_publish(
+    /// Complete a publish whose marker is still set: mirror its snapshot to
+    /// `design/`, record it and re-base the draft on it. The caller holds
+    /// `reload_lock` and reloads afterwards.
+    pub(super) async fn recover_locked(
         &self,
         storage: &Storage,
     ) -> Result<Option<HistoryEntry>, DesignError> {
-        let _reload = self.reload_lock.lock().await;
         let Some(raw) = storage.get(PENDING_KEY).await? else {
             return Ok(None);
         };
@@ -142,8 +170,8 @@ impl DesignStore {
                 return Ok(None);
             }
         };
-        let files =
-            files_of(&load_prefix(storage, &snapshot_prefix(&entry.id), &Cache::new()).await?);
+        let snapshot = snapshot_prefix(&entry.id);
+        let files = files_of(&load_prefix(storage, &snapshot, &Cache::new()).await?);
         // The marker is written after the whole snapshot; a mismatch means
         // the snapshot was tampered with, and mirroring it could wipe design/.
         if files.len() != entry.files {
@@ -158,8 +186,11 @@ impl DesignStore {
         }
         let live = files_of(&load_prefix(storage, DESIGN_PREFIX, &Cache::new()).await?);
         mirror(storage, DESIGN_PREFIX, &files, &live).await?;
+        if read_meta(storage).await?.is_some() {
+            rebase(storage, &files).await?;
+        }
         finish(storage, &entry).await?;
-        tracing::warn!(id = %entry.id, "completed an interrupted design publish");
+        tracing::warn!(id = %entry.id, "completed an unfinished design publish");
         Ok(Some(entry))
     }
 
@@ -194,7 +225,8 @@ impl DesignStore {
         Ok(out)
     }
 
-    /// Replace the draft with published version `id`.
+    /// Replace the draft with published version `id` and base it on the
+    /// current `design/`.
     pub async fn restore(&self, storage: &Storage, id: &str) -> Result<(), DesignError> {
         let missing = || DesignError::NoVersion(id.to_string());
         if !valid_id(id) {
@@ -205,8 +237,27 @@ impl DesignStore {
             return Err(missing());
         }
         let files: Files = files_of(&load_prefix(storage, &snapshot, &Cache::new()).await?);
-        self.draft_replace(storage, &files).await
+        self.draft_reset(storage, Some(files)).await
     }
+}
+
+/// A history entry stamped now, its id bumped by a microsecond while
+/// `design-history/{id}/` already holds anything (a clock that went back).
+async fn unused_version(storage: &Storage) -> Result<HistoryEntry, DesignError> {
+    let mut at = Utc::now();
+    while !storage
+        .list(&snapshot_prefix(&version_id(at)))
+        .await?
+        .is_empty()
+    {
+        at += TimeDelta::microseconds(1);
+    }
+    Ok(HistoryEntry {
+        id: version_id(at),
+        at,
+        by: String::new(),
+        files: 0,
+    })
 }
 
 /// Record the publish in the history, then drop the pending marker.
@@ -223,7 +274,7 @@ mod tests {
 
     #[test]
     fn version_ids_are_single_segment_rfc3339() {
-        let id = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true);
+        let id = version_id(Utc::now());
         assert!(valid_id(&id), "{id}");
         for bad in [
             "",
@@ -239,7 +290,7 @@ mod tests {
     fn version_ids_sort_chronologically() {
         let earlier: DateTime<Utc> = "2026-10-10T09:59:59.999999Z".parse().expect("ts");
         let later: DateTime<Utc> = "2026-10-10T10:00:00Z".parse().expect("ts");
-        let fmt = |t: DateTime<Utc>| t.to_rfc3339_opts(SecondsFormat::Micros, true);
-        assert!(fmt(earlier) < fmt(later));
+        assert!(version_id(earlier) < version_id(later));
+        assert!(version_id(later) < version_id(later + TimeDelta::microseconds(1)));
     }
 }

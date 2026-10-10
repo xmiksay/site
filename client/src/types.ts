@@ -370,6 +370,16 @@ export interface DesignState {
   storage: DesignStorageKind
   local_dir: boolean
   last_reload: DesignReloadStatus | null
+  /** False until the draft's first edit (it then shows the published view). */
+  initialized: boolean
   files: DesignFile[]
   changes: DesignChange[]
+}
+
+/** One published design version (`POST /api/design/publish`). */
+export interface DesignHistoryEntry {
+  id: string
+  at: string
+  by: string
+  files: number
 }

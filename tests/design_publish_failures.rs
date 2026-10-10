@@ -1,7 +1,7 @@
-//! Failure paths of a design publish (#115): the startup recovery of a
-//! publish interrupted after its pending marker (db, fs), and a mirror
-//! failing midway restoring the previous `design/` (fs, via a read-only
-//! directory). The happy path is in `tests/design_publish.rs`.
+//! Failure paths of a design publish (#115): a publish left pending (its
+//! marker set) completed by the next reload or publish (db, fs), and a
+//! mirror failing midway restoring the previous `design/` (fs, via a
+//! read-only directory). The happy path is in `tests/design_publish.rs`.
 //!
 //! Gated on `DATABASE_URL` like every DB test.
 
@@ -47,33 +47,47 @@ async fn changes(design: &DesignStore, storage: &Storage) -> Vec<String> {
     draft.changes.into_iter().map(|c| c.path).collect()
 }
 
-/// A crash after the snapshot and the pending marker: the next start rolls
-/// the snapshot forward; a marker whose snapshot is incomplete is dropped
-/// without touching `design/`.
-async fn exercise_recovery(ts: &TestStorage) {
-    let storage = &ts.storage;
-    let id = "2026-10-10T12:00:00.000000Z";
+/// Leave what a publish interrupted after its marker leaves: a snapshot of
+/// `files` (one file, `templates/404.html` = `body`) and the marker.
+async fn leave_pending(storage: &Storage, id: &str, body: &str, files: usize) {
+    let snapshot = format!("design-history/{id}/templates/404.html");
     storage
-        .put("design/assets/css/old.css", "old".into())
+        .put(&snapshot, body.to_string().into())
         .await
         .expect("put");
-    storage
-        .put(
-            &format!("design-history/{id}/templates/404.html"),
-            "ROLLED".into(),
-        )
-        .await
-        .expect("put");
-    let marker = format!(r#"{{"id":"{id}","at":"{id}","by":"carol","files":1}}"#);
+    let marker = format!(r#"{{"id":"{id}","at":"{id}","by":"carol","files":{files}}}"#);
     storage
         .put("design-publish-pending.json", marker.into())
         .await
         .expect("put");
+}
 
+async fn pending(storage: &Storage) -> bool {
+    let marker = storage.get("design-publish-pending.json").await;
+    marker.expect("get").is_some()
+}
+
+/// A marker left behind (crash, failed restore) is completed by the next
+/// reload or publish of a running store, not only at start: its snapshot is
+/// rolled forward, recorded, and the draft re-based on it. A marker whose
+/// snapshot is incomplete is dropped without touching `design/`.
+async fn exercise_recovery(ts: &TestStorage) {
+    let storage = &ts.storage;
     let (design, tmpl) = setup();
-    let entry = design.recover_publish(storage).await.expect("recover");
-    assert_eq!(entry.map(|e| e.by).as_deref(), Some("carol"));
     design.reload(storage, &tmpl).await.expect("reload");
+    put(&design, storage, "assets/css/a.css", "draft{}").await;
+
+    // A half-mirrored leftover the roll-forward must remove.
+    storage
+        .put("design/assets/css/old.css", "old".into())
+        .await
+        .expect("put");
+    leave_pending(storage, "2026-10-10T12:00:00.000000Z", "ROLLED", 1).await;
+    design
+        .reload(storage, &tmpl)
+        .await
+        .expect("reload completes it");
+    assert!(!pending(storage).await);
     assert_eq!(
         design.load("templates/404.html").as_deref(),
         Some(&b"ROLLED"[..])
@@ -82,41 +96,31 @@ async fn exercise_recovery(ts: &TestStorage) {
         design.load("assets/css/old.css").is_none(),
         "mirrored exactly"
     );
-    assert_eq!(design.history(storage).await.expect("history").len(), 1);
-    assert!(
-        design
-            .recover_publish(storage)
-            .await
-            .expect("noop")
-            .is_none()
+    let history = design.history(storage).await.expect("history");
+    assert_eq!(history.first().map(|e| e.by.as_str()), Some("carol"));
+
+    // At the next publish, which then goes ahead without a conflict: the
+    // draft was re-based on the rolled-forward snapshot.
+    leave_pending(storage, "2026-10-10T13:00:00.000000Z", "ROLLED-2", 1).await;
+    design
+        .publish(storage, &tmpl, "dave", false)
+        .await
+        .expect("publish after completing the pending one");
+    assert!(!pending(storage).await);
+    assert_eq!(design.history(storage).await.expect("history").len(), 3);
+    assert_eq!(
+        design.load("assets/css/a.css").as_deref(),
+        Some(&b"draft{}"[..])
     );
 
-    let marker = r#"{"id":"2026-10-10T13:00:00Z","at":"2026-10-10T13:00:00Z","by":"x","files":3}"#;
-    storage
-        .put("design-publish-pending.json", marker.into())
+    let before = storage.list("design").await.expect("list").len();
+    leave_pending(storage, "2026-10-10T14:00:00Z", "PARTIAL", 3).await;
+    design
+        .reload(storage, &tmpl)
         .await
-        .expect("put");
-    assert!(
-        design
-            .recover_publish(storage)
-            .await
-            .expect("drop")
-            .is_none()
-    );
-    assert!(
-        storage
-            .get("design-publish-pending.json")
-            .await
-            .expect("get")
-            .is_none()
-    );
-    assert!(
-        storage
-            .get("design/templates/404.html")
-            .await
-            .expect("get")
-            .is_some()
-    );
+        .expect("reload drops it");
+    assert!(!pending(storage).await);
+    assert_eq!(storage.list("design").await.expect("list").len(), before);
 }
 
 #[tokio::test]
@@ -154,7 +158,7 @@ async fn failed_mirror_restores_the_previous_design_over_fs() {
     design.reload(storage, &tmpl).await.expect("reload");
     put(&design, storage, "assets/css/style.css", "v1{}").await;
     design
-        .publish(storage, &tmpl, "alice")
+        .publish(storage, &tmpl, "alice", false)
         .await
         .expect("publish");
 
@@ -173,12 +177,19 @@ async fn failed_mirror_restores_the_previous_design_over_fs() {
     put(&design, storage, "assets/css/style.css", "v2{}").await;
     put(&design, storage, "assets/locked/x.css", "x{}").await;
     let err = design
-        .publish(storage, &tmpl, "alice")
+        .publish(storage, &tmpl, "alice", false)
         .await
         .expect_err("mirror fails");
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     assert!(
-        matches!(err, DesignError::PublishFailed { restored: true, .. }),
+        matches!(
+            err,
+            DesignError::PublishFailed {
+                restored: true,
+                pending: false,
+                ..
+            }
+        ),
         "{err:?}"
     );
     let css = storage

@@ -46,6 +46,9 @@ pub struct DraftState {
     storage: &'static str,
     local_dir: bool,
     last_reload: Option<ReloadStatus>,
+    /// False until the draft's first mutation (it then shows the published
+    /// view).
+    initialized: bool,
     /// The draft view (draft over baked), sorted by path.
     files: Vec<DesignFile>,
     /// What publishing would change.
@@ -68,6 +71,9 @@ impl From<DesignError> for ApiError {
             DesignError::BadPath(_) => Self::BadRequest(err.to_string()),
             DesignError::NotInDraft(_) | DesignError::NoVersion(_) => Self::NotFound,
             DesignError::Invalid(_) => Self::Unprocessable(err.to_string()),
+            DesignError::Conflict(_) | DesignError::NothingToPublish => {
+                Self::Conflict(err.to_string())
+            }
             DesignError::PublishFailed { ref error, .. } => {
                 let msg = status_error(&err);
                 match **error {
@@ -101,6 +107,7 @@ async fn draft_state(state: &AppState) -> ApiResult<Json<DraftState>> {
         storage: state.storage.kind(),
         local_dir: design.has_local_dir(),
         last_reload: design.last_reload(),
+        initialized: draft.initialized,
         files,
         changes: draft.changes,
     }))
@@ -167,9 +174,16 @@ async fn discard(State(state): State<AppState>) -> ApiResult<Json<DraftState>> {
     draft_state(&state).await
 }
 
+#[derive(Deserialize)]
+struct PublishQuery {
+    #[serde(default)]
+    force: bool,
+}
+
 async fn publish(
     State(state): State<AppState>,
     Extension(user_id): Extension<i32>,
+    Query(query): Query<PublishQuery>,
 ) -> ApiResult<Json<HistoryEntry>> {
     let by = user::Entity::find_by_id(user_id)
         .one(&state.db)
@@ -177,7 +191,7 @@ async fn publish(
         .map_or_else(|| format!("user #{user_id}"), |u| u.username);
     let entry = state
         .design
-        .publish(&state.storage, &state.tmpl, &by)
+        .publish(&state.storage, &state.tmpl, &by, query.force)
         .await?;
     broadcast::design_published(&state.ws_hub, &entry);
     Ok(Json(entry))

@@ -18,6 +18,7 @@ function designState(overrides: Partial<DesignState> = {}): DesignState {
     local_dir: false,
     last_reload: null,
     files: [{ path: 'templates/base.html', baked: true, overridden: false, size: 10 }],
+    initialized: true,
     changes: [],
     ...overrides,
   }
@@ -99,6 +100,42 @@ describe('design store', () => {
 
     await expect(store.reload()).rejects.toThrow('storage unavailable')
     expect(store.state?.last_reload?.error).toBe('bucket down')
+  })
+
+  it('publish POSTs, then reloads the draft state', async () => {
+    const entry = { id: '2026-10-10T12:00:00.000000Z', at: '2026-10-10T12:00:00Z', by: 'me', files: 3 }
+    apiMock.mockResolvedValueOnce(entry)
+    apiMock.mockResolvedValueOnce(designState())
+    const store = useDesignStore()
+
+    expect(await store.publish()).toEqual(entry)
+    expect(apiMock).toHaveBeenNthCalledWith(1, '/api/design/publish', { method: 'POST' })
+    expect(apiMock).toHaveBeenNthCalledWith(2, '/api/design/draft')
+  })
+
+  it('publish(true) forces past a conflict', async () => {
+    apiMock.mockResolvedValueOnce({ id: 'x', at: 'x', by: 'me', files: 1 })
+    apiMock.mockResolvedValueOnce(designState())
+    await useDesignStore().publish(true)
+    expect(apiMock).toHaveBeenNthCalledWith(1, '/api/design/publish?force=true', { method: 'POST' })
+  })
+
+  it('a rejected publish (409) rethrows and keeps the state', async () => {
+    const store = useDesignStore()
+    const before = designState()
+    store.state = before
+    apiMock.mockRejectedValueOnce(new ApiError(409, 'design/ changed outside the draft'))
+    await expect(store.publish()).rejects.toThrow('changed outside the draft')
+    expect(store.state).toStrictEqual(before)
+  })
+
+  it('discard POSTs and adopts the returned state', async () => {
+    const store = useDesignStore()
+    store.state = designState({ changes: [{ path: 'assets/a.css', kind: 'added' }] })
+    apiMock.mockResolvedValueOnce(designState())
+    await store.discard()
+    expect(apiMock).toHaveBeenCalledWith('/api/design/draft/discard', { method: 'POST' })
+    expect(store.state?.changes).toEqual([])
   })
 
   it('fetchText requests the baked source when asked', async () => {
