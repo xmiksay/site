@@ -11,9 +11,7 @@ use axum::extract::{Query, Request, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum_extra::extract::CookieJar;
 
-use crate::auth;
 use crate::export::{self, ExportFormat};
 use crate::path_util;
 use crate::routes::public::{self, preview::Look};
@@ -30,17 +28,20 @@ struct ExportQuery {
 
 async fn handle(
     State(state): State<AppState>,
-    jar: CookieJar,
+    look: Look,
     Query(q): Query<ExportQuery>,
     req: Request,
 ) -> Response {
     let Some(raw_format) = q.format else {
-        return public::catch_all(State(state), jar, req)
-            .await
-            .into_response();
+        return public::catch_all(State(state), look, req).await;
     };
+    let path = path_util::normalize(req.uri().path());
+    // Every answer, errors included, is marked when it is preview output.
+    look.finish(export_path(&state, &look, &raw_format, &path).await)
+}
 
-    let Some(format) = ExportFormat::parse(&raw_format) else {
+async fn export_path(state: &AppState, look: &Look, raw_format: &str, path: &str) -> Response {
+    let Some(format) = ExportFormat::parse(raw_format) else {
         return (
             StatusCode::BAD_REQUEST,
             format!("unknown export format `{raw_format}`"),
@@ -56,26 +57,20 @@ async fn handle(
             .into_response();
     };
 
-    let look = match Look::resolve(&state, &jar).await {
-        Ok(look) => look,
-        Err(resp) => return *resp,
-    };
-    let path = path_util::normalize(req.uri().path());
-    let logged_in = auth::is_logged_in(&state, &jar).await.is_some();
-
-    let Some(content) = public::lookup_content(&state.db, &path).await else {
+    let logged_in = look.logged_in;
+    let Some(content) = public::lookup_content(&state.db, path).await else {
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     };
     if content.private() && !logged_in {
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
 
-    let env = look.env(&state);
+    let env = look.env(state);
     let artifact = match export::render_page(
         client,
         &state.db,
         &state.storage,
-        look.design(&state),
+        look.design(state),
         &env,
         content.markdown(),
         Some(content.title()),
@@ -103,7 +98,7 @@ async fn handle(
         export::sanitize_filename(path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("export"));
     let filename = format!("{slug}.{}", format.target().extension());
 
-    let resp = (
+    (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, format.content_type().to_string()),
@@ -114,6 +109,5 @@ async fn handle(
         ],
         artifact.bytes.to_vec(),
     )
-        .into_response();
-    look.finish(resp)
+        .into_response()
 }

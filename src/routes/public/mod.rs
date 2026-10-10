@@ -9,16 +9,15 @@ pub mod tags;
 
 use axum::extract::{Request, State};
 use axum::response::{Html, Response};
-use axum_extra::extract::CookieJar;
 use minijinja::Environment;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::entity::{menu, page, tag};
+use crate::markdown;
 use crate::path_util;
 use crate::routes::build_menu;
 use crate::state::AppState;
 use crate::templates::context::{Layout, PageView, PathPageContext, TagView};
-use crate::{auth, markdown};
 
 use preview::Look;
 
@@ -83,13 +82,9 @@ pub(crate) async fn lookup_content(db: &DatabaseConnection, path: &str) -> Optio
 }
 
 /// Catch-all handler: menu -> page -> 404
-pub async fn catch_all(State(state): State<AppState>, jar: CookieJar, req: Request) -> Response {
+pub async fn catch_all(State(state): State<AppState>, look: Look, req: Request) -> Response {
     let path = path_util::normalize(req.uri().path());
-    let look = match Look::resolve(&state, &jar).await {
-        Ok(look) => look,
-        Err(resp) => return *resp,
-    };
-    let logged_in = auth::is_logged_in(&state, &jar).await.is_some();
+    let logged_in = look.logged_in;
     let layout = Layout::new(build_menu(&state.db, logged_in).await, logged_in);
     let env = look.env(&state);
     let rendered = render_path(&state, &env, &path, layout).await;

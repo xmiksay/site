@@ -8,13 +8,15 @@
 
 use std::sync::Arc;
 
+use axum::extract::FromRequestParts;
+use axum::http::request::Parts;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum_extra::extract::CookieJar;
 use minijinja::Environment;
 
 use crate::auth;
-use crate::design::stored::status_error;
+use crate::design::stored::{DesignError, status_error};
 use crate::design::{DraftSite, Resolve};
 use crate::state::AppState;
 
@@ -24,57 +26,81 @@ pub const PREVIEW_COOKIE: &str = "design_preview";
 pub const EXIT_PATH: &str = "/api/design/preview/exit";
 
 /// The cookie alone, before any session check.
-pub fn requested(jar: &CookieJar) -> bool {
+fn requested(jar: &CookieJar) -> bool {
     jar.get(PREVIEW_COOKIE).is_some_and(|c| c.value() == "1")
 }
 
-/// Which design a request renders with.
-pub enum Look {
-    Published,
-    Draft(Arc<DraftSite>),
+/// How a page renders: the visitor's session state and, in preview, the
+/// draft. Extracting it refreshes the draft from storage, so an edit shows
+/// on the next page load. Rejects with the ready 503 page when the draft
+/// cannot be loaded.
+pub struct Look {
+    pub logged_in: bool,
+    draft: Option<Arc<DraftSite>>,
+}
+
+/// [`Look`] for `/assets/*`: the session is only checked when the preview
+/// cookie is set (`logged_in` is false otherwise), and the draft is the one
+/// the last preview page load built — assets never queue on storage.
+pub struct AssetLook(pub Look);
+
+impl FromRequestParts<AppState> for Look {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Response> {
+        let jar = CookieJar::from_headers(&parts.headers);
+        let logged_in = auth::is_logged_in(state, &jar).await.is_some();
+        Look::with(state, logged_in && requested(&jar), logged_in, true)
+            .await
+            .map_err(unavailable)
+    }
+}
+
+impl FromRequestParts<AppState> for AssetLook {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Response> {
+        let jar = CookieJar::from_headers(&parts.headers);
+        let logged_in = requested(&jar) && auth::is_logged_in(state, &jar).await.is_some();
+        Look::with(state, logged_in, logged_in, false)
+            .await
+            .map(AssetLook)
+            .map_err(unavailable)
+    }
 }
 
 impl Look {
-    /// The session is only checked when the cookie is set, so requests
-    /// outside preview cost nothing extra. `Err` is the ready response for a
-    /// draft that cannot be loaded (boxed: a `Response` is large).
-    pub async fn resolve(state: &AppState, jar: &CookieJar) -> Result<Self, Box<Response>> {
-        if !requested(jar) || auth::is_logged_in(state, jar).await.is_none() {
-            return Ok(Self::Published);
-        }
-        match state.design.draft_site(&state.storage).await {
-            Ok(site) => Ok(Self::Draft(site)),
-            Err(e) => {
-                tracing::error!("draft preview: loading the draft failed: {e}");
-                let body = format!(
-                    "<h1>Draft preview unavailable</h1><p>{}</p>",
-                    escape(&status_error(&e))
-                );
-                Err(Box::new(preview_html(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    &body,
-                )))
-            }
-        }
+    async fn with(
+        state: &AppState,
+        preview: bool,
+        logged_in: bool,
+        refresh: bool,
+    ) -> Result<Self, DesignError> {
+        let draft = match preview {
+            false => None,
+            true => Some(state.design.draft_site(&state.storage, refresh).await?),
+        };
+        Ok(Self { logged_in, draft })
     }
 
     pub fn env(&self, state: &AppState) -> Arc<Environment<'static>> {
-        match self {
-            Self::Published => state.tmpl.env(),
-            Self::Draft(site) => site.env(),
+        match &self.draft {
+            None => state.tmpl.env(),
+            Some(site) => site.env(),
         }
     }
 
     pub fn design<'a>(&'a self, state: &'a AppState) -> &'a dyn Resolve {
-        match self {
-            Self::Published => &*state.design,
-            Self::Draft(site) => &**site,
+        match &self.draft {
+            None => &*state.design,
+            Some(site) => &**site,
         }
     }
 
-    /// Mark a non-HTML response (asset, export) as preview output.
+    /// Mark a non-HTML response (asset, export, a plain error) as preview
+    /// output.
     pub fn finish(&self, mut resp: Response) -> Response {
-        if matches!(self, Self::Draft(_)) {
+        if self.draft.is_some() {
             no_store(&mut resp);
         }
         resp
@@ -83,16 +109,25 @@ impl Look {
     /// The response for a rendered page; `context` labels the published
     /// error log.
     pub fn respond(&self, context: &str, rendered: Result<String, minijinja::Error>) -> Response {
-        match (self, rendered) {
-            (Self::Published, Ok(html)) => Html(html).into_response(),
-            (Self::Published, Err(e)) => super::error_page(context, e).into_response(),
-            (Self::Draft(_), Ok(html)) => preview_html(StatusCode::OK, &html),
-            (Self::Draft(_), Err(e)) => {
+        match (self.draft.is_some(), rendered) {
+            (false, Ok(html)) => Html(html).into_response(),
+            (false, Err(e)) => super::error_page(context, e).into_response(),
+            (true, Ok(html)) => preview_html(StatusCode::OK, &html),
+            (true, Err(e)) => {
                 tracing::debug!("draft preview: {e:#}");
                 preview_html(StatusCode::INTERNAL_SERVER_ERROR, &template_error(&e))
             }
         }
     }
+}
+
+fn unavailable(e: DesignError) -> Response {
+    tracing::error!("draft preview: loading the draft failed: {e}");
+    let body = format!(
+        "<h1>Draft preview unavailable</h1><p>{}</p>",
+        escape(&status_error(&e))
+    );
+    preview_html(StatusCode::SERVICE_UNAVAILABLE, &body)
 }
 
 fn no_store(resp: &mut Response) {
@@ -117,7 +152,7 @@ const BANNER: &str = concat!(
 /// Put the banner right after the `<body…>` tag, or in front of the
 /// document when there is none: it must not depend on the draft's
 /// templates, which are exactly what is being edited.
-pub fn inject_banner(html: &str) -> String {
+fn inject_banner(html: &str) -> String {
     let lower = html.to_ascii_lowercase();
     let body_end = lower.match_indices("<body").find_map(|(at, _)| {
         let rest = &lower[at + "<body".len()..];

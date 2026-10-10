@@ -85,7 +85,8 @@ src/
                           # lookup.rs (file/gallery/page resolution), highlight.rs
                           # (syntect), links.rs, handlers/ (simple/media/json)
   templates/             # mod.rs: Templates (frozen/live environments,
-                          # timeformat, strict_environment, DesignLoader);
+                          # environment/strict_environment over a
+                          # design::Resolve, timeformat);
                           # context.rs: typed render contexts, one per
                           # template/partial; contract.rs (+ contract_intro.md):
                           # the design contract generator; samples.rs: example
@@ -133,9 +134,9 @@ registry (name, kind, schema, example contexts). `docs/design-contract.md` and
 (`site_cli design contract [--schema]`); a unit test fails when either drifts
 from the code, another when a baked template is missing from `TEMPLATES`.
 
-`templates::smoke::smoke_render(db, storage, load)` renders a design given as
-a `DesignLoader` (`templates/…` path → bytes: a `DesignStore`, a draft, …)
-through `strict_environment`: `404.html`, `base.html`, the home menu item, the
+`templates::smoke::smoke_render(db, storage, design)` renders a design given as
+an `Arc<dyn design::Resolve>` (the one template seam: a `DesignStore`, or a
+`Files` view such as the draft over baked) through `strict_environment`: `404.html`, `base.html`, the home menu item, the
 newest page plus the first page using each directive, and search with and
 without a tag — each anonymous and logged in; markdown goes through
 `markdown::render_checked`, which reports the partials it rendered and their
@@ -306,9 +307,9 @@ Failure guarantees:
 
 ### Draft preview
 
-An admin sees the real site rendered with the draft (#116): `POST /api/design/preview {on: true}` sets the `design_preview` cookie, which counts **only together with a valid session** — `Look::resolve` (`src/routes/public/preview.rs`) checks the session only when the cookie is present (requests outside preview cost nothing extra), and an anonymous request or a bogus session gets the published design, cookie or not. In preview, public pages (catch-all, search), `/assets/*` and both exports (mdcast templates + `brand.toml`) resolve from the **draft view** — draft over baked (an uninitialized draft = the published view); `DESIGN_DIR` is ignored, since the preview shows what a publish would put live. Every preview response is `Cache-Control: no-store`; HTML gets a fixed "NÁHLED DRAFTU" banner with the exit link, injected right after `<body…>` (prepended when there is none), independent of the draft's templates. A template error renders a page listing each template in the error chain with name, line, message and the source excerpt (500, banner included) instead of the generic error page; a draft that cannot be loaded answers 503 with the non-leaking `status_error` text.
+An admin sees the real site rendered with the draft (#116): `POST /api/design/preview {on: true}` sets the `design_preview` cookie, which counts **only together with a valid session** — the `Look` extractor (`src/routes/public/preview.rs`) does the page's one session lookup and carries `logged_in` to the handler (no second query), and `/assets/*` checks the session only when the cookie is present (asset requests outside preview cost nothing extra), and an anonymous request or a bogus session gets the published design, cookie or not. In preview, public pages (catch-all, search), `/assets/*` and both exports (mdcast templates + `brand.toml`) resolve from the **draft view** — draft over baked (an uninitialized draft = the published view); `DESIGN_DIR` is ignored, since the preview shows what a publish would put live. Every preview response — errors included — is `Cache-Control: no-store`; HTML gets a fixed "NÁHLED DRAFTU" banner with the exit link, injected right after `<body…>` (prepended when there is none), independent of the draft's templates. A template error renders a page listing each template in the error chain with name, line, message and the source excerpt (500, banner included) instead of the generic error page; a draft that cannot be loaded answers 503 with the non-leaking `status_error` text.
 
-**Caching.** `DesignStore::draft_site` (`src/design/view.rs`) returns a `DraftSite` — the draft view's files plus its own MiniJinja environment (templates compile lazily and stay cached in it) — rebuilt only when its **stamp** changes: the published `Stored` (pointer identity; swapped wholesale by every reload/publish) and the draft's `(path, Version)` list (`None` while uninitialized). Every preview request re-reads the draft meta and re-lists `design-draft/` under the draft mutex (downloading only objects whose version moved, like a reload), so an edit from any surface — admin API, `site_cli design push`, a bucket edit — shows on the next request; unchanged, the cached site is reused. `Resolve` (`load` + `list_prefix`) is the seam: `DesignStore` (live) and `DraftSite` both implement it, and the template engine (`templates::environment`) and the export bundle take it.
+**Caching.** `DesignStore::draft_site` (`src/design/view.rs`) returns a `DraftSite` — the draft view's files plus its own MiniJinja environment (templates compile lazily and stay cached in it) — rebuilt only when its **stamp** changes: the published `Stored` (pointer identity; swapped wholesale by every reload/publish) and the draft's `(path, Version)` list (`None` while uninitialized). Every preview **page** request (catch-all, search, both exports — the `Look` extractor) re-reads the draft meta and re-lists `design-draft/` under the draft mutex (downloading only objects whose version moved, like a reload), so an edit from any surface — admin API, `site_cli design push`, a bucket edit — shows on the next page load; unchanged, the cached site is reused. `/assets/*` (the `AssetLook` extractor, which checks the session only when the cookie is set) reuses the site the last page load built without touching storage, so a page's assets load in parallel rather than queueing on the draft mutex; only with nothing cached yet does an asset request build it. The draft environment has debug info on in every build profile, so the error page always shows the source excerpt. `Resolve` (`load` + `list_prefix`) is the seam: `DesignStore` (live) and `DraftSite` both implement it, and the template engine (`templates::environment`) and the export bundle take it.
 
 ## Routes
 
@@ -321,7 +322,7 @@ An admin sees the real site rendered with the draft (#116): `POST /api/design/pr
 | `/tag/{id}` | GET | 302 redirect to `/search?tag=<name>` |
 | `/search?q=...` | GET | Fulltext search |
 | `/sitemap.xml` | GET | Sitemap |
-| `/assets/{*path}` | GET | Static files (`DESIGN_DIR` override → storage `design/assets/…` → baked `design/assets/{css,js,img}`; the draft's in [preview](#draft-preview)). `Vary: Cookie`, so toggling preview misses the day-long browser cache |
+| `/assets/{*path}` | GET | Static files (`DESIGN_DIR` override → storage `design/assets/…` → baked `design/assets/{css,js,img}`; the draft's in [preview](#draft-preview)). `Vary: Cookie`, so toggling preview misses the day-long browser cache. Copies a browser cached before #116 (no `Vary`, `max-age` 1 day) may still show the published asset in preview until they expire |
 | `/{*path}` | GET | Catch-all: menu → page → 404 |
 | `/{*path}?format=pdf\|slides` | GET | Export the resolved menu/page to PDF or reveal.js slides (see [Export (mdcast)](#export-mdcast)) — no `format` param passes straight through to the catch-all above |
 

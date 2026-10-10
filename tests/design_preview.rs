@@ -205,7 +205,8 @@ async fn draft_preview_is_admin_only_and_marked() {
     assert_eq!(asset.cache_control(), "no-store");
     assert!(!asset.body.contains(BANNER), "no banner outside HTML");
 
-    // The next edit shows on the next request.
+    // An edit shows on the next page load; assets reuse the draft that page
+    // load built, so they never queue on storage.
     let put = call(
         &app,
         "PUT",
@@ -215,6 +216,13 @@ async fn draft_preview_is_admin_only_and_marked() {
     )
     .await;
     assert_eq!(put.status, StatusCode::OK);
+    assert_eq!(call(&app, "GET", css, &both, "").await.body, "DRAFT-CSS");
+    assert!(
+        call(&app, "GET", &url, &both, "")
+            .await
+            .body
+            .contains(BANNER)
+    );
     assert_eq!(call(&app, "GET", css, &both, "").await.body, "V2");
 
     // A broken draft template shows its name and line, not the generic page.

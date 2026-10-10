@@ -5,21 +5,16 @@
 use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum_extra::extract::CookieJar;
 
-use super::preview::Look;
+use super::preview::AssetLook;
 use crate::design::build_static_response;
 use crate::state::AppState;
 
 pub async fn serve(
     State(state): State<AppState>,
-    jar: CookieJar,
+    AssetLook(look): AssetLook,
     Path(path): Path<String>,
 ) -> Response {
-    let look = match Look::resolve(&state, &jar).await {
-        Ok(look) => look,
-        Err(resp) => return *resp,
-    };
     let key = format!("assets/{path}");
     let Some(data) = look.design(&state).load(&key) else {
         return look.finish((StatusCode::NOT_FOUND, "Not Found").into_response());

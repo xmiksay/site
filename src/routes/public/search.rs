@@ -2,10 +2,8 @@ use axum::Router;
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum_extra::extract::CookieJar;
 use sea_orm::EntityTrait;
 
-use crate::auth;
 use crate::entity::tag;
 use crate::repo::pages_search::{self as pages_search_repo, SearchError};
 use crate::routes::build_menu;
@@ -38,14 +36,10 @@ const MAX_LIMIT: u64 = 100;
 
 pub async fn search(
     State(state): State<AppState>,
-    jar: CookieJar,
+    look: Look,
     Query(query): Query<SearchQuery>,
 ) -> Response {
-    let look = match Look::resolve(&state, &jar).await {
-        Ok(look) => look,
-        Err(resp) => return *resp,
-    };
-    let logged_in = auth::is_logged_in(&state, &jar).await.is_some();
+    let logged_in = look.logged_in;
     let nav = build_menu(&state.db, logged_in).await;
 
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
@@ -81,7 +75,7 @@ pub async fn search(
         ),
         Err(SearchError::UnknownTag) => (Vec::new(), 0),
         Err(SearchError::Db(e)) => {
-            return error_page("search db error", e).into_response();
+            return look.finish(error_page("search db error", e).into_response());
         }
     };
 

@@ -256,12 +256,18 @@ async fn exit_preview(jar: CookieJar, headers: HeaderMap) -> (CookieJar, Redirec
 }
 
 /// The referer's path and query on this site; only the path is kept, so a
-/// foreign referer cannot turn this into an open redirect.
+/// foreign referer cannot turn this into an open redirect (nor can `//` or
+/// a `\`, which browsers read as `/`).
 fn back_to(referer: Option<&str>) -> String {
     referer
         .and_then(|r| r.parse::<Uri>().ok())
         .and_then(|uri| uri.path_and_query().map(|pq| pq.as_str().to_owned()))
-        .filter(|p| p.starts_with('/') && !p.starts_with("//") && !p.starts_with(EXIT_PATH))
+        .filter(|p| {
+            p.starts_with('/')
+                && !p.starts_with("//")
+                && !p.contains('\\')
+                && !p.starts_with(EXIT_PATH)
+        })
         .unwrap_or_else(|| "/".to_owned())
 }
 
@@ -276,5 +282,7 @@ mod tests {
         assert_eq!(back_to(Some("/api/design/preview/exit")), "/");
         assert_eq!(back_to(Some("not a uri")), "/");
         assert_eq!(back_to(None), "/");
+        assert_eq!(back_to(Some("/\\evil.example/x")), "/");
+        assert_eq!(back_to(Some("https://site.example/a\\b")), "/");
     }
 }

@@ -8,7 +8,6 @@ use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum_extra::extract::CookieJar;
 use sea_orm::EntityTrait;
 
 use crate::entity::page;
@@ -28,7 +27,7 @@ pub struct ExportQuery {
 
 async fn export_page(
     State(state): State<AppState>,
-    jar: CookieJar,
+    look: Look,
     Path(id): Path<i32>,
     Query(q): Query<ExportQuery>,
 ) -> ApiResult<Response> {
@@ -47,10 +46,6 @@ async fn export_page(
         .ok_or(ApiError::NotFound)?;
 
     // In draft preview the export uses the draft's mdcast templates and brand.
-    let look = match Look::resolve(&state, &jar).await {
-        Ok(look) => look,
-        Err(resp) => return Ok(*resp),
-    };
     let env = look.env(&state);
     let artifact = export::render_page(
         client,

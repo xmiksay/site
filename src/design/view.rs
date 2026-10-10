@@ -3,11 +3,11 @@
 //! `DESIGN_DIR` ignored: it shows what a publish would put live) with its
 //! own template environment.
 //!
-//! The draft site is cached and rebuilt only when its inputs change. Every
-//! preview request re-lists `design-draft/` (downloading only objects whose
-//! version moved, as [`stored`](super::stored) does), so an edit from any
-//! surface — API, MCP, assistant or a bucket edit — shows on the next
-//! request.
+//! The draft site is cached and rebuilt only when its inputs change. A
+//! refreshing call (a preview page) re-lists `design-draft/` (downloading
+//! only objects whose version moved, as [`stored`](super::stored) does), so
+//! an edit from any surface — API, MCP, assistant or a bucket edit — shows
+//! on the next page load; assets reuse what that page load built.
 
 use std::sync::Arc;
 
@@ -60,16 +60,18 @@ impl DraftSite {
         // Templates compile lazily on first use and stay cached in the
         // environment, so a broken one fails only the pages that use it —
         // with the error a preview shows in full.
-        let env = Arc::new(crate::templates::environment(files.clone()));
-        Self { files, env }
+        let mut env = crate::templates::environment(files.clone());
+        // Release builds default to no debug info, which would drop the
+        // source excerpt from the preview's error page (admin-only).
+        env.set_debug(true);
+        Self {
+            files,
+            env: Arc::new(env),
+        }
     }
 
     pub fn env(&self) -> Arc<Environment<'static>> {
         self.env.clone()
-    }
-
-    pub fn files(&self) -> &Files {
-        &self.files
     }
 }
 
@@ -112,8 +114,18 @@ fn draft_stamp(cache: &Cache) -> Vec<(String, Option<Version>)> {
 
 impl DesignStore {
     /// The draft view as a renderable site, rebuilt only when the draft or
-    /// the published design changed since the last call.
-    pub async fn draft_site(&self, storage: &Storage) -> Result<Arc<DraftSite>, DesignError> {
+    /// the published design changed since the last refresh. Without
+    /// `refresh` the last built site is reused untouched: a page's assets
+    /// then load in parallel instead of queueing on the draft mutex for a
+    /// storage round trip each.
+    pub async fn draft_site(
+        &self,
+        storage: &Storage,
+        refresh: bool,
+    ) -> Result<Arc<DraftSite>, DesignError> {
+        if !refresh && let Some((_, site)) = &self.draft_site.lock().0 {
+            return Ok(site.clone());
+        }
         let mut cache = self.draft.lock().await;
         let initialized = read_meta(storage).await?.is_some();
         if initialized {
@@ -173,5 +185,16 @@ mod tests {
             site.load("assets/css/style.css").is_some(),
             "baked fallback"
         );
+    }
+
+    #[test]
+    fn draft_errors_carry_the_source_excerpt_in_every_profile() {
+        let mut files = Files::new();
+        files.insert("templates/x.html".into(), Bytes::from("a\n{% if %}"));
+        let site = DraftSite::new(files);
+        assert!(site.env().debug(), "debug info is on regardless of profile");
+        let err = site.env().get_template("x.html").expect_err("syntax error");
+        let excerpt = err.display_debug_info().to_string();
+        assert!(excerpt.contains("{% if %}"), "{excerpt}");
     }
 }
