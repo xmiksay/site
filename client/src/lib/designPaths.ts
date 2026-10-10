@@ -26,9 +26,36 @@ export function parentFolder(path: string): string {
   return slash === -1 ? '' : path.slice(0, slash)
 }
 
-export function designFileUrl(path: string, baked = false): string {
+/** Which view a draft file read comes from (`GET /api/design/draft/{path}?source=`). */
+export type DesignSource = 'draft' | 'published' | 'baked'
+
+export function designFileUrl(path: string, source: DesignSource = 'draft'): string {
   const encoded = path.split('/').map(encodeURIComponent).join('/')
-  return `/api/design/draft/${encoded}${baked ? '?source=baked' : ''}`
+  return `/api/design/draft/${encoded}${source === 'draft' ? '' : `?source=${source}`}`
+}
+
+/** A site-relative URL for the preview iframe from what the admin typed, never
+ *  leaving `origin`: browsers drop tabs/newlines and read `\` as `/`, so
+ *  `/\t/host` or `/\host` would otherwise become a protocol-relative URL. */
+export function previewPath(input: string, origin: string = location.origin): string {
+  const path = `/${input.replace(/[\t\n\r]/g, '').trim().replace(/^[/\\]+/, '')}`
+  try {
+    const url = new URL(path, origin)
+    return url.origin === origin ? `${url.pathname}${url.search}${url.hash}` : '/'
+  } catch {
+    return '/'
+  }
+}
+
+const FONT_EXTENSIONS = new Set(['woff', 'woff2', 'ttf', 'otf', 'eot'])
+
+/** Where an uploaded file lands by default: images under `assets/img/`, fonts
+ *  under `assets/fonts/`, anything else in the folder picked in the tree. */
+export function defaultUploadPath(name: string, folder: string): string {
+  const ext = extension(name)
+  if (FONT_EXTENSIONS.has(ext)) return `assets/fonts/${name}`
+  if (IMAGE_EXTENSIONS.has(ext)) return `assets/img/${name}`
+  return folder ? `${folder}/${name}` : name
 }
 
 /** Returns an error message, or null when `path` is an acceptable override target. */

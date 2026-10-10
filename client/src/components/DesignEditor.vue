@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ApiError } from '../api'
 import { useDesignStore } from '../stores/design'
 import { designFileUrl, fileStatus, isImagePath, isTextPath } from '../lib/designPaths'
+import type { DesignSource } from '../lib/designPaths'
 import { formatBytes } from '../lib/format'
 import type { DesignFile } from '../types'
 
@@ -18,13 +20,32 @@ const busy = ref(false)
 const error = ref('')
 const content = ref('')
 const original = ref('')
-// True once the textarea is writable: an existing override, or a baked file the
-// user chose to override (the override does not exist until Save).
-const editing = ref(false)
+// A baked file the admin chose to override; the override exists only after Save.
+const pendingOverride = ref(false)
+// Derived from the file's own state, so a draft change made elsewhere (the AI
+// overriding or reverting this file) flips it without a reload.
+const editing = computed(() => props.file.overridden || pendingOverride.value)
 const previewUrl = ref<string | null>(null)
+// 'published' / 'baked' show that version read-only beside the draft; the
+// draft edit stays untouched underneath.
+const source = ref<DesignSource>('draft')
+const sourceText = ref('')
+const sourceUrl = ref<string | null>(null)
+const sourceMissing = ref(false)
 
 const dirty = computed(
-  () => editing.value && (content.value !== original.value || !props.file.overridden),
+  () => pendingOverride.value || (editing.value && content.value !== original.value),
+)
+// Sync, so `editing` and `dirty` never see the flip half-applied: an override
+// appearing ends a pending one; one reverted under unsaved edits keeps them
+// editable as a pending override.
+watch(
+  () => props.file.overridden,
+  (overridden) => {
+    if (overridden) pendingOverride.value = false
+    else if (content.value !== original.value) pendingOverride.value = true
+  },
+  { flush: 'sync' },
 )
 watch(dirty, (d) => emit('dirty', d), { immediate: true })
 
@@ -49,6 +70,50 @@ function setPreview(blob: Blob | null) {
   previewUrl.value = blob ? URL.createObjectURL(blob) : null
 }
 
+function setSourceUrl(blob: Blob | null) {
+  if (sourceUrl.value) URL.revokeObjectURL(sourceUrl.value)
+  sourceUrl.value = blob ? URL.createObjectURL(blob) : null
+}
+
+async function loadSource() {
+  if (source.value === 'draft') return
+  sourceMissing.value = false
+  try {
+    const blob = await design.fetchContent(props.file.path, source.value)
+    if (isText.value) sourceText.value = await blob.text()
+    else setSourceUrl(blob)
+  } catch (e) {
+    if (!(e instanceof ApiError && e.status === 404)) throw e
+    sourceMissing.value = true
+    sourceText.value = ''
+    setSourceUrl(null)
+  }
+}
+watch(source, () => run(loadSource))
+
+// Another surface (the AI, another tab) changed the draft: pick up this
+// file's new content unless the admin is editing it.
+watch(
+  () => design.revision,
+  async () => {
+    if (dirty.value || busy.value || loading.value) return
+    try {
+      if (isText.value) {
+        const text = await design.fetchText(props.file.path)
+        if (!dirty.value && text !== original.value) {
+          content.value = text
+          original.value = text
+        }
+      } else if (isImage.value) {
+        setPreview(await design.fetchContent(props.file.path))
+      }
+      await loadSource()
+    } catch {
+      // The file may be gone from the draft; the parent unmounts us then.
+    }
+  },
+)
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -56,7 +121,6 @@ async function load() {
     if (isText.value) {
       content.value = await design.fetchText(props.file.path)
       original.value = content.value
-      editing.value = props.file.overridden
     } else if (isImage.value) {
       setPreview(await design.fetchContent(props.file.path))
     }
@@ -69,14 +133,14 @@ async function load() {
 
 function startOverride() {
   return run(async () => {
-    content.value = await design.fetchText(props.file.path, true)
+    content.value = await design.fetchText(props.file.path, 'baked')
     original.value = content.value
-    editing.value = true
+    pendingOverride.value = true
   })
 }
 
 function cancelOverride() {
-  editing.value = false
+  pendingOverride.value = false
   return load()
 }
 
@@ -86,6 +150,7 @@ function save() {
     const body = content.value
     await design.save(props.file.path, body)
     original.value = body
+    pendingOverride.value = false
   })
 }
 
@@ -114,6 +179,7 @@ function replace(e: Event) {
 onMounted(load)
 onBeforeUnmount(() => {
   setPreview(null)
+  setSourceUrl(null)
   emit('dirty', false)
 })
 </script>
@@ -125,12 +191,32 @@ onBeforeUnmount(() => {
       <span class="text-xs rounded px-1.5 py-0.5 bg-gray-100 text-gray-700">{{ status }}</span>
       <span class="text-xs text-gray-500">{{ formatBytes(file.size) }}</span>
       <span v-if="dirty" class="text-xs text-amber-700">● unsaved changes</span>
+      <select v-model="source" class="ml-auto rounded border border-gray-300 px-1 py-0.5 text-xs" aria-label="Version">
+        <option value="draft">Draft (editable)</option>
+        <option value="published">Published</option>
+        <option value="baked">Baked default</option>
+      </select>
     </div>
 
     <p v-if="error" class="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2 whitespace-pre-wrap font-mono">
       {{ error }}
     </p>
     <p v-if="loading" class="text-sm text-gray-400">Loading…</p>
+
+    <template v-else-if="source !== 'draft'">
+      <p v-if="sourceMissing" class="text-sm text-gray-500">Not in the {{ source }} design.</p>
+      <textarea
+        v-else-if="isText"
+        :value="sourceText"
+        readonly
+        spellcheck="false"
+        rows="28"
+        class="w-full rounded border border-gray-300 px-2 py-1.5 text-xs font-mono leading-relaxed bg-gray-50 text-gray-600"
+        data-test="source-view"
+      ></textarea>
+      <img v-else-if="isImage && sourceUrl" :src="sourceUrl" :alt="`${file.path} (${source})`" class="max-h-80 max-w-full" />
+      <p v-else class="text-sm text-gray-500">Binary file — no inline view.</p>
+    </template>
 
     <template v-else-if="isText">
       <textarea
@@ -155,7 +241,7 @@ onBeforeUnmount(() => {
       <p v-else class="text-sm text-gray-500">Binary file — no inline editor.</p>
     </template>
 
-    <div class="flex flex-wrap items-center gap-2 text-sm">
+    <div v-if="source === 'draft'" class="flex flex-wrap items-center gap-2 text-sm">
       <a
         :href="designFileUrl(file.path)"
         :download="file.path.split('/').pop()"

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { api, apiVoid } from '../api'
 import { useLiveTurns } from './assistantLiveTurns'
 import type {
@@ -19,7 +19,11 @@ import type {
 export const useAssistantStore = defineStore('assistant', () => {
   const sessions = ref<AssistantSession[]>([])
   const current = ref<AssistantSessionDetail | null>(null)
+  // Whether the *open* session is busy. Requests are tracked per session, so
+  // a turn still running in another view (the assistant vs the Design
+  // studio share `current`) neither blocks nor takes over the open chat.
   const sending = ref(false)
+  const busy = reactive(new Set<number>())
 
   // `live`/`liveSubAgents` fold the `assistant` WS topic into in-progress
   // turn state — see `assistantLiveTurns.ts`'s doc. `loadSession` is a
@@ -27,6 +31,28 @@ export const useAssistantStore = defineStore('assistant', () => {
   // definition further down is fine — the whole store's setup body runs
   // synchronously before anything can call into `useLiveTurns`'s WS handler.
   const { live, liveSubAgents, resolveLiveToolCall } = useLiveTurns(current, sending, loadSession)
+
+  watch(
+    () => current.value?.id,
+    (id) => {
+      sending.value = id != null && busy.has(id)
+    },
+  )
+
+  /** Runs a request that answers session `id`'s detail, adopting it only
+   *  while that session is still the open one. */
+  async function forSession(id: number, request: () => Promise<AssistantSessionDetail>) {
+    busy.add(id)
+    if (current.value?.id === id) sending.value = true
+    try {
+      const detail = await request()
+      if (current.value?.id === id) current.value = detail
+      return detail
+    } finally {
+      busy.delete(id)
+      if (current.value?.id === id) sending.value = false
+    }
+  }
 
   async function loadSessions() {
     sessions.value = await api<AssistantSession[]>('/api/assistant/sessions')
@@ -87,53 +113,40 @@ export const useAssistantStore = defineStore('assistant', () => {
     await loadSessions()
   }
 
-  async function sendMessage(id: number, text: string) {
-    sending.value = true
-    try {
-      current.value = await api<AssistantSessionDetail>(
-        `/api/assistant/sessions/${id}/messages`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ text }),
-        },
-      )
-    } finally {
-      sending.value = false
-    }
-    return current.value
+  function sendMessage(id: number, text: string) {
+    return forSession(id, () =>
+      api<AssistantSessionDetail>(`/api/assistant/sessions/${id}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      }),
+    )
   }
 
-  async function compactSession(
+  function compactSession(
     id: number,
     input: { instructions?: string; kept?: number } = {},
   ) {
-    sending.value = true
-    try {
-      current.value = await api<AssistantSessionDetail>(
-        `/api/assistant/sessions/${id}/compact`,
-        { method: 'POST', body: JSON.stringify(input) },
-      )
-    } finally {
-      sending.value = false
-    }
-    return current.value
+    // Compaction keeps the row id (only the engine session is repointed), so
+    // the answer is adopted like any other turn's.
+    return forSession(id, () =>
+      api<AssistantSessionDetail>(`/api/assistant/sessions/${id}/compact`, {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    )
   }
 
-  async function approveToolCalls(
+  function approveToolCalls(
     sessionId: number,
     messageId: number,
     decisions: Array<{ tool_call_id: string; approve: boolean; remember?: boolean }>,
   ) {
-    sending.value = true
-    try {
-      current.value = await api<AssistantSessionDetail>(
+    return forSession(sessionId, () =>
+      api<AssistantSessionDetail>(
         `/api/assistant/sessions/${sessionId}/messages/${messageId}/approve`,
         { method: 'POST', body: JSON.stringify({ decisions }) },
-      )
-    } finally {
-      sending.value = false
-    }
-    return current.value
+      ),
+    )
   }
 
   // ---- MCP servers ----

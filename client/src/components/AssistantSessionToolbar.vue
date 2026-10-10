@@ -150,7 +150,7 @@ async function applyThinkingBudget() {
 </script>
 
 <template>
-  <div v-if="assistant.current" class="text-xs text-gray-500 flex items-center gap-2">
+  <div v-if="assistant.current" class="text-xs text-gray-500 flex flex-wrap items-center gap-2">
     <span
       v-if="readOnly"
       class="rounded bg-gray-100 px-2 py-1 whitespace-nowrap"

@@ -1,19 +1,29 @@
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** Machine-readable kind of a rejection the client acts on (e.g. `conflict`). */
+  code?: string
+  /** The rejection's items (failing templates, conflicting paths). */
+  details?: string[]
+  constructor(status: number, message: string, code?: string, details?: string[]) {
     super(message)
     this.status = status
+    this.code = code
+    this.details = details
   }
 }
 
-async function parseError(resp: Response): Promise<string> {
+async function parseError(resp: Response): Promise<ApiError> {
   try {
     const body = await resp.json()
-    if (body && typeof body.error === 'string') return body.error
+    if (body && typeof body.error === 'string') {
+      const code = typeof body.code === 'string' ? body.code : undefined
+      const details = Array.isArray(body.details) ? body.details.map(String) : undefined
+      return new ApiError(resp.status, body.error, code, details)
+    }
   } catch {
     // ignore
   }
-  return `${resp.status} ${resp.statusText}`
+  return new ApiError(resp.status, `${resp.status} ${resp.statusText}`)
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -23,7 +33,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   const resp = await fetch(path, { ...init, credentials: 'include', headers })
   if (!resp.ok) {
-    throw new ApiError(resp.status, await parseError(resp))
+    throw await parseError(resp)
   }
   if (resp.status === 204) {
     return undefined as T
@@ -41,7 +51,7 @@ export async function apiBlob(
 ): Promise<{ blob: Blob; filename: string }> {
   const resp = await fetch(path, { ...init, credentials: 'include' })
   if (!resp.ok) {
-    throw new ApiError(resp.status, await parseError(resp))
+    throw await parseError(resp)
   }
   const disposition = resp.headers.get('Content-Disposition')
   const match = disposition ? /filename="?([^"]+)"?/.exec(disposition) : null

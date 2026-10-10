@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useDesignStore } from '../stores/design'
-import { validateDesignPath } from '../lib/designPaths'
+import { defaultUploadPath, validateDesignPath } from '../lib/designPaths'
 
-const props = defineProps<{ folder: string }>()
+// `dirtyPath`: the file open in the editor with unsaved edits, if any.
+const props = defineProps<{ folder: string; dirtyPath?: string | null }>()
 const emit = defineEmits<{ uploaded: [path: string] }>()
 
 const design = useDesignStore()
@@ -19,12 +20,14 @@ const canSubmit = computed(() => !busy.value && file.value && target.value && !p
 
 function pick(e: Event) {
   file.value = (e.target as HTMLInputElement).files?.[0] ?? null
-  if (file.value) target.value = props.folder ? `${props.folder}/${file.value.name}` : file.value.name
+  if (file.value) target.value = defaultUploadPath(file.value.name, props.folder)
 }
 
 async function submit() {
   if (!canSubmit.value || !file.value) return
-  if (exists.value && !confirm(`Overwrite ${target.value}?`)) return
+  if (target.value === props.dirtyPath) {
+    if (!confirm(`Overwrite ${target.value} and discard its unsaved edits?`)) return
+  } else if (exists.value && !confirm(`Overwrite ${target.value}?`)) return
   busy.value = true
   error.value = ''
   try {
@@ -45,10 +48,10 @@ async function submit() {
 <template>
   <form class="bg-white rounded shadow p-3 space-y-2 text-sm" @submit.prevent="submit">
     <h2 class="font-semibold">Upload to draft</h2>
-    <input :key="inputKey" type="file" @change="pick" />
+    <input :key="inputKey" type="file" class="w-full" @change="pick" />
     <input
       v-model="target"
-      placeholder="Target path (e.g. assets/img/logo.png)"
+      placeholder="Target path (images → assets/img/, fonts → assets/fonts/)"
       class="w-full rounded border border-gray-300 px-2 py-1.5 font-mono"
     />
     <p v-if="pathError" class="text-red-600">{{ pathError }}</p>
