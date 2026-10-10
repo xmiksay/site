@@ -194,6 +194,7 @@ mod tests {
             supports_temperature,
             supports_reasoning_effort,
             supports_thinking,
+            supports_images: true,
             created_at: chrono::Utc::now().fixed_offset(),
         }
     }

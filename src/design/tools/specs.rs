@@ -46,7 +46,7 @@ pub const TOOLS: &[Spec] = &[
     },
     Spec {
         name: READ,
-        description: "Read one design file. UTF-8 content comes back as `data`, anything else (fonts, images) as `data_base64`, with its `mimetype`. `source`: `draft` (default; the draft's copy, else the baked default), `published` (what the live site serves) or `baked` (the shipped default).",
+        description: "Read one design file. UTF-8 content comes back as `data`, anything else (fonts, images) as `data_base64`, with its `mimetype` — except in the site's own assistant, which is shown a raster image (PNG, JPEG, WebP, GIF) as an image to look at, downscaled to at most 1568 px. `source`: `draft` (default; the draft's copy, else the baked default), `published` (what the live site serves) or `baked` (the shipped default).",
         schema: || {
             json!({
                 "type": "object",

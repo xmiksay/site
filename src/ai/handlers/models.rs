@@ -22,6 +22,7 @@ pub struct ModelView {
     pub supports_temperature: bool,
     pub supports_reasoning_effort: bool,
     pub supports_thinking: bool,
+    pub supports_images: bool,
     pub created_at: String,
 }
 
@@ -40,6 +41,8 @@ pub struct CreateModel {
     pub supports_reasoning_effort: Option<bool>,
     #[serde(default)]
     pub supports_thinking: Option<bool>,
+    #[serde(default)]
+    pub supports_images: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -58,6 +61,8 @@ pub struct UpdateModel {
     pub supports_reasoning_effort: Option<bool>,
     #[serde(default)]
     pub supports_thinking: Option<bool>,
+    #[serde(default)]
+    pub supports_images: Option<bool>,
 }
 
 async fn enrich(state: &AppState, rows: Vec<llm_model::Model>) -> ApiResult<Vec<ModelView>> {
@@ -84,6 +89,7 @@ async fn enrich(state: &AppState, rows: Vec<llm_model::Model>) -> ApiResult<Vec<
                 supports_temperature: m.supports_temperature,
                 supports_reasoning_effort: m.supports_reasoning_effort,
                 supports_thinking: m.supports_thinking,
+                supports_images: m.supports_images,
                 created_at: m.created_at.to_string(),
             })
         })
@@ -129,6 +135,7 @@ pub async fn create(
         supports_temperature: Set(input.supports_temperature.unwrap_or(true)),
         supports_reasoning_effort: Set(input.supports_reasoning_effort.unwrap_or(false)),
         supports_thinking: Set(input.supports_thinking.unwrap_or(false)),
+        supports_images: Set(input.supports_images.unwrap_or(true)),
         ..Default::default()
     }
     .insert(&state.db)
@@ -182,6 +189,9 @@ pub async fn update(
     }
     if let Some(v) = input.supports_thinking {
         active.supports_thinking = Set(v);
+    }
+    if let Some(v) = input.supports_images {
+        active.supports_images = Set(v);
     }
     let updated = active.update(&state.db).await?;
     state

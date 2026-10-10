@@ -34,6 +34,7 @@ mod m_031_purge_assistant_history;
 mod m_032_add_assistant_sessions_parent;
 mod m_033_file_blobs_data_nullable;
 mod m_034_create_storage_objects;
+mod m_035_add_llm_models_supports_images;
 
 pub struct Migrator;
 
@@ -75,6 +76,7 @@ impl MigratorTrait for Migrator {
             Box::new(m_032_add_assistant_sessions_parent::Migration),
             Box::new(m_033_file_blobs_data_nullable::Migration),
             Box::new(m_034_create_storage_objects::Migration),
+            Box::new(m_035_add_llm_models_supports_images::Migration),
         ]
     }
 }

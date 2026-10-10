@@ -31,6 +31,10 @@ pub struct Model {
     /// Gates the `GenerationParams.thinking_budget_tokens` knob (#53, m_029);
     /// same rationale as `supports_reasoning_effort`.
     pub supports_thinking: bool,
+    /// Whether `file_read`/`design_read` may answer with an image block
+    /// (#132, m_035); off → they fall back to a text note, since a
+    /// text-only model would reject the whole turn.
+    pub supports_images: bool,
     pub created_at: DateTimeWithTimeZone,
 }
 

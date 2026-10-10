@@ -40,6 +40,7 @@ impl Fixture {
     async fn json(&self, name: &str, args: Value) -> Value {
         match self.call(name, args).await {
             Ok(Output::Json(v)) => v,
+            Ok(Output::File { path, bytes }) => super::file_json(&path, &bytes),
             Ok(Output::Text(t)) => panic!("{name}: expected JSON, got text {t:?}"),
             Err(e) => panic!("{name}: {e:?}"),
         }

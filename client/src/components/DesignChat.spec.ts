@@ -4,7 +4,6 @@ import { setActivePinia, createPinia } from 'pinia'
 import { defineComponent, h } from 'vue'
 import DesignChat from './DesignChat.vue'
 import { useAssistantStore } from '../stores/assistant'
-import { useDesignStore } from '../stores/design'
 import type { AssistantSession, AssistantSessionDetail, LlmModel } from '../types'
 
 function session(id: number, agent_profile: string, parent_session_id: number | null = null): AssistantSession {
@@ -85,29 +84,17 @@ describe('DesignChat', () => {
     expect(loadSession).toHaveBeenLastCalledWith(9)
   })
 
-  it('"Attach asset…" uploads into the draft and notes the path in the composer', async () => {
+  it('attaches through the composer only — no separate "Attach asset…" action', async () => {
     setup([session(3, 'designer')])
-    const design = useDesignStore()
-    const save = vi.spyOn(design, 'save').mockResolvedValue()
-    const insert = vi.fn()
-    // Renders the `actions` slot (where the attach control lives) and
-    // exposes `insert` like the real panel.
+    // Renders the `actions` slot, where the old attach control lived.
     const ChatPanel = defineComponent({
-      setup(_, { expose, slots }) {
-        expose({ insert })
+      setup(_, { slots }) {
         return () => h('div', slots.actions?.())
       },
     })
     const wrapper = mount(DesignChat, { global: { stubs: { ChatPanel } } })
     await flushPromises()
-
-    const input = wrapper.find('input[type="file"]')
-    const file = new File(['x'], 'logo.png', { type: 'image/png' })
-    Object.defineProperty(input.element, 'files', { value: [file] })
-    await input.trigger('change')
-    await flushPromises()
-
-    expect(save).toHaveBeenCalledWith('assets/img/logo.png', file)
-    expect(insert).toHaveBeenCalledWith('I uploaded assets/img/logo.png to the draft.')
+    expect(wrapper.find('input[type="file"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Attach asset')
   })
 })

@@ -317,6 +317,8 @@ export interface LlmModel {
   supports_reasoning_effort: boolean
   /** Whether this model accepts a `thinking_budget_tokens` generation override (#53). */
   supports_thinking: boolean
+  /** Whether `file_read`/`design_read` may show this model images (#132); off → a text note. */
+  supports_images: boolean
   created_at: string
 }
 
@@ -329,6 +331,7 @@ export interface LlmModelInput {
   supports_temperature?: boolean
   supports_reasoning_effort?: boolean
   supports_thinking?: boolean
+  supports_images?: boolean
 }
 
 export interface ToolPermission {

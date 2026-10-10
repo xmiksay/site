@@ -3,17 +3,14 @@
 // profile, which edits the shared draft. A chat with history cannot switch
 // into `designer` (the API answers 409), so this panel only ever creates new
 // Designer chats or resumes earlier ones — never switches the open chat.
+// Attaching images and fonts goes through the composer: the server stores a
+// Designer chat's attachments in the draft's assets/ (#132).
 import { computed, onMounted, ref } from 'vue'
 import { useAssistantStore } from '../stores/assistant'
-import { useDesignStore } from '../stores/design'
-import { defaultUploadPath } from '../lib/designPaths'
 import ChatPanel from './ChatPanel.vue'
 
 const assistant = useAssistantStore()
-const design = useDesignStore()
-const chat = ref<InstanceType<typeof ChatPanel> | null>(null)
 const error = ref('')
-const uploading = ref(false)
 
 const designerSessions = computed(() =>
   assistant.sessions.filter((s) => s.agent_profile === 'designer' && s.parent_session_id == null),
@@ -46,25 +43,6 @@ async function newChat() {
     await assistant.loadSession(s.id)
   } catch (e) {
     error.value = message(e)
-  }
-}
-
-async function attach(e: Event) {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-  const path = defaultUploadPath(file.name, 'assets/img')
-  if (design.files.some((f) => f.path === path) && !confirm(`Overwrite ${path}?`)) return
-  uploading.value = true
-  error.value = ''
-  try {
-    await design.save(path, file)
-    chat.value?.insert(`I uploaded ${path} to the draft.`)
-  } catch (err) {
-    error.value = message(err)
-  } finally {
-    uploading.value = false
   }
 }
 
@@ -105,7 +83,6 @@ onMounted(async () => {
     </p>
     <ChatPanel
       v-if="current"
-      ref="chat"
       class="flex-1"
       placeholder="Describe the design change…  (Cmd+Enter to send)"
     >
@@ -118,21 +95,6 @@ onMounted(async () => {
         >
           ← Back to the Designer chat
         </button>
-        <label
-          v-else
-          class="text-xs rounded border border-line-1 px-2 py-1 hover:bg-surface-raised cursor-pointer"
-          :class="{ 'opacity-50': uploading }"
-          title="Upload an image or font into the draft's assets/"
-        >
-          {{ uploading ? 'Uploading…' : 'Attach asset…' }}
-          <input
-            type="file"
-            class="hidden"
-            accept="image/*,.woff,.woff2,.ttf,.otf"
-            :disabled="uploading"
-            @change="attach"
-          />
-        </label>
       </template>
     </ChatPanel>
     <div v-else class="flex-1 flex items-center justify-center p-4 text-center text-sm text-fg-3">

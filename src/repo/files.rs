@@ -139,6 +139,14 @@ pub fn infer_mimetype(path: &str) -> String {
     }
 }
 
+/// An upload's declared content type, unless the browser only shrugged
+/// (`application/octet-stream`) — then the path's extension decides.
+pub fn resolve_mimetype(declared: Option<String>, path: &str) -> String {
+    declared
+        .filter(|m| !m.is_empty() && m != "application/octet-stream")
+        .unwrap_or_else(|| infer_mimetype(path))
+}
+
 /// Whether a mimetype's bytes are safe to decode and return as UTF-8 text —
 /// covers the site's own text-ish directive formats (`.pgn`/`.mmd`/`.fen`/
 /// `.json`, per `infer_mimetype`/`embed_hint` above) plus generic `text/*`.
@@ -249,6 +257,17 @@ pub async fn find_with_thumbnail(
         model,
         has_thumbnail,
     }))
+}
+
+/// `path` is normalized first, like every stored path.
+pub async fn find_by_path(
+    db: &DatabaseConnection,
+    path: &str,
+) -> Result<Option<file::Model>, DbErr> {
+    file::Entity::find()
+        .filter(file::Column::Path.eq(path_util::normalize(path)))
+        .one(db)
+        .await
 }
 
 pub async fn find_by_hash(

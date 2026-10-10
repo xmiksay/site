@@ -15,6 +15,7 @@ const draft = ref<LlmModelInput>({
   supports_temperature: true,
   supports_reasoning_effort: false,
   supports_thinking: false,
+  supports_images: true,
 })
 
 interface EditDraft {
@@ -24,6 +25,7 @@ interface EditDraft {
   supports_temperature: boolean
   supports_reasoning_effort: boolean
   supports_thinking: boolean
+  supports_images: boolean
 }
 const editingId = ref<number | null>(null)
 const editDraft = ref<EditDraft>({
@@ -33,6 +35,7 @@ const editDraft = ref<EditDraft>({
   supports_temperature: true,
   supports_reasoning_effort: false,
   supports_thinking: false,
+  supports_images: true,
 })
 
 onMounted(async () => {
@@ -73,6 +76,7 @@ async function create() {
     supports_temperature: draft.value.supports_temperature,
     supports_reasoning_effort: draft.value.supports_reasoning_effort,
     supports_thinking: draft.value.supports_thinking,
+    supports_images: draft.value.supports_images,
   })
   draft.value = {
     provider_id: assistant.providers[0]?.id ?? 0,
@@ -83,6 +87,7 @@ async function create() {
     supports_temperature: true,
     supports_reasoning_effort: false,
     supports_thinking: false,
+    supports_images: true,
   }
   showCreate.value = false
 }
@@ -96,6 +101,7 @@ function startEdit(m: LlmModel) {
     supports_temperature: m.supports_temperature,
     supports_reasoning_effort: m.supports_reasoning_effort,
     supports_thinking: m.supports_thinking,
+    supports_images: m.supports_images,
   }
 }
 
@@ -125,6 +131,9 @@ async function saveEdit(m: LlmModel) {
   }
   if (editDraft.value.supports_thinking !== m.supports_thinking) {
     patch.supports_thinking = editDraft.value.supports_thinking
+  }
+  if (editDraft.value.supports_images !== m.supports_images) {
+    patch.supports_images = editDraft.value.supports_images
   }
   if (Object.keys(patch).length > 0) {
     await assistant.updateModel(m.id, patch)
@@ -210,6 +219,9 @@ async function remove(id: number, label: string) {
         <input v-model="draft.supports_thinking" type="checkbox" /> supports thinking budget
       </label>
       <label class="flex items-center gap-2 text-sm">
+        <input v-model="draft.supports_images" type="checkbox" /> sees images (file_read / design_read)
+      </label>
+      <label class="flex items-center gap-2 text-sm">
         <input v-model="draft.is_default" type="checkbox" /> default for new chats
       </label>
       <div class="flex justify-end">
@@ -253,6 +265,11 @@ async function remove(id: number, label: string) {
                   :class="m.supports_thinking ? 'bg-success-bg text-success-strong' : 'bg-surface-raised text-fg-4'"
                   title="Thinking budget"
                 >Th</span>
+                <span
+                  class="rounded px-1.5 py-0.5"
+                  :class="m.supports_images ? 'bg-success-bg text-success-strong' : 'bg-surface-raised text-fg-4'"
+                  title="Sees images"
+                >Img</span>
               </td>
               <td class="px-4 py-2">
                 <span v-if="m.is_default" class="text-xs text-success-strong font-semibold">default</span>
@@ -325,6 +342,9 @@ async function remove(id: number, label: string) {
                   </label>
                   <label class="flex items-center gap-2 text-sm">
                     <input v-model="editDraft.supports_thinking" type="checkbox" /> supports thinking budget
+                  </label>
+                  <label class="flex items-center gap-2 text-sm">
+                    <input v-model="editDraft.supports_images" type="checkbox" /> sees images (file_read / design_read)
                   </label>
                   <div class="flex justify-end">
                     <button

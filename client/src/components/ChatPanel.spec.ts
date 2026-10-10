@@ -69,12 +69,33 @@ describe('ChatPanel', () => {
     expect(localStorage.getItem('assistant_page_session_7')).toBe('11')
   })
 
-  it('insert() reaches the composer', async () => {
+  it('files dropped on the chat become composer attachments', async () => {
     const { assistant } = setup()
     assistant.current = { id: 1, title: 't', messages: [{ id: 1 }] } as unknown as AssistantSessionDetail
     const wrapper = mount(ChatPanel, { global: { stubs } })
-    ;(wrapper.vm as unknown as { insert(t: string): void }).insert('note')
+    const file = new File(['x'], 'shot.png', { type: 'image/png' })
+    const dataTransfer = { types: ['Files'], files: [file] }
+
+    const over = new Event('dragover', { cancelable: true })
+    Object.defineProperty(over, 'dataTransfer', { value: dataTransfer })
+    wrapper.element.dispatchEvent(over)
+    expect(over.defaultPrevented).toBe(true)
+
+    const drop = new Event('drop', { cancelable: true })
+    Object.defineProperty(drop, 'dataTransfer', { value: dataTransfer })
+    wrapper.element.dispatchEvent(drop)
     await flushPromises()
-    expect(wrapper.find('textarea').element.value).toBe('note')
+    expect(drop.defaultPrevented).toBe(true)
+    expect(wrapper.find('li').text()).toContain('shot.png')
+  })
+
+  it('ignores a drag that carries no files', () => {
+    const { assistant } = setup()
+    assistant.current = { id: 1, title: 't', messages: [{ id: 1 }] } as unknown as AssistantSessionDetail
+    const wrapper = mount(ChatPanel, { global: { stubs } })
+    const over = new Event('dragover', { cancelable: true })
+    Object.defineProperty(over, 'dataTransfer', { value: { types: ['text/plain'], files: [] } })
+    wrapper.element.dispatchEvent(over)
+    expect(over.defaultPrevented).toBe(false)
   })
 })
