@@ -22,6 +22,7 @@ pub use view::{DraftSite, Resolve};
 /// via the `DESIGN_DIR` folder.
 #[derive(Embed)]
 #[folder = "design"]
+#[exclude = "README.md"]
 struct Baked;
 
 /// Runtime override of the baked-in design, supplied via a folder on disk.

@@ -1,112 +1,63 @@
-# Template preview
+# Design bundle
 
-Render the **real production MiniJinja templates** (`base.html`, `path_page.html`,
-`page_search.html`, `404.html`, `markdown/*.html`) filled with realistic dummy
-data into **standalone HTML files** — no Rust server, Postgres, or seed data.
+The baked default design of the public site, embedded into `site_server` via
+`rust-embed` (`src/design/`). A deployment overrides it per file from storage;
+this folder is the fallback and the starting point.
 
-Rendering happens in Node with [minijinja-js](https://github.com/mitsuhiko/minijinja)
-(the official WASM bindings). There is **no router and no in-browser WASM**: the
-build writes one ready-to-open page per render target. Edit a template, rebuild
-(or just refresh under the dev server), and see the change.
+## Layout
 
-What each template actually receives is specified by the generated
-[design contract](../docs/design-contract.md); the hand-written `fixtures.mjs`
-data is only an approximation and may differ from it.
+Only these three roots are deployable — anything else in this folder is never
+served, published or accepted by `site_cli design push` (this README is not
+even embedded):
 
-## Bundle layout
-
-The design bundle is split by how the server handles each part:
-
-- `templates/` — rendered by the template engine.
-- `assets/` — served statically under `/assets/*` (`assets/css`, `assets/js`,
-  `assets/img`).
-
-The preview tooling lives at the bundle root (`build.mjs`, `fixtures.mjs`,
-`placeholder.svg`). The build renders each target to its own file in
-**`preview/`**:
-
-```
-preview/index.html    path_page.html as the home / menu page (no page object)
-preview/page.html     path_page.html with a page fixture
-preview/search.html   page_search.html
-preview/404.html      404.html
-```
-
-## Run
-
-```bash
-cd design
-npm install
-npm run serve        # http://localhost:4321/  ->  /raw/preview/index.html
-```
-
-`npm run serve` starts a tiny dependency-free dev server that mounts the **whole
-design bundle at `/raw`** (`design/` ⇒ `/raw/`), exactly like the live designer
-tool. So the pages are at `/raw/preview/{index,page,search,404}.html` and assets
-at `/raw/assets/*`. The preview pages **re-render on every request**, so template
-and fixture edits show up on reload. A static server is required — `fetch`/module
-loading does not work over `file://`.
-
-To just write the files once (e.g. before building/deploying):
-
-```bash
-npm run build        # writes design/preview/
-```
-
-## Clickable links under the /raw mount
-
-The bundle is served under `/raw` (`design/assets/` ⇒ `/raw/assets/`,
-`design/preview/` ⇒ `/raw/preview/`). Links resolve there two ways:
-
-- **Page / menu / breadcrumb / search links** are authored in `fixtures.mjs`
-  pointing straight at the rendered files — `/raw/preview/index.html`,
-  `/raw/preview/page.html`, etc. — so the sidebar is working navigation between
-  the generated pages. No rewriting needed.
-- **Assets the templates hard-code** are rewritten by the build:
-  `/assets/*` → `/raw/assets/*`, and `/files/*` (real uploads we don't have) →
-  the bundled `/raw/assets/img/placeholder.svg`.
-
-The page-runtime JS (`jquery`, `chessboard`, `chess-viewer`, `lightbox`,
-`code-box`) loads from `/raw/assets/js` exactly as in production, so chess boards
-and lightboxes work in the preview. (A few non-page chrome links the templates
-hard-code — the logo `/`, `/search`, `/tag/N`, `/admin` — are left as-is.)
-
-## Previewing an override (DESIGN_DIR)
-
-The template loader mirrors the Rust `DesignStore` (`src/design.rs`): an override
-folder is preferred, falling back to this bundle. Point the preview at an override
-the same way the server does:
-
-```bash
-DESIGN_DIR=/path/to/override npm run serve
-# or
-node build.mjs --serve --design-dir=/path/to/override
-```
-
-Each template name resolves to `<override>/templates/<name>` when present, else
-`design/templates/<name>`.
-
-## What's faked, and why
-
-- **`timeformat` filter** — minijinja-js cannot register custom JS filters, so the
-  one custom filter (`src/state.rs`) is stripped out of the template source as it
-  loads; fixtures carry pre-formatted date strings. Single shim point; the
-  on-disk templates are untouched.
-- **Markdown directives** — the Rust directive parser (`expand_directives` in
-  `src/markdown/renderer.rs`) is **not** ported. Instead `fixtures.mjs` supplies the
-  pre-expanded directive contexts, and the markdown directive templates
-  (`markdown/page.html`, `gallery.html`, …) are rendered and concatenated into
-  `body_html`. A `<page>` transclude whose inner content itself contains a
-  rendered directive is encoded as a nested block tree — the loopback as data.
-- **Files & images** — `/files/*` is rewritten to the bundled
-  `/raw/assets/img/placeholder.svg`, since we have no real uploads (layout/CSS
-  preview).
-
-## Files
-
-| Path | Role |
+| Root | Role |
 |---|---|
-| `build.mjs` | Renders each fixture target to `preview/<file>.html` and runs the `--serve` dev server (mounts the bundle at `/raw`). |
-| `fixtures.mjs` | Default dummy data: one fixture per render target (with its output `file`) plus directive contexts and body block trees. |
-| `placeholder.svg` | Source stand-in image; copied to `assets/img/`, where rewritten `/files/*` URLs point. |
-| `preview/` | Build output: `index.html` (home/menu), `page.html`, `search.html`, `404.html`. |
+| `templates/` | MiniJinja templates of the public pages (`base.html`, `path_page.html`, `page_search.html`, `404.html`) and of the markdown directives (`markdown/*.html`) |
+| `assets/` | Static files served under `/assets/*` (`css/`, `js/`, `img/`) |
+| `mdcast/` | Export brand config (`brand.toml`) and typst / reveal.js overrides for PDF and slides exports |
+
+## Resolution order
+
+Every path (`templates/X`, `assets/X`, `mdcast/X`) resolves to the first of:
+
+1. `DESIGN_DIR/<path>` — dev-only local folder (debug builds read it live,
+   release builds freeze it at startup).
+2. The **published** design in storage (`design/<path>` keys).
+3. This baked bundle.
+
+See [Design overrides](../docs/architecture.md#design-overrides).
+
+## Editing workflow
+
+Deployments keep their design in storage, edited through one shared **draft**
+in the admin Design page:
+
+- **Draft** — any admin edits it (`/api/design/draft/*`); it is invisible to
+  visitors. A path the draft does not hold shows its baked default, so removing
+  a file from the draft reverts it.
+- **Preview** — turn on draft preview to browse the real site rendered with the
+  draft (session-only, with a banner and a template error page). See
+  [Draft preview](../docs/architecture.md#draft-preview).
+- **Publish** — validates the draft (template compile + a strict smoke render
+  against the site's real data), snapshots it to the history and makes it live
+  atomically.
+- **History** — every published version is kept; restoring one copies it into
+  the draft, to be published again.
+
+Other ways in:
+
+- `site_cli design push <dir>` uploads a folder in this layout **into the
+  draft** (paths outside the three roots are skipped); publish it from the
+  admin.
+- AI designer (planned, #118): `design_*` tools for the in-house assistant and
+  external agents over MCP that read and write the draft only — publishing
+  stays a human action.
+- Bucket edits of `design/` objects + **Reload** in the admin (bypasses the
+  draft; the next publish reports the conflict).
+
+## Template contract
+
+What each template receives is generated from the typed context structs:
+[`docs/design-contract.md`](../docs/design-contract.md) (and its JSON Schema
+`docs/design-contract.schema.json`). Regenerate both with `make contract`
+after changing a context; a unit test fails when they drift.
