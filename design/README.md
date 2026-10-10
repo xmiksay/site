@@ -7,7 +7,8 @@ this folder is the fallback and the starting point.
 ## Layout
 
 Only these three roots are deployable — anything else in this folder is never
-served, published or accepted by `site_cli design push`:
+served, published or accepted by `site_cli design push` (this README is not
+even embedded):
 
 | Root | Role |
 |---|---|
@@ -48,10 +49,9 @@ Other ways in:
 - `site_cli design push <dir>` uploads a folder in this layout **into the
   draft** (paths outside the three roots are skipped); publish it from the
   admin.
-- AI designer: the in-house assistant and external agents over MCP get
-  `design_*` tools that read and write the draft only (#118) — publishing stays
-  a human action. See the MCP tool list in
-  [`docs/architecture.md`](../docs/architecture.md).
+- AI designer (planned, #118): `design_*` tools for the in-house assistant and
+  external agents over MCP that read and write the draft only — publishing
+  stays a human action.
 - Bucket edits of `design/` objects + **Reload** in the admin (bypasses the
   draft; the next publish reports the conflict).
 
