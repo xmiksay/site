@@ -50,12 +50,14 @@ pub(crate) const DESIGNER_NEEDS_FRESH_CHAT: &str = "only a new chat can switch t
 /// injected instructions from content another profile read (`web_fetch`,
 /// page text, MCP output), which would then act without approval. A
 /// compacted successor counts as history too: it is seeded with a prompt.
+/// Only called for an actual switch (`update` treats a PATCH to the row's
+/// current profile as a no-op that sends nothing).
 async fn check_designer_switch(
     state: &AppState,
     session: &assistant_session::Model,
     target: &str,
 ) -> ApiResult<()> {
-    if target != DESIGNER_PROFILE || session.agent_profile == DESIGNER_PROFILE {
+    if target != DESIGNER_PROFILE {
         return Ok(());
     }
     let Some(engine_id) = &session.engine_session_id else {

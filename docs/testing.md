@@ -173,6 +173,12 @@ executes on every PR rather than self-skipping.
   unchanged; created-as-Designer chats may leave it, not come back. The
   client side (the 409 shown, the picker reset) is in
   `client/src/components/AssistantSessionToolbar.spec.ts`.
+- `tests/assistant_session_compact_profile.rs` — `/compact` keeps the agent
+  profile (#118): a compacted Designer and Researcher chat's successor runs
+  under that profile engine side (the executor's active-profile map and the
+  system prompt its seeded turn saw); a same-value `PATCH agent_profile`
+  sends no `SetAgent`; switching a chat with history into `designer` is
+  still 409.
 - `tests/design_smoke.rs` — `templates::smoke::smoke_render` (#117): the baked
   design renders clean and every contract template is exercised; an
   undefined variable (in a partial and in `base.html`, reported once) and a

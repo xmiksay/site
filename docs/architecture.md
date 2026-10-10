@@ -723,7 +723,14 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   through content another profile read (`web_fetch`, page text, MCP output),
   which would then act without approval
   (`handlers/sessions/mutate.rs::check_designer_switch`). Switching *out* of
-  `designer`, or staying in it, is always allowed; a sub-agent spawn is
+  `designer` is always allowed. A PATCH to the row's current profile is a
+  no-op that writes nothing and sends **no** `SetAgent` — so the row's
+  `agent_profile` can never be used to slip `SetAgent(designer)` past the
+  check. `/compact` keeps the profile: the successor is spawned under the
+  row's own profile (`compact.rs::successor_profile`), so a Designer chat
+  stays Designer — engine side, seeded first turn included — rather than
+  silently running as `build` under a Designer label; that is safe because
+  a `designer` row only ever holds `designer` history. A sub-agent spawn is
   covered by the chain minimum above. The design
   tools are `read`/`write` capability members, and `design_read`/
   `design_write`/`design_delete` scope by `path` (`write(assets/*)`).
@@ -817,7 +824,9 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     without mutating the source (ADR-0101). The handler then forks the
     summary into a fresh successor session (`InMsg::Spawn` with
     `predecessor: Some(source)`, a root — not a child — so closing the source
-    doesn't cascade onto it, ADR-0110), re-pins the successor's model
+    doesn't cascade onto it, ADR-0110; spawned under the session's own agent
+    profile, #118, so a Researcher/Page writer/Designer chat keeps its
+    profile, an unregistered row value falling back to `build`), re-pins the successor's model
     (`InMsg::SetModel`, best-effort — the successor's own seeded first turn
     already ran under the engine default by the time this lands, since
     `SetModel` is stashed behind a live turn), and retires the source

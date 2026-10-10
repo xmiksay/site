@@ -56,7 +56,12 @@ pub async fn update(
     // live onto the engine session — which for a child would mean resuming its
     // own id, the blank-resume trap `tree` documents.
     tree::require_root(&session, "update")?;
-    if let Some(name) = &input.agent_profile {
+    // The row's current profile is a no-op: nothing written, no `SetAgent`
+    // (which must never reach the engine without the designer check).
+    let new_profile = input
+        .agent_profile
+        .filter(|name| *name != session.agent_profile);
+    if let Some(name) = &new_profile {
         validate_agent_profile(name)?;
         check_designer_switch(&state, &session, name).await?;
     }
@@ -91,7 +96,7 @@ pub async fn update(
         new_mcp_ids = owned;
         mcp_changed = true;
     }
-    if let Some(name) = input.agent_profile {
+    if let Some(name) = new_profile {
         active.agent_profile = Set(name.clone());
         agent_changed = Some(name);
     }
