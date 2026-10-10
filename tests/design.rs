@@ -1,5 +1,6 @@
-//! Design overrides in storage (#110): the reload contract of
-//! `DesignStore::apply` over fs and S3 (and a dead S3), and `design push`.
+//! Design overrides in storage (#110, #114): the reload contract of
+//! `DesignStore::apply` over db, fs and S3 (and a dead S3), and `design push`
+//! over db and fs.
 //! The HTTP routes are in `tests/design_api.rs`.
 //!
 //! Gated on `DATABASE_URL` like every DB test; the S3 test fails, not skips,
@@ -39,7 +40,7 @@ fn put(path: &str, body: &str) -> Option<Change> {
     })
 }
 
-/// The `apply` contract every object backend honors.
+/// The `apply` contract every backend honors.
 async fn exercise_apply(ts: &TestStorage) {
     let design = Arc::new(DesignStore::new(None));
     let tmpl = Templates::new(design.clone());
@@ -141,6 +142,15 @@ async fn exercise_apply(ts: &TestStorage) {
 }
 
 #[tokio::test]
+async fn apply_over_db() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    exercise_apply(&TestStorage::db(&db)).await;
+}
+
+#[tokio::test]
 async fn apply_over_fs() {
     let Some(db) = test_db().await else {
         eprintln!("skipping: DATABASE_URL not set");
@@ -158,13 +168,7 @@ async fn apply_over_s3() {
     exercise_apply(&TestStorage::s3(&db)).await;
 }
 
-#[tokio::test]
-async fn push_uploads_bundle_files_once_and_refuses_broken_templates() {
-    let Some(db) = test_db().await else {
-        eprintln!("skipping: DATABASE_URL not set");
-        return;
-    };
-    let ts = TestStorage::fs(&db);
+async fn exercise_push(ts: &TestStorage) {
     let src = std::env::temp_dir().join(format!("design-push-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(src.join("templates")).expect("mkdir");
     std::fs::create_dir_all(src.join("assets/css")).expect("mkdir");
@@ -207,6 +211,24 @@ async fn push_uploads_bundle_files_once_and_refuses_broken_templates() {
     );
 
     let _ = std::fs::remove_dir_all(&src);
+}
+
+#[tokio::test]
+async fn push_over_db() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    exercise_push(&TestStorage::db(&db)).await;
+}
+
+#[tokio::test]
+async fn push_over_fs() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    exercise_push(&TestStorage::fs(&db)).await;
 }
 
 #[tokio::test]

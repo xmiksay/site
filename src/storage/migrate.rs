@@ -1,15 +1,24 @@
 //! `site_cli storage migrate`: copy blobs (the CLI passes every hash
-//! `file_blobs` knows about, see [`Storage::known_hashes`]) from one backend
-//! into another. Idempotent, verified by sha256, and the source is only ever
-//! read.
+//! `file_blobs` knows about, see [`Storage::known_hashes`]) and every keyed
+//! object (see [`Storage::list_all`]) from one backend into another.
+//! Idempotent, verified by read-back, never overwrites differing content, and
+//! the source is only ever read.
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 
 use super::Storage;
 use crate::files::hash_blob;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Report {
+    /// By blob hash.
+    pub blobs: Tally,
+    /// By object key.
+    pub objects: Tally,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Tally {
     pub copied: Vec<String>,
     /// Already in the target with the right content.
     pub present: Vec<String>,
@@ -18,14 +27,36 @@ pub struct Report {
     pub problems: Vec<String>,
 }
 
-impl Report {
-    pub fn summary(&self) -> String {
+impl Tally {
+    fn record(&mut self, id: &str, outcome: Result<Outcome>) {
+        match outcome {
+            Ok(Outcome::Copied) => self.copied.push(id.to_string()),
+            Ok(Outcome::Present) => self.present.push(id.to_string()),
+            Err(e) => self.problems.push(format!("{id}: {e:#}")),
+        }
+    }
+
+    fn summary(&self) -> String {
         format!(
             "{} copied, {} already present, {} problem(s)",
             self.copied.len(),
             self.present.len(),
             self.problems.len()
         )
+    }
+}
+
+impl Report {
+    pub fn summary(&self) -> String {
+        format!(
+            "blobs: {}; objects: {}",
+            self.blobs.summary(),
+            self.objects.summary()
+        )
+    }
+
+    pub fn problems(&self) -> impl Iterator<Item = &String> {
+        self.blobs.problems.iter().chain(&self.objects.problems)
     }
 }
 
@@ -40,16 +71,22 @@ pub async fn migrate(source: &Storage, target: &Storage, hashes: &[String]) -> R
     }
     let mut report = Report::default();
     for hash in hashes {
-        match copy_one(source, target, hash).await {
-            Ok(Outcome::Copied) => report.copied.push(hash.clone()),
-            Ok(Outcome::Present) => report.present.push(hash.clone()),
-            Err(e) => report.problems.push(format!("{hash}: {e:#}")),
-        }
+        report
+            .blobs
+            .record(hash, copy_blob(source, target, hash).await);
+    }
+    let objects = source
+        .list_all()
+        .await
+        .context("list the source's keyed objects")?;
+    for object in objects {
+        let outcome = copy_object(source, target, &object.key).await;
+        report.objects.record(&object.key, outcome);
     }
     Ok(report)
 }
 
-async fn copy_one(source: &Storage, target: &Storage, hash: &str) -> Result<Outcome> {
+async fn copy_blob(source: &Storage, target: &Storage, hash: &str) -> Result<Outcome> {
     if let Some(existing) = target.get_blob(hash).await? {
         if hash_blob(&existing) != hash {
             bail!("already stored in the target with different content, kept");
@@ -65,6 +102,24 @@ async fn copy_one(source: &Storage, target: &Storage, hash: &str) -> Result<Outc
     target.put_blob(&data).await?;
     let stored = target.get_blob(hash).await?;
     if stored.as_deref().map(hash_blob).as_deref() != Some(hash) {
+        bail!("read-back after the copy does not match");
+    }
+    Ok(Outcome::Copied)
+}
+
+async fn copy_object(source: &Storage, target: &Storage, key: &str) -> Result<Outcome> {
+    // Listed a moment ago; gone now means a concurrent delete.
+    let Some(data) = source.get(key).await? else {
+        bail!("missing in the source");
+    };
+    if let Some(existing) = target.get(key).await? {
+        if existing != data {
+            bail!("already stored in the target with different content, kept");
+        }
+        return Ok(Outcome::Present);
+    }
+    target.put(key, data.clone()).await?;
+    if target.get(key).await?.as_ref() != Some(&data) {
         bail!("read-back after the copy does not match");
     }
     Ok(Outcome::Copied)

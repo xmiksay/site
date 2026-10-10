@@ -15,7 +15,6 @@ const apiBlobMock = vi.mocked(apiBlob)
 function designState(overrides: Partial<DesignState> = {}): DesignState {
   return {
     storage: 's3',
-    editable: true,
     local_dir: false,
     last_reload: null,
     files: [{ path: 'templates/base.html', baked: true, overridden: false, size: 10 }],
@@ -34,7 +33,6 @@ describe('design store', () => {
     const store = useDesignStore()
     await store.load()
     expect(apiMock).toHaveBeenCalledWith('/api/design')
-    expect(store.editable).toBe(true)
     expect(store.files).toHaveLength(1)
   })
 
@@ -100,17 +98,6 @@ describe('design store', () => {
 
     await expect(store.reload()).rejects.toThrow('storage unavailable')
     expect(store.state?.last_reload?.error).toBe('bucket down')
-  })
-
-  it('refuses to save or remove when storage is not editable', async () => {
-    const store = useDesignStore()
-    apiMock.mockResolvedValueOnce(designState({ storage: 'db', editable: false }))
-    await store.load()
-    apiMock.mockClear()
-
-    await expect(store.save('templates/base.html', 'x')).rejects.toThrow(/not editable/)
-    await expect(store.remove('templates/base.html')).rejects.toThrow(/not editable/)
-    expect(apiMock).not.toHaveBeenCalled()
   })
 
   it('fetchText requests the baked source when asked', async () => {

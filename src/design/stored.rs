@@ -74,6 +74,17 @@ pub fn check_path(path: &str) -> Result<(), DesignError> {
     Ok(())
 }
 
+/// The reload error as the admin sees it (`last_reload.error`). Storage
+/// failures stay generic: DB errors carry SQL and table names, outages the
+/// backend's URLs. The full error goes to the log.
+fn status_error(err: &DesignError) -> String {
+    match err {
+        DesignError::Storage(storage::Error::Db(_)) => "database error".into(),
+        DesignError::Storage(storage::Error::Unavailable(_)) => "storage unavailable".into(),
+        other => other.to_string(),
+    }
+}
+
 fn key(path: &str) -> String {
     format!("{DESIGN_PREFIX}/{path}")
 }
@@ -120,7 +131,7 @@ impl DesignStore {
             at: Utc::now(),
             ok: result.is_ok(),
             files: self.stored.read().files.len(),
-            error: result.as_ref().err().map(ToString::to_string),
+            error: result.as_ref().err().map(status_error),
         };
         if result.is_ok() {
             templates.refresh();
@@ -140,14 +151,6 @@ impl DesignStore {
         storage: &Storage,
         change: Option<Change>,
     ) -> Result<(), DesignError> {
-        if !storage.has_objects() {
-            if change.is_some() {
-                return Err(storage::Error::NoObjectStore.into());
-            }
-            *self.stored.write() = Arc::default();
-            return Ok(());
-        }
-
         let current = self.stored.read().clone();
         let mut files = HashMap::new();
         for object in storage.list(DESIGN_PREFIX).await? {
@@ -234,6 +237,23 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn reload_status_does_not_leak_storage_errors() {
+        let db = sea_orm::DbErr::Custom("relation \"storage_objects\" does not exist".into());
+        let msg = status_error(&DesignError::Storage(storage::Error::Db(db)));
+        assert_eq!(msg, "database error");
+
+        let down = object_store::Error::Generic {
+            store: "S3",
+            source: "http://secret-host:3900 refused".into(),
+        };
+        let msg = status_error(&DesignError::Storage(storage::Error::Unavailable(down)));
+        assert_eq!(msg, "storage unavailable");
+
+        let invalid = DesignError::Invalid(vec!["templates/404.html: syntax error".into()]);
+        assert!(status_error(&invalid).contains("templates/404.html"));
     }
 
     #[test]

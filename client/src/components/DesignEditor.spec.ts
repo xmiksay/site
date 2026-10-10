@@ -16,7 +16,7 @@ describe('DesignEditor', () => {
     vi.spyOn(store, 'fetchText').mockResolvedValue('<old>')
     vi.spyOn(store, 'save').mockRejectedValue(new ApiError(422, 'base.html: unexpected end'))
 
-    const wrapper = mount(DesignEditor, { props: { file: overridden, editable: true } })
+    const wrapper = mount(DesignEditor, { props: { file: overridden } })
     await flushPromises()
     const textarea = wrapper.get('textarea')
     await textarea.setValue('{% broken')
@@ -34,7 +34,7 @@ describe('DesignEditor', () => {
     const fetchText = vi.spyOn(store, 'fetchText').mockResolvedValue('<baked>')
     const file = { ...overridden, overridden: false }
 
-    const wrapper = mount(DesignEditor, { props: { file, editable: true } })
+    const wrapper = mount(DesignEditor, { props: { file } })
     await flushPromises()
     expect(wrapper.get('textarea').attributes('readonly')).toBeDefined()
 

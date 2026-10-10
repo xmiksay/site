@@ -34,7 +34,6 @@ pub fn router() -> Router<AppState> {
 #[derive(Serialize)]
 pub struct DesignState {
     storage: &'static str,
-    editable: bool,
     local_dir: bool,
     last_reload: Option<ReloadStatus>,
     files: Vec<DesignFile>,
@@ -84,7 +83,6 @@ fn design_state(state: &AppState) -> DesignState {
     }
     DesignState {
         storage: state.storage.kind(),
-        editable: state.storage.has_objects(),
         local_dir: design.has_local_dir(),
         last_reload: design.last_reload(),
         files: files.into_values().collect(),

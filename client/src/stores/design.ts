@@ -6,14 +6,7 @@ import type { DesignState } from '../types'
 
 export const useDesignStore = defineStore('design', () => {
   const state = ref<DesignState | null>(null)
-  const editable = computed(() => state.value?.editable ?? false)
   const files = computed(() => state.value?.files ?? [])
-
-  function assertEditable() {
-    if (!editable.value) {
-      throw new Error('Design overrides are not editable with the current storage')
-    }
-  }
 
   async function load() {
     state.value = await api<DesignState>('/api/design')
@@ -32,7 +25,6 @@ export const useDesignStore = defineStore('design', () => {
   // On failure (e.g. 422 template compile error) the server changed nothing, so
   // `state` is left untouched and the error propagates to the caller's editor.
   async function save(path: string, body: Blob | string) {
-    assertEditable()
     state.value = await api<DesignState>(designFileUrl(path), {
       method: 'PUT',
       body,
@@ -41,7 +33,6 @@ export const useDesignStore = defineStore('design', () => {
   }
 
   async function remove(path: string) {
-    assertEditable()
     state.value = await api<DesignState>(designFileUrl(path), { method: 'DELETE' })
   }
 
@@ -53,5 +44,5 @@ export const useDesignStore = defineStore('design', () => {
     return await (await fetchContent(path, baked)).text()
   }
 
-  return { state, editable, files, load, reload, save, remove, fetchContent, fetchText }
+  return { state, files, load, reload, save, remove, fetchContent, fetchText }
 })

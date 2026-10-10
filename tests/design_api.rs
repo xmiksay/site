@@ -1,6 +1,6 @@
 //! `/api/design` (#110) over a full `AppState`: fs storage driving what the
 //! public site renders (save, 422 on a broken template, external edit +
-//! Reload, revert), and db storage being read-only.
+//! Reload, revert), and the same over db storage (#114).
 //!
 //! Gated on `DATABASE_URL` like every DB test.
 
@@ -19,7 +19,7 @@ use serde_json::Value;
 use site::auth::SESSION_COOKIE;
 use site::config::Config;
 use site::entity::{token, user};
-use site::storage::StorageConfig;
+use site::storage::{Storage, StorageConfig};
 use storage_fixture::TestStorage;
 use tower::ServiceExt;
 
@@ -43,7 +43,9 @@ struct App {
     user_id: i32,
 }
 
-async fn app(storage: StorageConfig) -> App {
+/// `scoped` replaces the state's storage after startup: a db test isolates
+/// its keyed objects under a prefix that way (startup itself reads unscoped).
+async fn app(storage: StorageConfig, scoped: Option<Storage>) -> App {
     let config = Config {
         database_url: test_db_url().expect("DATABASE_URL"),
         design_dir: None,
@@ -52,7 +54,10 @@ async fn app(storage: StorageConfig) -> App {
         mdcast_token: None,
         storage,
     };
-    let state = site::state::create_state(&config).await;
+    let mut state = site::state::create_state(&config).await;
+    if let Some(scoped) = scoped {
+        state.storage = scoped;
+    }
     let db = state.db.clone();
     let saved = user::ActiveModel {
         username: Set(format!("design-{}", uuid::Uuid::new_v4())),
@@ -132,15 +137,12 @@ async fn design_api_over_fs_drives_the_public_site() {
         return;
     };
     let ts = TestStorage::fs(&db);
-    let app = app(ts.fs_config()).await;
+    let app = app(ts.fs_config(), None).await;
     let marker = format!("DESIGN-{}", uuid::Uuid::new_v4());
 
     let (status, state) = app.json("GET", "/api/design", "").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        (state["storage"].as_str(), state["editable"].as_bool()),
-        (Some("fs"), Some(true))
-    );
+    assert_eq!(state["storage"], "fs");
     assert_eq!(entry(&state, "templates/404.html")["baked"], true);
     assert!(
         state["files"].as_array().expect("files").iter().all(|f| {
@@ -221,25 +223,48 @@ async fn design_api_over_fs_drives_the_public_site() {
 }
 
 #[tokio::test]
-async fn design_api_over_db_is_read_only() {
-    let Some(_db) = test_db().await else {
+async fn design_api_over_db_drives_the_public_site() {
+    let Some(db) = test_db().await else {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    let app = app(StorageConfig::Db).await;
+    let ts = TestStorage::db(&db);
+    let app = app(StorageConfig::Db, Some(ts.storage.clone())).await;
+    let marker = format!("DB-DESIGN-{}", uuid::Uuid::new_v4());
+
     let (status, state) = app.json("GET", "/api/design", "").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        (state["storage"].as_str(), state["editable"].as_bool()),
-        (Some("db"), Some(false))
-    );
-    let (status, _) = app
-        .call("PUT", "/api/design/files/templates/404.html", "x")
+    assert_eq!(state["storage"], "db");
+
+    let (status, state) = app
+        .json("PUT", "/api/design/files/templates/404.html", &marker)
         .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    let (status, _) = app
-        .call("GET", "/api/design/files/templates/base.html", "")
+    assert_eq!(status, StatusCode::OK, "{state}");
+    assert_eq!(entry(&state, "templates/404.html")["overridden"], true);
+    let (_, page) = app.call("GET", "/no-such-page-for-design-test", "").await;
+    assert_eq!(String::from_utf8_lossy(&page), marker);
+    let stored = ts
+        .storage
+        .get("design/templates/404.html")
+        .await
+        .expect("get");
+    assert_eq!(stored.as_deref(), Some(marker.as_bytes()));
+
+    // Edited in the table directly, picked up by Reload.
+    ts.storage
+        .put("design/templates/404.html", "EXTERNAL".into())
+        .await
+        .expect("external edit");
+    let (status, state) = app.json("POST", "/api/design/reload", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state["last_reload"]["ok"], true);
+    let (_, page) = app.call("GET", "/no-such-page-for-design-test", "").await;
+    assert_eq!(String::from_utf8_lossy(&page), "EXTERNAL");
+
+    let (status, state) = app
+        .json("DELETE", "/api/design/files/templates/404.html", "")
         .await;
-    assert_eq!(status, StatusCode::OK, "baked files stay readable");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(entry(&state, "templates/404.html")["overridden"], false);
     app.cleanup().await;
 }

@@ -66,7 +66,9 @@ src/
                           # push.rs: `site_cli design push`
   storage/               # mod.rs: Storage (db | fs | s3 over object_store) —
                           # put_blob/get_blob/get_blob_stream by sha256;
-                          # config.rs: STORAGE_KIND/STORAGE_DIR/S3_*;
+                          # objects.rs: keyed get/put/delete/list on every
+                          # backend; db_objects.rs: their `storage_objects`
+                          # rows on db; config.rs: STORAGE_KIND/STORAGE_DIR/S3_*;
                           # migrate.rs: `site_cli storage migrate`
   auth.rs config.rs files.rs
   markdown/              # mod.rs (entry + MARKDOWN_EXTENSIONS_DOC), directives.rs
@@ -114,6 +116,8 @@ files               id, path unique (m_017), hash (SHA-256), mimetype,
                     size_bytes, description?, audit
 file_blobs          hash PK, data bytea? (only STORAGE_KIND=db, m_033),
                     size_bytes (deduped by hash; one row per blob on every backend)
+storage_objects     key PK, data bytea, etag (sha256 of data), updated_at
+                    -- keyed objects (design/…) of STORAGE_KIND=db only (m_034)
 file_thumbnails     file_id PK, hash, width, height, mimetype
 galleries           id, path unique (m_020), title, description?,
                     file_ids INT[], audit
@@ -197,21 +201,23 @@ File and thumbnail bytes go through `Storage` (`src/storage/`, held as `AppState
 | `fs` | `STORAGE_DIR/blobs/{hash[0..2]}/{hash}` | Atomic writes (temp file + rename), fsync |
 | `s3` | `{bucket}/blobs/{hash[0..2]}/{hash}` | `object_store` AWS client; 5 s connect / 30 s read timeout, 2 retries within 15 s, no total timeout (long downloads stream) |
 
+**Keyed objects** sit next to the blobs on every backend (`src/storage/objects.rs`): `put(key, bytes)` / `get(key)` / `delete(key)` (idempotent) / `list(prefix)` (recursive under the directory `prefix/`, sorted, each with a `Version` = ETag + size + mtime) — object keys on `fs`/`s3`, `storage_objects` rows on `db` (m_034; ETag = sha256 of the data, mtime = `updated_at`, written as one upsert). Keys are validated (`parse_key`: no empty/`.`/`..` segments, no control characters). `scoped(prefix)` puts every key under `prefix/` on every backend (a `PrefixStore` on `fs`/`s3`, a key prefix on `db` — `db` blobs stay shared `file_blobs` rows); tests isolate themselves this way. Design overrides (`design/…`) are stored this way.
+
 Every backend keeps one `file_blobs` row per blob (hash, size) — the FK target of `files.hash`/`file_thumbnails.hash` and the list `storage migrate` walks; only `db` fills `data` (nullable since m_033). Writes put the object **before** the row, so a row never points at unwritten bytes; a DB failure after the put leaves a harmless orphan (content-addressed, and there is no blob GC). Thumbnails are best effort: a failed thumbnail write only means `has_thumbnail: false`.
 
-Errors: an unreachable backend is `storage::Error::Unavailable` → API **503** `storage unavailable` (writes change nothing) and public serving 503; a `files` row whose blob the backend lacks is 404 publicly; a markdown directive whose blob can't be read renders like a missing file (logged). Blob keys are validated as lowercase sha256 hex, so nothing can escape the `blobs/` prefix.
+Errors: an unreachable `fs`/`s3` backend is `storage::Error::Unavailable` → API **503** `storage unavailable` (writes change nothing) and public serving 503; on `db` a database failure is a plain DB error → **500** `internal error` (detail only in the log); a `files` row whose blob the backend lacks is 404 publicly; a markdown directive whose blob can't be read renders like a missing file (logged). Blob keys are validated as lowercase sha256 hex, so nothing can escape the `blobs/` prefix.
 
-**Switching backends:** `site_cli storage migrate --from db | --from-dir <path>` copies every hash in `file_blobs` from the source into the configured `STORAGE_KIND` — idempotent (a present blob is verified by sha256 and skipped), the source is only read, a target object with different content is reported and kept (exit 1), every copy is read back and verified. Reads are strict afterwards: no fallback to the old backend. Run it, then switch `STORAGE_KIND`. Moving back to `db` works the same way (`--from-dir` with `STORAGE_KIND=db`); `m_033`'s `down` refuses while metadata-only rows exist.
+**Switching backends:** `site_cli storage migrate --from db | --from-dir <path>` copies every hash in `file_blobs` and every keyed object of the source (`list_all`: everything but `blobs/`) into the configured `STORAGE_KIND` — idempotent (a present blob is verified by sha256 and skipped), the source is only read, a target blob or object with different content is reported and kept (exit 1), every copy is read back and verified; the summary counts blobs and objects separately. Reads are strict afterwards: no fallback to the old backend. Run it, then switch `STORAGE_KIND`. Moving back to `db` works the same way (`--from-dir` with `STORAGE_KIND=db`); `m_033`'s `down` refuses while metadata-only rows exist.
 
 ## Design overrides
 
-A deployment's own design lives in storage as `design/{path}` objects (`fs`: `STORAGE_DIR/design/…`, `s3`: the bucket), `path` under `templates/`, `assets/` or `mdcast/` (`src/design/stored.rs`). They are held in RAM (`DesignStore.stored`, swapped wholesale) — requests never touch storage.
+A deployment's own design lives in storage as `design/{path}` objects (`fs`: `STORAGE_DIR/design/…`, `s3`: the bucket, `db`: `storage_objects` rows), `path` under `templates/`, `assets/` or `mdcast/` (`src/design/stored.rs`). They are held in RAM (`DesignStore.stored`, swapped wholesale) — requests never touch storage.
 
-**Reload** (`DesignStore::apply`, serialized by a mutex): list `design/`, download only objects whose version (ETag + size + mtime) changed, apply the pending admin change if any, syntax-check every override template (UTF-8 + MiniJinja parse — render-time errors such as an unknown variable are not caught), then write the change to storage and swap the overlay in, and recompile the release build's frozen template environment (`Templates::refresh`). Any failure leaves storage and the running design untouched. A plain reload records its outcome (`last_reload`, shown in the admin) either way; a rejected admin save leaves it alone.
+**Reload** (`DesignStore::apply`, serialized by a mutex): list `design/`, download only objects whose version (ETag + size + mtime) changed, apply the pending admin change if any, syntax-check every override template (UTF-8 + MiniJinja parse — render-time errors such as an unknown variable are not caught), then write the change to storage and swap the overlay in, and recompile the release build's frozen template environment (`Templates::refresh`). Any failure leaves storage and the running design untouched. A plain reload records its outcome (`last_reload`, shown in the admin; storage and DB failures appear only as `storage unavailable` / `database error`, the detail goes to the log) either way; a rejected admin save leaves it alone.
 
 **Ways in:** edit objects directly in the bucket (Garage admin UI, `aws s3`, rclone) and click **Reload** in the admin Design page (`POST /api/design/reload`); or use the Design page itself (tree of baked / overridden / override-only files, upload/replace/delete, inline text editor — every save reloads at once, a broken template answers 422); or `site_cli design push <dir>` (uploads a folder in the bundle layout, skips other paths, refuses the whole push on a broken template; the server picks it up on the next Reload).
 
-**Startup** loads the overlay before serving; unreachable storage or a broken override refuses the start rather than serving the baked design in place of the site's own. **`STORAGE_KIND=db`** has no keyed objects: only baked + `DESIGN_DIR`, the Design page is read-only, writes answer 409. Reloads are per process (single replica assumed). MCP and the AI assistant have no design access.
+**Startup** loads the overlay before serving; unreachable storage or a broken override refuses the start rather than serving the baked design in place of the site's own. Every backend holds overrides (`db` since #114, edited through the Design page or `design push`). Reloads are per process (single replica assumed). MCP and the AI assistant have no design access.
 
 ## Routes
 
@@ -243,9 +249,9 @@ A deployment's own design lives in storage as `design/{path}` objects (`fs`: `ST
 |---|---|---|
 | `/api/ws` | GET (upgrade) | Global authenticated WebSocket — see below |
 | `/api/export/pages/{id}?format=pdf\|slides` | GET | Export any page by id to PDF or reveal.js slides (see [Export (mdcast)](#export-mdcast)) |
-| `/api/design` | GET | Design state: storage kind, `editable`, `local_dir`, `last_reload`, merged file list (`baked`/`overridden`/`size`) |
-| `/api/design/reload` | POST | Reload overrides from storage (after edits made directly in the bucket); 422 broken template, 503 storage down |
-| `/api/design/files/{*path}` | GET / PUT / DELETE | Effective file (`?source=baked` for the default) / write override from the raw body (20 MB) / remove override — writes reload at once; 400 bad path, 404 no override, 409 db storage, 422 broken template |
+| `/api/design` | GET | Design state: storage kind, `local_dir`, `last_reload`, merged file list (`baked`/`overridden`/`size`) |
+| `/api/design/reload` | POST | Reload overrides from storage (after edits made directly in the bucket); 422 broken template, 503 storage down (fs/s3; db errors are 500) |
+| `/api/design/files/{*path}` | GET / PUT / DELETE | Effective file (`?source=baked` for the default) / write override from the raw body (20 MB) / remove override — writes reload at once; 400 bad path, 404 no override, 422 broken template |
 
 ### OAuth2 + MCP
 
