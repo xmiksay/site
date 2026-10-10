@@ -69,8 +69,9 @@ pub struct Download {
 pub struct Storage {
     db: DatabaseConnection,
     objects: Option<Objects>,
-    /// `db` backend only: `scoped` prefixes, each ending in `/`, prepended to
-    /// every `storage_objects` key.
+    /// The `scoped` prefixes, each ending in `/`, prepended to every
+    /// `storage_objects` key. Set on every backend but used only by `db`
+    /// (`fs`/`s3` scope through a `PrefixStore`).
     key_prefix: String,
 }
 
