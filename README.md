@@ -4,7 +4,7 @@ Rust/Axum personal site. Server-rendered public pages plus a Vue 3 admin SPA. In
 
 ## Requirements
 
-- Rust (edition 2024)
+- Rust via `rustup` — the toolchain is pinned in `rust-toolchain.toml` (currently 1.99.0, with clippy + rustfmt) and installed automatically on the first `cargo` call. CI and the Dockerfile use the same version. To bump: change `channel` there and the Dockerfile `FROM rust:…` tag together, then run `make verify` and fix any new fmt/clippy findings.
 - Node.js (for building the Vue admin client)
 - PostgreSQL
 - Docker & Docker Compose (for containerized setup)

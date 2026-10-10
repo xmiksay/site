@@ -8,6 +8,7 @@ on:
       - tests/**
       - Cargo.toml
       - Cargo.lock
+      - rust-toolchain.toml
       - Makefile
       - .github/workflows/backend.yml
 
@@ -51,11 +52,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Rust edition 2024 → needs a recent stable toolchain (>= 1.85).
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      # Installs exactly the toolchain + components pinned in
+      # rust-toolchain.toml (rustup >= 1.28 reads it when given no argument),
+      # so CI lints with the same compiler as local `make lint`.
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install && rustc --version
 
+      # Its cache key already hashes rust-toolchain.toml and `rustc -vV`.
       - uses: Swatinem/rust-cache@v2
 
       # site_server embeds client/dist via rust-embed, so `clippy --all-targets`

@@ -1,0 +1,8 @@
+# Single source of truth for the Rust compiler/linter version — local
+# builds, every CI workflow (rustup honors this file) and the Dockerfile's
+# rust:<version> base image. Bump: change `channel` here and the Dockerfile
+# `FROM rust:…` tag together, then fix any new fmt/clippy findings.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

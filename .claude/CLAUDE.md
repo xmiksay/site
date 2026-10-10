@@ -28,6 +28,8 @@ Two embed seams: `client/dist` (the SPA — generated, must be built before the 
 
 ## Build & Run
 
+**Toolchain:** pinned in `rust-toolchain.toml` (`channel = "1.99.0"`, clippy + rustfmt) — the single source of truth rustup honors locally and in every CI workflow (`rustup toolchain install`, no `dtolnay/rust-toolchain`), so a local `make lint` predicts CI. To bump: edit `channel` and the Dockerfile `FROM rust:…` tag in the same change, then `make verify` and fix new fmt/clippy findings.
+
 All build/test/dev flows go through the **`Makefile`**. The Vue admin SPA is
 embedded into `site_server` via rust-embed (`#[folder = "client/dist"]`), so
 **`client/dist` must exist before `cargo build`** — the targets enforce that.

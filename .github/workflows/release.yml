@@ -18,9 +18,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
+      # The toolchain pinned in rust-toolchain.toml, plus llvm-tools for
+      # cargo-llvm-cov — `component add` targets that pinned toolchain too.
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup component add llvm-tools-preview
+          rustc --version
 
       - uses: Swatinem/rust-cache@v2
 
