@@ -1,11 +1,9 @@
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::response::Html;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum_extra::extract::CookieJar;
 use sea_orm::EntityTrait;
 
-use crate::auth;
 use crate::entity::tag;
 use crate::repo::pages_search::{self as pages_search_repo, SearchError};
 use crate::routes::build_menu;
@@ -13,6 +11,7 @@ use crate::state::AppState;
 use crate::templates::context::{Layout, PageSearchContext, PageView, TagView};
 
 use super::error_page;
+use super::preview::Look;
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/", get(search))
@@ -37,10 +36,10 @@ const MAX_LIMIT: u64 = 100;
 
 pub async fn search(
     State(state): State<AppState>,
-    jar: CookieJar,
+    look: Look,
     Query(query): Query<SearchQuery>,
-) -> Html<String> {
-    let logged_in = auth::is_logged_in(&state, &jar).await.is_some();
+) -> Response {
+    let logged_in = look.logged_in;
     let nav = build_menu(&state.db, logged_in).await;
 
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
@@ -76,7 +75,7 @@ pub async fn search(
         ),
         Err(SearchError::UnknownTag) => (Vec::new(), 0),
         Err(SearchError::Db(e)) => {
-            return error_page("search db error", e);
+            return look.finish(error_page("search db error", e).into_response());
         }
     };
 
@@ -95,12 +94,6 @@ pub async fn search(
         None
     };
 
-    let env = state.tmpl.env();
-    let tmpl = match env.get_template("page_search.html") {
-        Ok(t) => t,
-        Err(e) => return error_page("search template error", e),
-    };
-
     let ctx = PageSearchContext {
         layout: Layout::new(nav, logged_in),
         q: q.unwrap_or("").to_string(),
@@ -114,10 +107,11 @@ pub async fn search(
         prev_offset,
         next_offset,
     };
-    match tmpl.render(&ctx) {
-        Ok(html) => Html(html),
-        Err(e) => error_page("search render error", e),
-    }
+    let env = look.env(&state);
+    let rendered = env
+        .get_template("page_search.html")
+        .and_then(|tmpl| tmpl.render(&ctx));
+    look.respond("search render error", rendered)
 }
 
 /// `(prev_offset, next_offset)` around the result page at `offset`.

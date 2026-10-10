@@ -11,12 +11,11 @@ use axum::extract::{Query, Request, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum_extra::extract::CookieJar;
 
 use crate::export::{self, ExportFormat};
 use crate::path_util;
+use crate::routes::public::{self, preview::Look};
 use crate::state::AppState;
-use crate::{auth, routes::public};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/{*path}", get(handle))
@@ -29,17 +28,20 @@ struct ExportQuery {
 
 async fn handle(
     State(state): State<AppState>,
-    jar: CookieJar,
+    look: Look,
     Query(q): Query<ExportQuery>,
     req: Request,
 ) -> Response {
     let Some(raw_format) = q.format else {
-        return public::catch_all(State(state), jar, req)
-            .await
-            .into_response();
+        return public::catch_all(State(state), look, req).await;
     };
+    let path = path_util::normalize(req.uri().path());
+    // Every answer, errors included, is marked when it is preview output.
+    look.finish(export_path(&state, &look, &raw_format, &path).await)
+}
 
-    let Some(format) = ExportFormat::parse(&raw_format) else {
+async fn export_path(state: &AppState, look: &Look, raw_format: &str, path: &str) -> Response {
+    let Some(format) = ExportFormat::parse(raw_format) else {
         return (
             StatusCode::BAD_REQUEST,
             format!("unknown export format `{raw_format}`"),
@@ -55,22 +57,20 @@ async fn handle(
             .into_response();
     };
 
-    let path = path_util::normalize(req.uri().path());
-    let logged_in = auth::is_logged_in(&state, &jar).await.is_some();
-
-    let Some(content) = public::lookup_content(&state.db, &path).await else {
+    let logged_in = look.logged_in;
+    let Some(content) = public::lookup_content(&state.db, path).await else {
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     };
     if content.private() && !logged_in {
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
 
-    let env = state.tmpl.env();
+    let env = look.env(state);
     let artifact = match export::render_page(
         client,
         &state.db,
         &state.storage,
-        &state.design,
+        look.design(state),
         &env,
         content.markdown(),
         Some(content.title()),

@@ -13,14 +13,12 @@
 //! leading YAML frontmatter block, and its `title` beats the request's
 //! `meta.title` (the page title passed here).
 
-use std::sync::Arc;
-
 use mdcast_client::mdcast_api::{BrandSpec, Target};
 use mdcast_client::{Artifact, Client, request};
 use minijinja::Environment;
 use sea_orm::DatabaseConnection;
 
-use crate::design::DesignStore;
+use crate::design::Resolve;
 use crate::export::{ExportError, build_bundle};
 use crate::markdown;
 use crate::storage::Storage;
@@ -67,7 +65,7 @@ pub async fn render_page(
     client: &Client,
     db: &DatabaseConnection,
     storage: &Storage,
-    design: &Arc<DesignStore>,
+    design: &dyn Resolve,
     tmpl: &Environment<'static>,
     markdown_src: &str,
     title: Option<String>,
@@ -87,13 +85,13 @@ pub async fn render_page(
 }
 
 /// Load the site's `BrandSpec` (#68) from `design/mdcast/brand.toml` —
-/// resolved through `DesignStore::load`, so a `DESIGN_DIR` override applies
+/// resolved through the design view, so a `DESIGN_DIR` override applies
 /// to it exactly like it does to templates. Unlike the template overrides
 /// (`typst/…`, `revealjs/…`), this isn't an asset: it travels as
 /// `request.brand`, caller-owned config the server hands to its splitter and
 /// backends. A missing, non-UTF-8, or malformed file logs a warning and
 /// degrades to `BrandSpec::default()` rather than failing the export.
-fn load_brand(design: &DesignStore) -> BrandSpec {
+fn load_brand(design: &dyn Resolve) -> BrandSpec {
     let Some(bytes) = design.load("mdcast/brand.toml") else {
         return BrandSpec::default();
     };
@@ -113,6 +111,7 @@ fn load_brand(design: &DesignStore) -> BrandSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::design::DesignStore;
 
     #[test]
     fn parse_recognizes_supported_formats_and_rejects_others() {

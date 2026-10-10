@@ -9,8 +9,10 @@
 
 use std::sync::Arc;
 
+use bytes::Bytes;
 use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use site::design::DesignStore;
+use site::design::stored::Files;
 use site::entity::{page, tag, user};
 use site::storage::Storage;
 use site::templates::smoke::{SmokeReport, smoke_render};
@@ -31,16 +33,12 @@ async fn test_db() -> Option<DatabaseConnection> {
 
 /// The baked design with `overrides` (`templates/…` → source) on top.
 async fn smoke(db: &DatabaseConnection, overrides: &[(&str, &str)]) -> anyhow::Result<SmokeReport> {
-    let design = Arc::new(DesignStore::new(None));
-    let overrides: Vec<(String, String)> = overrides
+    let overrides: Files = overrides
         .iter()
-        .map(|(p, s)| (p.to_string(), s.to_string()))
+        .map(|(p, s)| (p.to_string(), Bytes::from(s.to_string())))
         .collect();
-    let load = move |path: &str| match overrides.iter().find(|(p, _)| p == path) {
-        Some((_, src)) => Some(src.clone().into_bytes()),
-        None => design.load(path),
-    };
-    smoke_render(db, &Storage::db(db.clone()), load).await
+    let view = DesignStore::new(None).with_baked(&overrides);
+    smoke_render(db, &Storage::db(db.clone()), Arc::new(view)).await
 }
 
 const DIRECTIVES_MD: &str = r#"# Smoke

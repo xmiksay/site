@@ -24,7 +24,7 @@ use mdcast_client::mdcast_api::{BrandSpec, Digest};
 use pulldown_cmark::{Event, Parser, Tag};
 use sea_orm::DatabaseConnection;
 
-use crate::design::DesignStore;
+use crate::design::Resolve;
 use crate::markdown::BridgedMarkdown;
 use crate::markdown::lookup::{FileLookup, fetch_file};
 use crate::storage::Storage;
@@ -41,7 +41,7 @@ const BRAND_TOML: &str = "mdcast/brand.toml";
 pub async fn build_bundle(
     db: &DatabaseConnection,
     storage: &Storage,
-    design: &DesignStore,
+    design: &dyn Resolve,
     brand: &BrandSpec,
     bridged: &BridgedMarkdown,
 ) -> Result<AssetBundle> {
@@ -68,7 +68,7 @@ pub async fn build_bundle(
 
 /// The design bundle's mdcast template overrides as `(asset key, bytes)`
 /// pairs — `design/mdcast/{path}` → key `{path}`, `brand.toml` excluded.
-fn design_templates(design: &DesignStore) -> Vec<(String, Bytes)> {
+fn design_templates(design: &dyn Resolve) -> Vec<(String, Bytes)> {
     design
         .list_prefix(DESIGN_PREFIX)
         .into_iter()
@@ -144,6 +144,7 @@ async fn insert_db_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::design::DesignStore;
 
     #[test]
     fn image_keys_collects_content_paths_and_dedupes() {
@@ -208,5 +209,18 @@ mod tests {
         assert!(keys.contains(&"typst/layouts/pdf/hero.typ".to_string()));
         assert!(keys.contains(&"revealjs/brand.css".to_string()));
         assert!(!keys.contains(&"brand.toml".to_string()));
+    }
+
+    #[test]
+    fn a_draft_view_supplies_its_own_mdcast_templates() {
+        let design = DesignStore::new(None);
+        let mut draft = crate::design::stored::Files::new();
+        draft.insert("mdcast/typst/layouts/pdf/hero.typ".into(), "DRAFT".into());
+        let view = design.with_baked(&draft);
+        let hero = design_templates(&view)
+            .into_iter()
+            .find(|(key, _)| key == "typst/layouts/pdf/hero.typ")
+            .map(|(_, bytes)| bytes);
+        assert_eq!(hero.as_deref(), Some(&b"DRAFT"[..]));
     }
 }

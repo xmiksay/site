@@ -2,6 +2,7 @@ pub mod draft;
 pub mod publish;
 pub mod push;
 pub mod stored;
+pub mod view;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
@@ -14,6 +15,7 @@ use parking_lot::RwLock;
 use rust_embed::Embed;
 
 use stored::{Cache, Files, ReloadStatus, Stored};
+pub use view::{DraftSite, Resolve};
 
 /// The default design bundle baked into the binary at compile time. This is
 /// the always-present fallback layer; a deployment can override it at runtime
@@ -51,6 +53,8 @@ pub struct DesignStore {
     /// Serializes draft mutations (and a publish's read of the draft); holds
     /// the draft's bytes cached by version. Taken after `reload_lock`.
     draft: tokio::sync::Mutex<Cache>,
+    /// The draft preview's site (see [`view`]); taken after `draft`.
+    draft_site: parking_lot::Mutex<view::SiteCache>,
 }
 
 impl DesignStore {
@@ -81,6 +85,7 @@ impl DesignStore {
             status: RwLock::default(),
             reload_lock: tokio::sync::Mutex::new(()),
             draft: tokio::sync::Mutex::default(),
+            draft_site: parking_lot::Mutex::default(),
         }
     }
 

@@ -1,12 +1,10 @@
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::Path;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use rust_embed::Embed;
 use site::config::Config;
-use site::design::build_static_response;
-use site::state::AppState;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -45,7 +43,7 @@ async fn main() {
         .nest("/api", api::router(state.clone()))
         .route("/admin", get(admin_index))
         .route("/admin/{*path}", get(admin_static))
-        .route("/assets/{*path}", get(serve_static))
+        .route("/assets/{*path}", get(public::assets::serve))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
         .fallback(get(public::catch_all))
@@ -85,15 +83,4 @@ fn build_admin_asset_response(path: &str, file: rust_embed::EmbeddedFile) -> Res
         file.data.to_vec(),
     )
         .into_response()
-}
-
-/// Serve a runtime static resource from the design bundle's `assets/` folder
-/// (override → baked). The `/assets/<path>` route maps to `assets/<path>` within
-/// the bundle, alongside the template-engine-owned `templates/` folder.
-async fn serve_static(State(state): State<AppState>, Path(path): Path<String>) -> Response {
-    let key = format!("assets/{path}");
-    match state.design.load(&key) {
-        Some(data) => build_static_response(&key, data),
-        None => (StatusCode::NOT_FOUND, "Not Found").into_response(),
-    }
 }

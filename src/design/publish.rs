@@ -16,6 +16,8 @@
 //! completed by the next reload, publish or start, which rolls the validated
 //! snapshot forward.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use futures_util::future::try_join_all;
@@ -83,12 +85,12 @@ async fn check_view(
     if !errors.is_empty() {
         return Err(DesignError::Invalid(errors));
     }
-    let files = view.clone();
-    let load = move |path: &str| files.get(path).map(|bytes| bytes.to_vec());
-    let report = smoke_render(db, storage, load).await.map_err(|e| {
-        tracing::error!("design publish: smoke render failed: {e:#}");
-        DesignError::RenderCheck
-    })?;
+    let report = smoke_render(db, storage, Arc::new(view.clone()))
+        .await
+        .map_err(|e| {
+            tracing::error!("design publish: smoke render failed: {e:#}");
+            DesignError::RenderCheck
+        })?;
     if report.is_ok() {
         return Ok(());
     }

@@ -2,14 +2,16 @@
 //! delete, discard), publishing it, the version history and restoring a
 //! version into the draft, and reloading `design/` after edits made directly
 //! in the bucket. See `design::{draft, publish, stored}`. Every draft
-//! mutation broadcasts `design.draft_changed`.
+//! mutation broadcasts `design.draft_changed`. Also toggles draft preview
+//! mode for this browser (`routes::public::preview`).
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Extension, Path, Query, State};
-use axum::http::header;
-use axum::response::{IntoResponse, Response};
+use axum::http::{HeaderMap, Uri, header};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use sea_orm::EntityTrait;
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +21,7 @@ use crate::design::stored::{DesignError, ReloadStatus, check_path, status_error}
 use crate::entity::user;
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::routes::broadcast::{self, DraftChange};
+use crate::routes::public::preview::{EXIT_PATH, PREVIEW_COOKIE};
 use crate::state::AppState;
 use crate::storage;
 
@@ -37,6 +40,8 @@ pub fn router() -> Router<AppState> {
         .route("/publish", post(publish))
         .route("/history", get(history))
         .route("/history/{id}/restore", post(restore))
+        .route("/preview", post(set_preview))
+        .route("/preview/exit", get(exit_preview))
         .layer(DefaultBodyLimit::max(MAX_DESIGN_FILE_SIZE))
 }
 
@@ -214,4 +219,70 @@ async fn restore(
     state.design.restore(&state.storage, &id).await?;
     broadcast::design_draft_changed(&state.ws_hub, &DraftChange::Restore { version: &id });
     draft_state(&state).await
+}
+
+#[derive(Deserialize, Serialize)]
+struct Preview {
+    on: bool,
+}
+
+fn with_preview(jar: CookieJar, on: bool) -> CookieJar {
+    if on {
+        let cookie = Cookie::build((PREVIEW_COOKIE, "1"))
+            .http_only(true)
+            .path("/")
+            .same_site(SameSite::Lax)
+            .build();
+        jar.add(cookie)
+    } else {
+        // `jar.remove` only answers a removal for a cookie this request
+        // sent; switching off must clear it regardless.
+        let mut removal = Cookie::build(PREVIEW_COOKIE).path("/").build();
+        removal.make_removal();
+        jar.add(removal)
+    }
+}
+
+/// Turn draft preview on or off for this browser.
+async fn set_preview(jar: CookieJar, Json(body): Json<Preview>) -> (CookieJar, Json<Preview>) {
+    (with_preview(jar, body.on), Json(body))
+}
+
+/// The preview banner's exit link: preview off, back to the page it was
+/// clicked on.
+async fn exit_preview(jar: CookieJar, headers: HeaderMap) -> (CookieJar, Redirect) {
+    let referer = headers.get(header::REFERER).and_then(|v| v.to_str().ok());
+    (with_preview(jar, false), Redirect::to(&back_to(referer)))
+}
+
+/// The referer's path and query on this site; only the path is kept, so a
+/// foreign referer cannot turn this into an open redirect (nor can `//` or
+/// a `\`, which browsers read as `/`).
+fn back_to(referer: Option<&str>) -> String {
+    referer
+        .and_then(|r| r.parse::<Uri>().ok())
+        .and_then(|uri| uri.path_and_query().map(|pq| pq.as_str().to_owned()))
+        .filter(|p| {
+            p.starts_with('/')
+                && !p.starts_with("//")
+                && !p.contains('\\')
+                && !p.starts_with(EXIT_PATH)
+        })
+        .unwrap_or_else(|| "/".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::back_to;
+
+    #[test]
+    fn exit_goes_back_to_the_referring_path_only() {
+        assert_eq!(back_to(Some("https://site.example/a/b?x=1")), "/a/b?x=1");
+        assert_eq!(back_to(Some("https://evil.example/phish")), "/phish");
+        assert_eq!(back_to(Some("/api/design/preview/exit")), "/");
+        assert_eq!(back_to(Some("not a uri")), "/");
+        assert_eq!(back_to(None), "/");
+        assert_eq!(back_to(Some("/\\evil.example/x")), "/");
+        assert_eq!(back_to(Some("https://site.example/a\\b")), "/");
+    }
 }
