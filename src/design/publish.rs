@@ -110,7 +110,7 @@ fn smoke_message(e: &SmokeError) -> String {
 impl DesignStore {
     /// Publish the draft as user `by`; `force` overwrites `design/` changes
     /// made outside the draft ([`DesignError::Conflict`]). Every rejection
-    /// (`Invalid`, `Conflict`, `NothingToPublish`) leaves everything
+    /// (`Invalid`, `RenderCheck`, `Conflict`, `NothingToPublish`) leaves everything
     /// untouched; see the module doc for the failure guarantees.
     pub async fn publish(
         &self,
