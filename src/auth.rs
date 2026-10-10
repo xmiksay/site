@@ -5,7 +5,7 @@ use argon2::{
 use axum::{
     Json,
     extract::{Request, State},
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -72,6 +72,36 @@ pub async fn require_login_api(
     }
 
     req.extensions_mut().insert(tok.user_id);
+    next.run(req).await
+}
+
+/// Middleware: [`require_login_api`], or else the MCP Bearer token (OAuth
+/// access token or service token) — for the routes external agents may use.
+pub async fn require_login_or_bearer_api(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let user_id = match is_logged_in(&state, &jar).await {
+        Some(id) => id,
+        None => match crate::routes::oauth::authenticate_mcp(&state, req.headers()).await {
+            Ok(id) => id,
+            // The same challenge `/mcp` answers with, so an OAuth client
+            // can discover the authorization server from here too.
+            Err((status, www_auth)) => {
+                let mut response =
+                    (status, Json(json!({ "error": "unauthorized" }))).into_response();
+                if let Ok(value) = HeaderValue::from_str(&www_auth) {
+                    response
+                        .headers_mut()
+                        .insert(header::WWW_AUTHENTICATE, value);
+                }
+                return response;
+            }
+        },
+    };
+    req.extensions_mut().insert(user_id);
     next.run(req).await
 }
 

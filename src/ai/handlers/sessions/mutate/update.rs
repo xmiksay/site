@@ -8,8 +8,8 @@ use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
 use super::generation::{generation_after_model_switch, generation_overrides};
 use super::{
-    apply_live_changes, filter_owned_mcp_ids, resolve_model_with_provider, session_mcp_specs,
-    validate_agent_profile,
+    apply_live_changes, check_designer_switch, filter_owned_mcp_ids, resolve_model_with_provider,
+    session_mcp_specs, validate_agent_profile,
 };
 use crate::ai::handlers::sessions::{
     SessionSummary, ids_to_json, load_owned, parse_id_array, tree,
@@ -56,6 +56,15 @@ pub async fn update(
     // live onto the engine session — which for a child would mean resuming its
     // own id, the blank-resume trap `tree` documents.
     tree::require_root(&session, "update")?;
+    // The row's current profile is a no-op: nothing written, no `SetAgent`
+    // (which must never reach the engine without the designer check).
+    let new_profile = input
+        .agent_profile
+        .filter(|name| *name != session.agent_profile);
+    if let Some(name) = &new_profile {
+        validate_agent_profile(name)?;
+        check_designer_switch(&state, &session, name).await?;
+    }
     let session_id = session.engine_session_id.clone().map(SessionId::new);
     let existing_model_id = session.model_id;
     // Snapshot before `session` is consumed into `active` below — needed by
@@ -87,8 +96,7 @@ pub async fn update(
         new_mcp_ids = owned;
         mcp_changed = true;
     }
-    if let Some(name) = input.agent_profile {
-        validate_agent_profile(&name)?;
+    if let Some(name) = new_profile {
         active.agent_profile = Set(name.clone());
         agent_changed = Some(name);
     }

@@ -4,12 +4,12 @@
 //!
 //! See [`session_tree`] for the `u{user_id}:{uuid}` session-id convention and
 //! how a sub-agent (#17) child session resolves back to its owning user, and
-//! [`profiles`] for the `researcher`/`page-writer` sub-agent profile roster.
+//! [`profiles`] for the `researcher`/`page-writer`/`designer` sub-agent roster.
 //!
 //! ## Public API for the next phase
 //!
 //! ```ignore
-//! let engine = SiteEngine::spawn(db, ai_config, ws_hub, serper_api_key, None).await?;
+//! let engine = SiteEngine::spawn(db, storage, design, ai_config, ws_hub, key, None).await?;
 //! let session = SiteEngine::session_id_for_user(user_id);
 //! engine.holly.send(InMsg::prompt(session, text)).await?;
 //! ```
@@ -39,7 +39,9 @@ mod prompt_cache;
 mod session_tree;
 
 use live::LiveSessions;
-pub use profiles::{BUILD_PROFILE, PAGE_WRITER_PROFILE, RESEARCHER_PROFILE, SWITCHABLE_PROFILES};
+pub use profiles::{
+    BUILD_PROFILE, DESIGNER_PROFILE, PAGE_WRITER_PROFILE, RESEARCHER_PROFILE, SWITCHABLE_PROFILES,
+};
 use prompt_cache::load_system_prompt;
 use session_tree::evict_on_hibernate_or_end;
 pub use session_tree::{
@@ -47,7 +49,7 @@ pub use session_tree::{
 };
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -138,6 +140,7 @@ impl SiteEngine {
     pub async fn spawn(
         db: DatabaseConnection,
         storage: crate::storage::Storage,
+        design: Arc<crate::design::DesignStore>,
         ai_config: Arc<AiConfig>,
         ws_hub: Arc<WsHub>,
         serper_api_key: Option<String>,
@@ -151,6 +154,7 @@ impl SiteEngine {
         let registry = tools::registry(
             Arc::new(db.clone()),
             storage,
+            design,
             ws_hub.clone(),
             serper_api_key,
         );
@@ -181,11 +185,7 @@ impl SiteEngine {
             let cache = system_prompt_cache.clone();
             Arc::new(move |_session: &SessionId, profile: &AgentProfile| {
                 let base = cache.read().clone();
-                let suffix = match profile.name.as_str() {
-                    RESEARCHER_PROFILE => profiles::RESEARCHER_PROMPT_SUFFIX,
-                    PAGE_WRITER_PROFILE => profiles::PAGE_WRITER_PROMPT_SUFFIX,
-                    _ => "",
-                };
+                let suffix = profiles::prompt_suffix(&profile.name);
                 Some(format!("{base}{suffix}"))
             })
         };
@@ -287,7 +287,7 @@ impl SiteEngine {
             Arc::new(StdRwLock::new(profiles.clone())),
             Arc::new(StdRwLock::new(Arc::new(SkillRegistry::default()))),
             PermissionProfile::new(Permission::Allow),
-            Arc::new(StdMutex::new(HashMap::new())),
+            policy.active_profiles(),
             resolver,
             grants,
             Hooks::default(),

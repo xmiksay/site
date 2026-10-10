@@ -26,18 +26,24 @@ use sea_orm::{ActiveModelTrait, Set};
 use super::mutate::{resolve_model_with_provider, session_mcp_specs};
 use super::turn::{engine_session_id, send_and_collect, to_detail};
 use super::{SessionDetail, load_owned, parse_id_array, subagent_links, tree};
-use crate::ai::engine::SiteEngine;
+use crate::ai::engine::{BUILD_PROFILE, SWITCHABLE_PROFILES, SiteEngine};
 use crate::ai::projection;
 use crate::entity::assistant_session;
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::routes::ws::{Envelope, Topic};
 use crate::state::AppState;
 
-/// The engine's one root profile (`engine/profiles.rs::build_profiles`) —
-/// every user-facing session (as opposed to a `researcher`/`page-writer`
-/// sub-agent) runs under it, so the successor inherits it unconditionally
-/// rather than needing to look the source's own profile up.
-const ROOT_PROFILE: &str = "build";
+/// The profile the successor is spawned under: the session's own, so a
+/// Researcher/Page writer/Designer chat stays one after compaction (its
+/// seeded first turn included). Safe for `designer`: a row only holds that
+/// profile when its whole history ran under it (`mutate::
+/// check_designer_switch`). A row value the engine does not register falls
+/// back to the root profile instead of failing the spawn.
+fn successor_profile(session: &assistant_session::Model) -> String {
+    let own = session.agent_profile.as_str();
+    let known = SWITCHABLE_PROFILES.contains(&own);
+    if known { own } else { BUILD_PROFILE }.to_string()
+}
 
 #[derive(serde::Deserialize, Default)]
 pub struct CompactBody {
@@ -126,7 +132,7 @@ pub async fn compact(
         session: successor.clone(),
         parent: None,
         predecessor: Some(source.clone()),
-        agent: ROOT_PROFILE.to_string(),
+        agent: successor_profile(&session),
         prompt: summary.clone(),
         // Multi-user mode (0.6, ADR-0147) is not adopted here — the site keys
         // its own `u{user_id}:{uuid}` session ids instead. Ignored anyway: a

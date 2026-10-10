@@ -49,9 +49,12 @@ Other ways in:
 - `site_cli design push <dir>` uploads a folder in this layout **into the
   draft** (paths outside the three roots are skipped); publish it from the
   admin.
-- AI designer (planned, #118): `design_*` tools for the in-house assistant and
-  external agents over MCP that read and write the draft only — publishing
-  stays a human action.
+- AI designer: `design_*` tools (list/read/write/delete/changes/contract/
+  render_check) for the in-house assistant — approval-free only in a fresh
+  **Designer** chat — and for external agents over MCP; large binaries go via
+  `PUT /api/design/draft/{path}` with the MCP Bearer token. They touch the
+  draft only — publishing stays a human action. See
+  [`docs/architecture.md`](../docs/architecture.md).
 - Bucket edits of `design/` objects + **Reload** in the admin (bypasses the
   draft; the next publish reports the conflict).
 

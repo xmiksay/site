@@ -268,6 +268,16 @@ fn pretty(value: &Value) -> String {
 
 /// The contract as Markdown — what `docs/design-contract.md` holds.
 pub fn markdown() -> String {
+    render_markdown(true)
+}
+
+/// [`markdown`] without the example contexts — the `designer` AI profile's
+/// prompt carries this.
+pub fn compact_markdown() -> String {
+    render_markdown(false)
+}
+
+fn render_markdown(examples: bool) -> String {
     let (schemas, defs) = schemas();
     let mut out = String::from(include_str!("contract_intro.md"));
     for (spec, schema) in &schemas {
@@ -281,7 +291,7 @@ pub fn markdown() -> String {
             spec.name, spec.about
         ));
         properties_table(schema, "Variable", &mut out);
-        if let Some(example) = spec.samples().first() {
+        if let Some(example) = spec.samples().first().filter(|_| examples) {
             out.push_str(&format!(
                 "<details><summary>Example context</summary>\n\n```json\n{}\n```\n\n</details>\n\n",
                 pretty(example)
@@ -320,6 +330,21 @@ mod tests {
             committed == json_schema_text(),
             "docs/design-contract.schema.json is stale — run `make contract` and commit it"
         );
+    }
+
+    #[test]
+    fn compact_contract_drops_only_the_examples() {
+        let (full, compact) = (markdown(), compact_markdown());
+        assert!(full.contains("Example context"));
+        assert!(!compact.contains("Example context"));
+        assert!(compact.len() < full.len());
+        for spec in TEMPLATES {
+            assert!(
+                compact.contains(&format!("### `{}`", spec.name)),
+                "{}",
+                spec.name
+            );
+        }
     }
 
     #[test]

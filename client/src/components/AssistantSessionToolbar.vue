@@ -8,6 +8,7 @@
 import { computed, ref, watch } from 'vue'
 import { useAssistantStore } from '../stores/assistant'
 import { profileIcon } from '../composables/useAssistantContent'
+import { ApiError } from '../api'
 
 const assistant = useAssistantStore()
 
@@ -37,9 +38,21 @@ async function changeModel(modelId: number) {
   await assistant.loadSession(assistant.current.id)
 }
 
-async function changeAgentProfile(profile: string) {
+// The backend refuses switching a chat with history into `designer` (409):
+// show its message and put the picker back on the profile that stayed.
+async function changeAgentProfile(select: HTMLSelectElement) {
   if (!assistant.current) return
-  await assistant.updateSession(assistant.current.id, { agent_profile: profile })
+  const previous = assistant.current.agent_profile
+  try {
+    await assistant.updateSession(assistant.current.id, { agent_profile: select.value })
+  } catch (e) {
+    select.value = previous
+    if (e instanceof ApiError && e.status === 409) {
+      alert(e.message)
+      return
+    }
+    throw e
+  }
   await assistant.loadSession(assistant.current.id)
 }
 
@@ -164,11 +177,12 @@ async function applyThinkingBudget() {
       class="border rounded px-2 py-1 text-xs"
       :value="assistant.current.agent_profile"
       title="Agent profile — what tools this chat may use"
-      @change="changeAgentProfile(($event.target as HTMLSelectElement).value)"
+      @change="changeAgentProfile($event.target as HTMLSelectElement)"
     >
       <option value="build">Build</option>
       <option value="researcher">Researcher</option>
       <option value="page-writer">Page writer</option>
+      <option value="designer">Designer</option>
     </select>
     <button
       v-if="!readOnly"

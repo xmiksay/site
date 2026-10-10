@@ -81,6 +81,11 @@ pub const CAPABILITIES: &[(&str, &[&str])] = &[
             "file_list",
             "gallery_list",
             "tag_list",
+            "design_list",
+            "design_read",
+            "design_changes",
+            "design_contract",
+            "design_render_check",
         ],
     ),
     (
@@ -92,10 +97,46 @@ pub const CAPABILITIES: &[(&str, &[&str])] = &[
             "gallery_create",
             "gallery_update",
             "tag_create",
+            "design_write",
+            "design_delete",
         ],
     ),
     ("call", &["web_search", "web_fetch"]),
 ];
+
+/// Design tools (#118) that only read: allowed without approval in every
+/// profile unless the user's own rules say otherwise.
+pub const DESIGN_READ_TOOLS: &[&str] = &[
+    "design_list",
+    "design_read",
+    "design_changes",
+    "design_contract",
+    "design_render_check",
+];
+
+/// Design tools that change the draft: allowed without approval only in a
+/// session running under the `designer` profile, otherwise they ask like any
+/// write. The draft is not harmless — draft preview (#116) serves its
+/// templates and JS on the site's origin to a logged-in admin, so a
+/// `<script>` written into the draft runs with the admin's session (and can
+/// publish). A profile that ingests outside content (`web_fetch`, page text,
+/// MCP servers) could be steered into such a write by a prompt injection;
+/// `designer` has only the design tools. The executor grades a call across
+/// the whole session chain, so a `designer` spawned by `build` still asks —
+/// its task came from a profile that reads outside content.
+pub const DESIGN_WRITE_TOOLS: &[&str] = &["design_write", "design_delete"];
+
+/// The built-in defaults under every user's rules, for a session running
+/// under `profile` (`None` when unknown, which grants nothing extra).
+fn builtin_rules(profile: Option<&str>) -> Vec<(String, Permission)> {
+    let designer = profile == Some(crate::ai::engine::DESIGNER_PROFILE);
+    let writes = DESIGN_WRITE_TOOLS.iter().filter(|_| designer);
+    DESIGN_READ_TOOLS
+        .iter()
+        .chain(writes)
+        .map(|tool| (tool.to_string(), Permission::Allow))
+        .collect()
+}
 
 fn capability_members(cap: &str) -> Option<&'static [&'static str]> {
     CAPABILITIES
@@ -191,7 +232,7 @@ pub fn permission_arg(tool: &str, input: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(input).ok()?;
     let field = match tool {
         "page_read" | "page_edit" | "page_delete" | "file_create" | "gallery_create"
-        | "gallery_update" => "path",
+        | "gallery_update" | "design_read" | "design_write" | "design_delete" => "path",
         "page_search" => "prefix",
         "web_search" => "query",
         "web_fetch" => "url",
@@ -244,11 +285,13 @@ pub async fn mcp_capability_index(
 /// rows, ordered `priority DESC, id DESC` (ascending precedence, so
 /// `resolve_scoped`'s last-match-wins reproduces the old `priority ASC, id
 /// ASC` first-match-wins semantics) and expanded through
-/// [`expand_capabilities`]. Unmatched calls default to [`Permission::Ask`]
-/// (the old `Effect::Prompt` default).
+/// [`expand_capabilities`], over the built-in defaults for the session's
+/// agent `profile` ([`DESIGN_READ_TOOLS`], [`DESIGN_WRITE_TOOLS`]). Unmatched
+/// calls default to [`Permission::Ask`] (the old `Effect::Prompt` default).
 pub fn build_profile(
     rows: &[tool_permission::Model],
     mcp: &McpCapabilityIndex,
+    profile: Option<&str>,
 ) -> PermissionProfile {
     let entries = rows
         .iter()
@@ -259,8 +302,11 @@ pub fn build_profile(
             )
         })
         .collect();
+    // First = lowest precedence (last match wins): any user rule beats these.
+    let mut rules = builtin_rules(profile);
+    rules.extend(expand_capabilities(entries, mcp));
     PermissionProfile {
-        rules: expand_capabilities(entries, mcp),
+        rules,
         default: Permission::Ask,
     }
 }
@@ -268,10 +314,12 @@ pub fn build_profile(
 /// Resolve the effective permission for a tool call: load `user_id`'s rules
 /// and MCP capability index, build the profile, and grade `tool_name` against
 /// it — `arg`/`workdir` scope an argument-/workdir-scoped rule to the actual
-/// call (#39, `PermissionProfile::resolve_scoped`).
+/// call (#39, `PermissionProfile::resolve_scoped`). `profile` is the session's
+/// agent profile, `None` when unknown.
 pub async fn resolve(
     db: &DatabaseConnection,
     user_id: i32,
+    profile: Option<&str>,
     tool_name: &str,
     arg: Option<&str>,
     workdir: Option<&str>,
@@ -283,171 +331,9 @@ pub async fn resolve(
         .all(db)
         .await?;
     let mcp = mcp_capability_index(db, user_id).await?;
-    let profile = build_profile(&rows, &mcp);
-    Ok(profile.resolve_scoped(tool_name, arg, workdir))
+    let rules = build_profile(&rows, &mcp, profile);
+    Ok(rules.resolve_scoped(tool_name, arg, workdir))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rows(rules: &[(&str, Effect, i32, i32)]) -> Vec<tool_permission::Model> {
-        rules
-            .iter()
-            .map(|(name, effect, priority, id)| tool_permission::Model {
-                id: *id,
-                user_id: 1,
-                name: name.to_string(),
-                effect: effect.as_str().to_string(),
-                priority: *priority,
-                created_at: chrono::Utc::now().fixed_offset(),
-            })
-            .collect()
-    }
-
-    /// DB order for `build_profile`'s input: `priority DESC, id DESC` — the
-    /// reverse of the old `priority ASC, id ASC` (lower priority number = wins
-    /// first), so this test helper mirrors that ordering directly rather than
-    /// asking every call site to re-sort.
-    fn profile_from(rules: &[(&str, Effect, i32, i32)]) -> PermissionProfile {
-        let mut rows = rows(rules);
-        rows.sort_by_key(|r| std::cmp::Reverse((r.priority, r.id)));
-        build_profile(&rows, &McpCapabilityIndex::new())
-    }
-
-    #[test]
-    fn bare_read_capability_expands_to_member_tools() {
-        let p = profile_from(&[("read", Effect::Allow, 10, 1)]);
-        assert_eq!(p.resolve_scoped("page_read", None, None), Permission::Allow);
-        assert_eq!(
-            p.resolve_scoped("page_search", None, None),
-            Permission::Allow
-        );
-        assert_eq!(p.resolve_scoped("file_list", None, None), Permission::Allow);
-        // Not a `read` member — untouched, falls to the Ask default.
-        assert_eq!(p.resolve_scoped("page_edit", None, None), Permission::Ask);
-    }
-
-    #[test]
-    fn bare_write_and_call_capabilities_expand_independently() {
-        let p = profile_from(&[
-            ("write", Effect::Allow, 20, 1),
-            ("call", Effect::Deny, 20, 2),
-        ]);
-        assert_eq!(p.resolve_scoped("page_edit", None, None), Permission::Allow);
-        assert_eq!(
-            p.resolve_scoped("tag_create", None, None),
-            Permission::Allow
-        );
-        assert_eq!(p.resolve_scoped("web_search", None, None), Permission::Deny);
-        assert_eq!(p.resolve_scoped("web_fetch", None, None), Permission::Deny);
-    }
-
-    #[test]
-    fn arg_scoped_rule_matches_the_extracted_path() {
-        let p = profile_from(&[("page_edit(obsidian/*)", Effect::Allow, 10, 1)]);
-        let arg = permission_arg("page_edit", r#"{"path":"obsidian/rust"}"#);
-        assert_eq!(
-            p.resolve_scoped("page_edit", arg.as_deref(), None),
-            Permission::Allow
-        );
-        let other = permission_arg("page_edit", r#"{"path":"projects/x"}"#);
-        assert_eq!(
-            p.resolve_scoped("page_edit", other.as_deref(), None),
-            Permission::Ask
-        );
-    }
-
-    #[test]
-    fn scoped_capability_rule_fans_out_to_every_member_with_the_pattern() {
-        let p = profile_from(&[("write(obsidian/*)", Effect::Deny, 10, 1)]);
-        let arg = permission_arg("page_edit", r#"{"path":"obsidian/rust"}"#);
-        assert_eq!(
-            p.resolve_scoped("page_edit", arg.as_deref(), None),
-            Permission::Deny
-        );
-        // `page_delete` has no `path`-shaped arg extractor collision here —
-        // same scoped rule still reaches it since it's a `write` member too.
-        let del_arg = permission_arg("page_delete", r#"{"path":"obsidian/rust"}"#);
-        assert_eq!(
-            p.resolve_scoped("page_delete", del_arg.as_deref(), None),
-            Permission::Deny
-        );
-    }
-
-    #[test]
-    fn workdir_scoped_rule_is_stored_but_never_matches_a_site_tool() {
-        // #39: `tool{pattern}` parses and is retained like any other rule, but
-        // no site tool currently supplies a `workdir` — `resolve` always
-        // passes `None`, so this rule can never actually fire yet.
-        let p = profile_from(&[("page_edit{/tmp/*}", Effect::Deny, 10, 1)]);
-        assert_eq!(p.resolve_scoped("page_edit", None, None), Permission::Ask);
-    }
-
-    #[test]
-    fn literal_and_wildcard_rules_still_work_unexpanded() {
-        let p = profile_from(&[
-            ("*", Effect::Deny, 100, 1),
-            ("page_read", Effect::Allow, 10, 2),
-        ]);
-        assert_eq!(p.resolve_scoped("page_read", None, None), Permission::Allow);
-        assert_eq!(p.resolve_scoped("page_edit", None, None), Permission::Deny);
-    }
-
-    #[test]
-    fn priority_ordering_reproduces_first_match_wins_semantics() {
-        // Old semantics: lower priority number wins regardless of insertion
-        // order. `profile_from` sorts into `priority DESC, id DESC` the same
-        // way `resolve`'s DB query does.
-        let p = profile_from(&[
-            ("page_read", Effect::Deny, 50, 1),
-            ("page_read", Effect::Allow, 10, 2),
-        ]);
-        assert_eq!(p.resolve_scoped("page_read", None, None), Permission::Allow);
-    }
-
-    #[test]
-    fn mcp_bare_capability_also_covers_an_annotated_mcp_tool() {
-        let mut mcp = McpCapabilityIndex::new();
-        mcp.insert("read".to_string(), vec!["docs__search".to_string()]);
-        let entries = vec![("read".to_string(), Permission::Allow)];
-        let rules = expand_capabilities(entries, &mcp);
-        let profile = PermissionProfile {
-            rules,
-            default: Permission::Ask,
-        };
-        assert_eq!(
-            profile.resolve_scoped("docs__search", None, None),
-            Permission::Allow
-        );
-        // A different server's tool, not annotated, is untouched.
-        assert_eq!(
-            profile.resolve_scoped("docs__unrelated", None, None),
-            Permission::Ask
-        );
-    }
-
-    #[test]
-    fn permission_arg_extracts_per_site_tool_shape() {
-        assert_eq!(
-            permission_arg("page_edit", r#"{"path":"a/b"}"#).as_deref(),
-            Some("a/b")
-        );
-        assert_eq!(
-            permission_arg("page_search", r#"{"prefix":"obsidian"}"#).as_deref(),
-            Some("obsidian")
-        );
-        assert_eq!(
-            permission_arg("web_search", r#"{"query":"rust"}"#).as_deref(),
-            Some("rust")
-        );
-        assert_eq!(
-            permission_arg("web_fetch", r#"{"url":"https://x"}"#).as_deref(),
-            Some("https://x")
-        );
-        // No meaningful scoping argument for this tool.
-        assert_eq!(permission_arg("tag_list", r#"{}"#), None);
-        // Malformed input.
-        assert_eq!(permission_arg("page_edit", "not json"), None);
-    }
-}
+mod tests;
