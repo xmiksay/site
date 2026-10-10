@@ -640,7 +640,17 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   rpm, because the default 50 rpm (1.2s between requests to one endpoint,
   ~2.4s to reach `tools/list`, per server, sequentially, per cache refresh) is
   calibrated for a rate-limited LLM API, not for a user's own servers — LLM
-  traffic in `catalog.rs` keeps the defaults. Because each endpoint's pool
+  traffic in `catalog.rs` keeps the defaults. The pool's *cross-process*
+  gate (ADR-0144) is off for the whole process (#124): `site_server`'s `main`
+  sets `ENTANGLEMENT_NO_SHARED_ENDPOINT_STATE=1` before the runtime starts
+  (`transport::NO_SHARED_ENDPOINT_STATE_ENV`; `.cargo/config.toml` does the
+  same for `cargo test`/`cargo run`). That gate `fsync`s a file-backed lease
+  on every admission and release — twelve `fsync`s per MCP handshake +
+  `tools/list`, enough under disk load to blow the 10s bounds and drop the
+  server — and caps concurrency per URL across every process and
+  connection; it only coordinates sibling processes sharing a key, which a
+  single `site_server` has none of. In-process pacing, concurrency and
+  `Retry-After` gates stay on. Because each endpoint's pool
   state is a `.state`/`.lock` pair on disk that nothing else evicts,
   `state.rs::create_state` runs a best-effort `prune_stale` sweep
   (`prune_endpoint_state`) at startup — idle >1h and provably dead pairs only,

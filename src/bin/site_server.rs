@@ -13,8 +13,21 @@ use tracing_subscriber::{EnvFilter, fmt};
 #[folder = "client/dist"]
 struct AdminAssets;
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // SAFETY: no other thread exists yet — the runtime is built below — so
+    // nothing can read the environment concurrently with this write.
+    unsafe { std::env::set_var(site::ai::mcp::NO_SHARED_ENDPOINT_STATE_ENV, "1") };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap_or_else(|e| {
+            eprintln!("failed to start the tokio runtime: {e}");
+            std::process::exit(1);
+        });
+    runtime.block_on(serve());
+}
+
+async fn serve() {
     fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()

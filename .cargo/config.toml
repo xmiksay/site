@@ -1,0 +1,5 @@
+# Mirrors what `site_server`'s `main` sets for itself, so tests and `cargo run`
+# talk to MCP/LLM endpoints the way production does — see
+# `NO_SHARED_ENDPOINT_STATE_ENV` in `src/ai/mcp/transport.rs` (#124).
+[env]
+ENTANGLEMENT_NO_SHARED_ENDPOINT_STATE = "1"
