@@ -8,11 +8,13 @@ use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use axum_extra::extract::CookieJar;
 use sea_orm::EntityTrait;
 
 use crate::entity::page;
 use crate::export::{self, ExportFormat};
 use crate::routes::api::error::{ApiError, ApiResult};
+use crate::routes::public::preview::Look;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -26,6 +28,7 @@ pub struct ExportQuery {
 
 async fn export_page(
     State(state): State<AppState>,
+    jar: CookieJar,
     Path(id): Path<i32>,
     Query(q): Query<ExportQuery>,
 ) -> ApiResult<Response> {
@@ -43,12 +46,17 @@ async fn export_page(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    let env = state.tmpl.env();
+    // In draft preview the export uses the draft's mdcast templates and brand.
+    let look = match Look::resolve(&state, &jar).await {
+        Ok(look) => look,
+        Err(resp) => return Ok(*resp),
+    };
+    let env = look.env(&state);
     let artifact = export::render_page(
         client,
         &state.db,
         &state.storage,
-        &state.design,
+        look.design(&state),
         &env,
         &pg.markdown,
         Some(pg.path.clone()),
@@ -77,7 +85,7 @@ async fn export_page(
     );
     let filename = format!("{slug}.{}", format.target().extension());
 
-    Ok((
+    let resp = (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, format.content_type().to_string()),
@@ -88,5 +96,6 @@ async fn export_page(
         ],
         artifact.bytes.to_vec(),
     )
-        .into_response())
+        .into_response();
+    Ok(look.finish(resp))
 }

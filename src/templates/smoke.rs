@@ -3,6 +3,8 @@
 //! collecting every failure instead of stopping at the first. Validates a
 //! design (or a draft) before it goes live.
 
+use std::sync::Arc;
+
 use anyhow::Context as _;
 use minijinja::Environment;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
@@ -10,7 +12,8 @@ use serde::Serialize;
 
 use super::context::{Layout, PageSearchContext, PageView, TagView};
 use super::contract::TEMPLATES;
-use super::{DesignLoader, strict_environment};
+use super::strict_environment;
+use crate::design::Resolve;
 use crate::entity::{menu, page, tag};
 use crate::markdown;
 use crate::repo::pages_search::{self, SearchError};
@@ -57,7 +60,7 @@ const DIRECTIVE_MARKERS: [&str; 9] = [
     "<json",
 ];
 
-/// Smoke-render the design `load` resolves (`templates/…` → bytes): 404 and
+/// Smoke-render `design` (a live store or a file view): 404 and
 /// `base.html`, the home menu item, the newest page plus the first page using
 /// each directive, and search with and without a tag — each anonymous and
 /// logged in. Then every template renders with each of the contract's example
@@ -70,10 +73,10 @@ const DIRECTIVE_MARKERS: [&str; 9] = [
 pub async fn smoke_render(
     db: &DatabaseConnection,
     storage: &Storage,
-    load: impl DesignLoader,
+    design: Arc<dyn Resolve>,
 ) -> anyhow::Result<SmokeReport> {
     let mut run = Run {
-        env: strict_environment(load),
+        env: strict_environment(design),
         report: SmokeReport::default(),
     };
     let base = Layout::new(build_menu(db, true).await, true);

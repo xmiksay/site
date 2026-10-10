@@ -13,7 +13,9 @@ src/
                           # design push, design contract
   routes/
     public/               # catch-all, export.rs (GET /{*path}?format=...,
-                          # #67), images.rs (file serving), search,
+                          # #67), images.rs (file serving), assets.rs
+                          # (/assets/*), preview.rs (draft preview: Look,
+                          # banner, template error page), search,
                           # sitemap, tags
     api/                  # auth, users, pages, tags, files, galleries,
                           # menu, tokens, markdown, paths, export.rs
@@ -68,7 +70,9 @@ src/
                           # shared design-draft/ (init, edit, discard,
                           # change list, mirror); publish.rs: publish,
                           # design-history/ snapshots, restore, crash
-                          # recovery; push.rs: `site_cli design push`
+                          # recovery; push.rs: `site_cli design push`;
+                          # view.rs: Resolve (what a request renders
+                          # with) + the cached DraftSite for preview
   storage/               # mod.rs: Storage (db | fs | s3 over object_store) —
                           # put_blob/get_blob/get_blob_stream by sha256;
                           # objects.rs: keyed get/put/delete/list on every
@@ -300,6 +304,12 @@ Failure guarantees:
 
 **Startup** runs a reload (completing a pending publish first) before serving; unreachable storage or a broken override refuses the start rather than serving the baked design in place of the site's own. Every backend holds the design (`db` since #114). Reloads and the draft cache are per process (single replica assumed). MCP and the AI assistant have no design access yet (#118).
 
+### Draft preview
+
+An admin sees the real site rendered with the draft (#116): `POST /api/design/preview {on: true}` sets the `design_preview` cookie, which counts **only together with a valid session** — `Look::resolve` (`src/routes/public/preview.rs`) checks the session only when the cookie is present (requests outside preview cost nothing extra), and an anonymous request or a bogus session gets the published design, cookie or not. In preview, public pages (catch-all, search), `/assets/*` and both exports (mdcast templates + `brand.toml`) resolve from the **draft view** — draft over baked (an uninitialized draft = the published view); `DESIGN_DIR` is ignored, since the preview shows what a publish would put live. Every preview response is `Cache-Control: no-store`; HTML gets a fixed "NÁHLED DRAFTU" banner with the exit link, injected right after `<body…>` (prepended when there is none), independent of the draft's templates. A template error renders a page listing each template in the error chain with name, line, message and the source excerpt (500, banner included) instead of the generic error page; a draft that cannot be loaded answers 503 with the non-leaking `status_error` text.
+
+**Caching.** `DesignStore::draft_site` (`src/design/view.rs`) returns a `DraftSite` — the draft view's files plus its own MiniJinja environment (templates compile lazily and stay cached in it) — rebuilt only when its **stamp** changes: the published `Stored` (pointer identity; swapped wholesale by every reload/publish) and the draft's `(path, Version)` list (`None` while uninitialized). Every preview request re-reads the draft meta and re-lists `design-draft/` under the draft mutex (downloading only objects whose version moved, like a reload), so an edit from any surface — admin API, `site_cli design push`, a bucket edit — shows on the next request; unchanged, the cached site is reused. `Resolve` (`load` + `list_prefix`) is the seam: `DesignStore` (live) and `DraftSite` both implement it, and the template engine (`templates::environment`) and the export bundle take it.
+
 ## Routes
 
 ### Public (server-rendered)
@@ -311,7 +321,7 @@ Failure guarantees:
 | `/tag/{id}` | GET | 302 redirect to `/search?tag=<name>` |
 | `/search?q=...` | GET | Fulltext search |
 | `/sitemap.xml` | GET | Sitemap |
-| `/assets/{*path}` | GET | Static files (`DESIGN_DIR` override → baked `design/assets/{css,js,img}`) |
+| `/assets/{*path}` | GET | Static files (`DESIGN_DIR` override → storage `design/assets/…` → baked `design/assets/{css,js,img}`; the draft's in [preview](#draft-preview)). `Vary: Cookie`, so toggling preview misses the day-long browser cache |
 | `/{*path}` | GET | Catch-all: menu → page → 404 |
 | `/{*path}?format=pdf\|slides` | GET | Export the resolved menu/page to PDF or reveal.js slides (see [Export (mdcast)](#export-mdcast)) — no `format` param passes straight through to the catch-all above |
 
@@ -336,6 +346,8 @@ Failure guarantees:
 | `/api/design/publish[?force=true]` | POST | Publish the draft (see [Design overrides](#design-overrides)) → the new history entry, `design.published`. Rejections change nothing: 422 failed validation (compile or strict smoke render, listing template + line), 500 when the smoke render cannot query the DB, 409 nothing to publish, 409 `design/` changed outside the draft (lists the paths; `force=true` overwrites them). 503 storage down / 500 otherwise when the mirror or reload failed (the message says whether the previous design was restored) |
 | `/api/design/history` | GET | Every published version `{id, at, by, files}`, newest first |
 | `/api/design/history/{id}/restore` | POST | Copy version `id` into the draft (never live) and re-base it; draft state, `design.draft_changed`; 404 unknown version |
+| `/api/design/preview` | POST | `{on: bool}` → sets (`design_preview=1`, HttpOnly, SameSite=Lax, Path=/) or clears the preview cookie; echoes `{on}`. See [Draft preview](#draft-preview) |
+| `/api/design/preview/exit` | GET | The preview banner's exit link: clears the cookie, 303 back to the `Referer`'s path (`/` without one) |
 | `/api/design/reload` | POST | Complete a pending publish if any (then `last_reload.completed_publish` names it and `design.published` is broadcast), reload `design/` from storage (after edits made directly in the bucket) → draft state; 422 broken template, 503 storage down (fs/s3; db errors are 500) |
 
 ### OAuth2 + MCP
@@ -858,7 +870,7 @@ Epic #63 integrated [`mdcast`](https://github.com/xmiksay/mdcast) to render page
 
 **The render pipeline + HTTP routes (#67):** `src/export/render.rs` exposes `ExportFormat` (`Pdf` | `Slides`, `::parse`/`::target`/`::content_type`) and the entrypoint `render_page(client, db, design, tmpl, markdown_src, title, logged_in, format) -> Result<mdcast_client::Artifact, ExportError>`: it runs `markdown::render_for_export`, loads the `BrandSpec` (see below), assembles the bundle via `build_bundle`, and posts a `RenderMarkdownRequest` (raw bridged markdown, `meta.title`, `brand`, target) through `mdcast_client::Client::render`, which handles the `409 → upload → retry` negotiation internally. Splitting and auto-classification happen **server-side** against the request's `brand.auto_layout`. One behavior delta vs. the old in-process pipeline: the server extracts a leading YAML frontmatter block from the markdown, and its `title` beats the request's `meta.title` (the page title passed here).
 
-**BrandSpec / design integration (#68):** `render_page` sources `mdcast_api::BrandSpec` from `design/mdcast/brand.toml` (`render::load_brand`, via `DesignStore::load` — not the asset bundle, since `BrandSpec` travels as `request.brand`, caller-owned config the server hands to its splitter and backends, not something a backend requests mid-render) instead of `BrandSpec::default()`; a missing, non-UTF-8, or malformed file logs a warning and degrades to the default rather than failing the export. `design/assets/css/style.css`'s `:root` custom properties are the single source of truth the committed `brand.toml`'s `[palette]` mirrors (`background`/`text`/`heading`/`muted`/`accent`/`link`/`border` ← `--bg`/`--text`/`--black`/`--muted`/`--accent`/`--border`); `[fonts]` sets `sans`/`mono` for typst (constrained to typst-kit's bundled New Computer Modern/DejaVu Sans Mono — it ships no proportional sans face, so a real brand font is a `ResolvedDoc.fonts`-backed follow-up) and `body`/`heading`/`code` for reveal.js (a real browser, so it gets the site's actual font stack). Two more `design/mdcast/` additions consume it:
+**BrandSpec / design integration (#68):** `render_page` sources `mdcast_api::BrandSpec` from `design/mdcast/brand.toml` (`render::load_brand`, via the request's design view — `Resolve`: the live `DesignStore`, or the draft in [preview](#draft-preview) — not the asset bundle, since `BrandSpec` travels as `request.brand`, caller-owned config the server hands to its splitter and backends, not something a backend requests mid-render) instead of `BrandSpec::default()`; a missing, non-UTF-8, or malformed file logs a warning and degrades to the default rather than failing the export. `design/assets/css/style.css`'s `:root` custom properties are the single source of truth the committed `brand.toml`'s `[palette]` mirrors (`background`/`text`/`heading`/`muted`/`accent`/`link`/`border` ← `--bg`/`--text`/`--black`/`--muted`/`--accent`/`--border`); `[fonts]` sets `sans`/`mono` for typst (constrained to typst-kit's bundled New Computer Modern/DejaVu Sans Mono — it ships no proportional sans face, so a real brand font is a `ResolvedDoc.fonts`-backed follow-up) and `body`/`heading`/`code` for reveal.js (a real browser, so it gets the site's actual font stack). Two more `design/mdcast/` additions consume it:
 
 - `typst/layouts/pdf/{content,hero,callout,section-divider,thanks}.typ` — brand-aware overrides of mdcast's embedded layouts of the same name, reading `brand-color`/`brand-font` off the `/context.typ` accessors mdcast injects (`content.typ`'s header already used `doc-meta`; these also read `brand.palette`/`brand.fonts`). `image-full.typ` has no themeable text/color and is left on mdcast's embedded default. `typst/layouts/pdf-presentation/*` isn't overridden either — `Target::PdfPresentation` isn't wired to any route (only `Pdf` and `HtmlReveal` are, see `ExportFormat::target`).
 - `revealjs/brand.css` — an escape hatch appended after mdcast's own `palette`/`fonts` → reveal.js CSS-custom-property projection (`reveal_brand::brand_css`, which also emits a `--brand-<key>` passthrough for every palette key); a few rules here (code-block border, blockquote accent bar, section-divider heading color) round out the "default reveal.js theme/shell" beyond what the CSS-variable projection alone covers.

@@ -1,13 +1,16 @@
+pub mod assets;
 pub mod export;
 pub mod images;
 pub mod pages;
+pub mod preview;
 pub mod search;
 pub mod sitemap;
 pub mod tags;
 
 use axum::extract::{Request, State};
-use axum::response::Html;
+use axum::response::{Html, Response};
 use axum_extra::extract::CookieJar;
+use minijinja::Environment;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::entity::{menu, page, tag};
@@ -16,6 +19,8 @@ use crate::routes::build_menu;
 use crate::state::AppState;
 use crate::templates::context::{Layout, PageView, PathPageContext, TagView};
 use crate::{auth, markdown};
+
+use preview::Look;
 
 /// Log the real error and serve a generic page — template paths and DB/SQL
 /// detail must not reach anonymous visitors.
@@ -78,33 +83,36 @@ pub(crate) async fn lookup_content(db: &DatabaseConnection, path: &str) -> Optio
 }
 
 /// Catch-all handler: menu -> page -> 404
-pub async fn catch_all(
-    State(state): State<AppState>,
-    jar: CookieJar,
-    req: Request,
-) -> Html<String> {
+pub async fn catch_all(State(state): State<AppState>, jar: CookieJar, req: Request) -> Response {
     let path = path_util::normalize(req.uri().path());
+    let look = match Look::resolve(&state, &jar).await {
+        Ok(look) => look,
+        Err(resp) => return *resp,
+    };
     let logged_in = auth::is_logged_in(&state, &jar).await.is_some();
     let layout = Layout::new(build_menu(&state.db, logged_in).await, logged_in);
+    let env = look.env(&state);
+    let rendered = render_path(&state, &env, &path, layout).await;
+    look.respond("render error", rendered)
+}
 
-    let env = state.tmpl.env();
-    let tmpl = match env.get_template("path_page.html") {
-        Ok(t) => t,
-        Err(e) => return error_page("template error", e),
+async fn render_path(
+    state: &AppState,
+    env: &Environment<'static>,
+    path: &str,
+    layout: Layout,
+) -> Result<String, minijinja::Error> {
+    let content = match lookup_content(&state.db, path).await {
+        Some(content) if layout.logged_in || !content.private() => content,
+        _ => return render_404(env, &layout),
     };
-
-    let Some(content) = lookup_content(&state.db, &path).await else {
-        return render_404(&state, layout);
-    };
-    if content.private() && !logged_in {
-        return render_404(&state, layout);
-    }
-
+    let tmpl = env.get_template("path_page.html")?;
+    let logged_in = layout.logged_in;
     let body_html = markdown::render(
         content.markdown(),
         &state.db,
         &state.storage,
-        &env,
+        env,
         logged_in,
     )
     .await;
@@ -112,10 +120,7 @@ pub async fn catch_all(
         PathContent::Menu(m) => menu_context(layout, &m, body_html),
         PathContent::Page(pg) => page_context(&state.db, layout, &pg, body_html).await,
     };
-    match tmpl.render(&ctx) {
-        Ok(html) => Html(html),
-        Err(e) => error_page("render error", e),
-    }
+    tmpl.render(&ctx)
 }
 
 /// `path_page.html` context for a menu item.
@@ -152,15 +157,14 @@ pub(crate) async fn page_context(
     }
 }
 
-fn render_404(state: &AppState, layout: Layout) -> Html<String> {
-    let env = state.tmpl.env();
+fn render_404(env: &Environment<'static>, layout: &Layout) -> Result<String, minijinja::Error> {
     // A partial DESIGN_DIR bundle may lack 404.html — fall back rather than
-    // panic on every not-found.
-    let Ok(tmpl) = env.get_template("404.html") else {
-        return Html("<h1>Page not found</h1>".to_string());
+    // fail every not-found.
+    let tmpl = match env.get_template("404.html") {
+        Err(e) if e.kind() == minijinja::ErrorKind::TemplateNotFound => {
+            return Ok("<h1>Page not found</h1>".to_string());
+        }
+        tmpl => tmpl?,
     };
-    match tmpl.render(&layout) {
-        Ok(html) => Html(html),
-        Err(_) => Html("<h1>Page not found</h1>".to_string()),
-    }
+    tmpl.render(layout)
 }

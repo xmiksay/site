@@ -13,10 +13,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum_extra::extract::CookieJar;
 
+use crate::auth;
 use crate::export::{self, ExportFormat};
 use crate::path_util;
+use crate::routes::public::{self, preview::Look};
 use crate::state::AppState;
-use crate::{auth, routes::public};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/{*path}", get(handle))
@@ -55,6 +56,10 @@ async fn handle(
             .into_response();
     };
 
+    let look = match Look::resolve(&state, &jar).await {
+        Ok(look) => look,
+        Err(resp) => return *resp,
+    };
     let path = path_util::normalize(req.uri().path());
     let logged_in = auth::is_logged_in(&state, &jar).await.is_some();
 
@@ -65,12 +70,12 @@ async fn handle(
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
 
-    let env = state.tmpl.env();
+    let env = look.env(&state);
     let artifact = match export::render_page(
         client,
         &state.db,
         &state.storage,
-        &state.design,
+        look.design(&state),
         &env,
         content.markdown(),
         Some(content.title()),
@@ -98,7 +103,7 @@ async fn handle(
         export::sanitize_filename(path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("export"));
     let filename = format!("{slug}.{}", format.target().extension());
 
-    (
+    let resp = (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, format.content_type().to_string()),
@@ -109,5 +114,6 @@ async fn handle(
         ],
         artifact.bytes.to_vec(),
     )
-        .into_response()
+        .into_response();
+    look.finish(resp)
 }

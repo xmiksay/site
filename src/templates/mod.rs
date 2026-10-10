@@ -11,7 +11,7 @@ use minijinja::value::Value;
 use minijinja::{Environment, UndefinedBehavior};
 use parking_lot::RwLock;
 
-use crate::design::DesignStore;
+use crate::design::{DesignStore, Resolve};
 
 /// MiniJinja templates resolved through a [`DesignStore`].
 ///
@@ -49,7 +49,7 @@ impl Templates {
     pub fn env(&self) -> Arc<Environment<'static>> {
         match &self.0 {
             Source::Frozen(_, env) => env.read().clone(),
-            Source::Live(design) => Arc::new(build_environment(design.clone())),
+            Source::Live(design) => Arc::new(environment(design.clone())),
         }
     }
 
@@ -65,7 +65,7 @@ impl Templates {
 /// Compile every available template into the environment up front so release
 /// builds never load or compile a template during a request.
 fn compile_all(design: &Arc<DesignStore>) -> Environment<'static> {
-    let mut env = build_environment(design.clone());
+    let mut env = environment(design.clone());
     let mut count = 0;
     for name in design.template_names() {
         let Some(data) = design.load(&format!("templates/{name}")) else {
@@ -85,40 +85,32 @@ fn compile_all(design: &Arc<DesignStore>) -> Environment<'static> {
     env
 }
 
-/// Create an environment with the shared filters and a design-backed loader.
+/// Create an environment with the shared filters and a loader over `design`.
 /// The loader is kept even on frozen environments as a safety fallback; in
 /// release builds it still resolves entirely from RAM.
-fn build_environment(design: Arc<DesignStore>) -> Environment<'static> {
-    environment_from(move |path| design.load(path))
-}
-
-/// The environment the smoke render uses: the same filters, templates
-/// resolved through `load` (a design path such as `templates/base.html` →
-/// bytes), and any use of an undefined value is an error.
-pub fn strict_environment(load: impl DesignLoader) -> Environment<'static> {
-    let mut env = environment_from(load);
-    env.set_undefined_behavior(UndefinedBehavior::Strict);
+pub fn environment(design: Arc<dyn Resolve>) -> Environment<'static> {
+    let mut env = Environment::new();
+    env.set_loader(
+        move |name| match design.load(&format!("templates/{name}")) {
+            Some(data) => match String::from_utf8(data) {
+                Ok(src) => Ok(Some(src)),
+                Err(e) => Err(minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    format!("template '{name}' is not valid UTF-8: {e}"),
+                )),
+            },
+            None => Ok(None),
+        },
+    );
+    env.add_filter("timeformat", timeformat);
     env
 }
 
-/// Resolves a design path (`templates/…`) to its bytes — a [`DesignStore`]
-/// (`move |p| design.load(p)`) or any other template set, such as a draft.
-pub trait DesignLoader: Fn(&str) -> Option<Vec<u8>> + Send + Sync + 'static {}
-impl<F: Fn(&str) -> Option<Vec<u8>> + Send + Sync + 'static> DesignLoader for F {}
-
-fn environment_from(load: impl DesignLoader) -> Environment<'static> {
-    let mut env = Environment::new();
-    env.set_loader(move |name| match load(&format!("templates/{name}")) {
-        Some(data) => match String::from_utf8(data) {
-            Ok(src) => Ok(Some(src)),
-            Err(e) => Err(minijinja::Error::new(
-                minijinja::ErrorKind::InvalidOperation,
-                format!("template '{name}' is not valid UTF-8: {e}"),
-            )),
-        },
-        None => Ok(None),
-    });
-    env.add_filter("timeformat", timeformat);
+/// The environment the smoke render uses: [`environment`] where any use of
+/// an undefined value is an error.
+pub fn strict_environment(design: Arc<dyn Resolve>) -> Environment<'static> {
+    let mut env = environment(design);
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
     env
 }
 

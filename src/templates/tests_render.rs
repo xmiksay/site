@@ -14,8 +14,7 @@ fn lenient() -> Arc<Environment<'static>> {
 }
 
 fn strict() -> Environment<'static> {
-    let design = DesignStore::new(None);
-    strict_environment(move |p| design.load(p))
+    strict_environment(Arc::new(DesignStore::new(None)))
 }
 
 /// Render `typed` leniently and strictly; both must equal the legacy render.
