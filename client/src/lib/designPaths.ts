@@ -5,7 +5,7 @@ export const DESIGN_ROOTS = ['templates', 'assets', 'mdcast']
 const TEXT_EXTENSIONS = new Set([
   'html', 'htm', 'css', 'js', 'mjs', 'json', 'toml', 'typ', 'txt', 'svg', 'md', 'xml', 'yml', 'yaml',
 ])
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'svg', 'ico'])
+export const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'svg', 'ico'])
 
 function extension(path: string): string {
   const name = path.slice(path.lastIndexOf('/') + 1)
@@ -47,7 +47,7 @@ export function previewPath(input: string, origin: string = location.origin): st
   }
 }
 
-const FONT_EXTENSIONS = new Set(['woff', 'woff2', 'ttf', 'otf', 'eot'])
+export const FONT_EXTENSIONS = new Set(['woff', 'woff2', 'ttf', 'otf', 'eot'])
 
 /** Where an uploaded file lands by default: images under `assets/img/`, fonts
  *  under `assets/fonts/`, anything else in the folder picked in the tree. */

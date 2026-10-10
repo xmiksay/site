@@ -145,14 +145,21 @@ through `files_repo::create_file` (content-addressed, thumbnail for images,
 `file.created` broadcast); a **Designer** chat's goes into the design draft —
 images (`png jpg jpeg gif webp avif svg ico`) to `assets/img/`, fonts
 (`woff woff2 ttf otf eot`) to `assets/fonts/`, anything else is refused with
-422 — via `DesignStore::draft_put` + `design.draft_changed`. The name is
+422 — via `DesignStore::draft_put_new` + `design.draft_changed`. The name is
 sanitized to one lowercase `[a-z0-9_-]` segment plus extension (no
 separators or traversal; empty → `file`), and a taken path gets `-2`, `-3`, …
-before the extension. In the transcript, `AssistantMessageContent.vue` turns
-that note back into links (with a thumbnail for images): site files via
-`GET /api/files/by-path/{path}` (a redirect to `/files/{hash}`, or
-`/nahled` with `?thumbnail=true`), draft assets via the raw draft API. This
-replaced the Design studio's separate *Attach asset…* action.
+before the extension. Concurrent uploads of one name get distinct paths: the
+draft picks the free name and writes it under its lock (`draft_put_new`); a
+site file that loses the race on the unique `files.path` index retries with
+the next free name (3 attempts, then 409). In the transcript,
+`AssistantMessageContent.vue` turns that note back into links (with a
+thumbnail for images) — only for paths in `uploads/chat/` or
+`assets/{img,fonts}/` without empty/`.`/`..` segments, since the note is
+plain message text: site files via `GET /api/files/by-path/{path}` (a
+redirect to `/files/{hash}`, or `/nahled` with `?thumbnail=true`), draft
+assets via the raw draft API. A Designer chat's file picker offers exactly
+the server's image/font extensions (`DESIGNER_ACCEPT`). This replaced the
+Design studio's separate *Attach asset…* action.
 
 Design/template resolution (see `src/design/`, `DesignStore`):
 `DESIGN_DIR` (dev-only, live) → storage overrides (`design/…` keys) → baked
@@ -740,9 +747,16 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   `uploads/chat/…` path), and with `include_content` on a PNG/JPEG/WebP/GIF
   file answers `[metadata JSON text, image block]` instead of text — an
   `entanglement_provider::ContentPart::Image { source: Base64 }` built by
-  `files::image_for_model` (decoded on a blocking thread, downscaled so the
-  longest side is ≤ 1568 px, re-encoded only when it shrank or is over 1 MB:
-  PNG when it has alpha, else JPEG q85). `design_read` does the same for
+  `files::image_for_model` (on a blocking thread; the format is sniffed from
+  the bytes, never taken from the stored mimetype, since a mislabelled image
+  block makes the provider reject it and that tool result would then break
+  every later turn; dimensions come from the header, decoding runs under
+  explicit `image::Limits` — 16384 px a side, 512 MB; downscaled with a
+  Triangle filter so the longest side is ≤ 1568 px; passed through
+  byte-for-byte only when it fits, is ≤ 1 MB and is really PNG/JPEG/WebP/GIF,
+  otherwise re-encoded: PNG when it has alpha, else JPEG q85). Thumbnails
+  (`make_thumbnail`) use the same sniffing reader and limits, and
+  `files_repo` now builds them on a blocking thread too. `design_read` does the same for
   draft images: the shared `design::tools::read` returns `Output::File`,
   which the AI adapter renders as an image and MCP (unchanged) as the
   `data`/`data_base64` JSON (`tools::file_json`). All three provider

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useAssistantStore } from '../stores/assistant'
-import { attachmentNote, MAX_ATTACHMENT_BYTES, type ChatAttachment } from '../lib/chatAttachments'
+import { attachmentNote, DESIGNER_ACCEPT, MAX_ATTACHMENT_BYTES, type ChatAttachment } from '../lib/chatAttachments'
 import { formatBytes } from '../lib/format'
 import PaperclipIcon from './icons/PaperclipIcon.vue'
 
@@ -166,7 +166,7 @@ defineExpose({ addFiles })
           type="file"
           multiple
           class="hidden"
-          :accept="isDesigner ? 'image/*,.woff,.woff2,.ttf,.otf' : undefined"
+          :accept="isDesigner ? DESIGNER_ACCEPT : undefined"
           :disabled="busy"
           @change="onPick"
         />

@@ -202,7 +202,7 @@ pub async fn create_file(
     .insert(db)
     .await?;
 
-    let has_thumbnail = store_thumbnail(db, storage, model.id, &input.data, &input.mimetype).await;
+    let has_thumbnail = store_thumbnail(db, storage, model.id, input.data, &input.mimetype).await;
 
     Ok(CreatedFile {
         model,
@@ -317,7 +317,7 @@ pub async fn update_metadata(
 
     let has_thumbnail = if let Some(data) = new_data {
         file_thumbnail::Entity::delete_by_id(id).exec(db).await?;
-        store_thumbnail(db, storage, id, &data, &updated.mimetype).await
+        store_thumbnail(db, storage, id, data, &updated.mimetype).await
     } else {
         has_thumbnail(db, id).await?
     };
@@ -334,10 +334,16 @@ async fn store_thumbnail(
     db: &DatabaseConnection,
     storage: &Storage,
     file_id: i32,
-    data: &[u8],
+    data: Vec<u8>,
     mimetype: &str,
 ) -> bool {
-    let Some(thumb) = make_thumbnail(data, mimetype) else {
+    // Decoding a large photo is CPU-heavy; keep it off the async workers.
+    let mime = mimetype.to_string();
+    let thumb = tokio::task::spawn_blocking(move || make_thumbnail(&data, &mime))
+        .await
+        .ok()
+        .flatten();
+    let Some(thumb) = thumb else {
         return false;
     };
     let hash = match storage.put_blob(&thumb.data).await {

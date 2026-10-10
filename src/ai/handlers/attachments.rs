@@ -12,14 +12,14 @@ use axum::extract::multipart::MultipartError;
 use axum::extract::{Extension, Multipart, Path, State};
 use axum::http::StatusCode;
 use bytes::Bytes;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect, SqlErr};
 use serde::Serialize;
 
 use super::sessions::load_owned;
 use crate::ai::engine::DESIGNER_PROFILE;
 use crate::design::tools::file_mimetype;
 use crate::entity::file;
-use crate::repo::files::{self as files_repo, NewFile};
+use crate::repo::files::{self as files_repo, FileSaveError, NewFile};
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::routes::broadcast::{self, DraftChange};
 use crate::state::AppState;
@@ -29,6 +29,8 @@ pub const MAX_ATTACHMENT_SIZE: usize = 10 * 1024 * 1024;
 pub const BODY_LIMIT: usize = MAX_ATTACHMENT_SIZE + 64 * 1024;
 /// `name.png` … `name-999.png`; past that the folder is someone's dump.
 const MAX_CANDIDATES: u32 = 999;
+/// Inserts tried before a same-name race is answered 409.
+const INSERT_ATTEMPTS: usize = 3;
 
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico"];
 const FONT_EXTENSIONS: &[&str] = &["woff", "woff2", "ttf", "otf", "eot"];
@@ -79,7 +81,7 @@ async fn to_files(
     upload: Upload,
 ) -> ApiResult<Attachment> {
     let dir = chrono::Utc::now().format("uploads/chat/%Y-%m").to_string();
-    let taken: HashSet<String> = file::Entity::find()
+    let mut taken: HashSet<String> = file::Entity::find()
         .select_only()
         .column(file::Column::Path)
         .filter(file::Column::Path.starts_with(format!("{dir}/")))
@@ -88,28 +90,42 @@ async fn to_files(
         .await?
         .into_iter()
         .collect();
-    let path = free_path(&dir, &name, |p| taken.contains(p)).ok_or_else(folder_full)?;
-    let mimetype = files_repo::resolve_mimetype(upload.mimetype, &path);
-    let created = files_repo::create_file(
-        &state.db,
-        &state.storage,
-        user_id,
-        NewFile {
-            path,
+    // A concurrent upload of the same name can claim the picked path
+    // between the lookup and the insert; the unique index on `files.path`
+    // refuses the loser, which moves on to the next free name.
+    for _ in 0..INSERT_ATTEMPTS {
+        let path = candidates(&dir, &name)
+            .find(|p| !taken.contains(p))
+            .ok_or_else(folder_full)?;
+        let mimetype = files_repo::resolve_mimetype(upload.mimetype.clone(), &path);
+        let new_file = NewFile {
+            path: path.clone(),
             description: None,
             mimetype,
-            data: upload.data,
-        },
-    )
-    .await?;
-    broadcast::file_created(&state.ws_hub, &created.model, created.has_thumbnail);
-    Ok(Attachment {
-        size: created.model.size_bytes as usize,
-        path: created.model.path,
-        mimetype: created.model.mimetype,
-        target: "file",
-        file_id: Some(created.model.id),
-    })
+            data: upload.data.clone(),
+        };
+        match files_repo::create_file(&state.db, &state.storage, user_id, new_file).await {
+            Ok(created) => {
+                broadcast::file_created(&state.ws_hub, &created.model, created.has_thumbnail);
+                return Ok(Attachment {
+                    size: created.model.size_bytes as usize,
+                    path: created.model.path,
+                    mimetype: created.model.mimetype,
+                    target: "file",
+                    file_id: Some(created.model.id),
+                });
+            }
+            Err(FileSaveError::Db(e))
+                if matches!(e.sql_err(), Some(SqlErr::UniqueConstraintViolation(_))) =>
+            {
+                taken.insert(path);
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Err(ApiError::Conflict(
+        "concurrent uploads took this name; try again".into(),
+    ))
 }
 
 async fn to_draft(state: &AppState, name: String, data: Vec<u8>) -> ApiResult<Attachment> {
@@ -120,14 +136,12 @@ async fn to_draft(state: &AppState, name: String, data: Vec<u8>) -> ApiResult<At
                 .into(),
         )
     })?;
-    let draft = state.design.draft(&state.storage).await?;
-    let view = state.design.with_baked(&draft.files);
-    let path = free_path(dir, &name, |p| view.contains_key(p)).ok_or_else(folder_full)?;
     let size = data.len();
-    state
+    let path = state
         .design
-        .draft_put(&state.storage, &path, Bytes::from(data))
-        .await?;
+        .draft_put_new(&state.storage, candidates(dir, &name), Bytes::from(data))
+        .await?
+        .ok_or_else(folder_full)?;
     broadcast::design_draft_changed(&state.ws_hub, &DraftChange::Put { path: &path });
     Ok(Attachment {
         mimetype: file_mimetype(&path),
@@ -225,18 +239,17 @@ fn clean_segment(raw: &str, max: usize) -> String {
     out.trim_end_matches('-').to_string()
 }
 
-/// `dir/name`, or `dir/stem-2.ext`, `-3`, … — the first one not `taken`.
-pub fn free_path(dir: &str, name: &str, taken: impl Fn(&str) -> bool) -> Option<String> {
+/// The paths to try, in order: `dir/name`, then `dir/stem-2.ext`, `-3`, …
+pub fn candidates(dir: &str, name: &str) -> impl Iterator<Item = String> + Send + use<> {
     let (stem, ext) = match name.rfind('.') {
-        Some(i) => (&name[..i], &name[i..]),
-        None => (name, ""),
+        Some(i) => (name[..i].to_string(), name[i..].to_string()),
+        None => (name.to_string(), String::new()),
     };
-    (1..=MAX_CANDIDATES)
-        .map(|n| match n {
-            1 => format!("{dir}/{name}"),
-            n => format!("{dir}/{stem}-{n}{ext}"),
-        })
-        .find(|p| !taken(p))
+    let dir = dir.to_string();
+    (1..=MAX_CANDIDATES).map(move |n| match n {
+        1 => format!("{dir}/{stem}{ext}"),
+        n => format!("{dir}/{stem}-{n}{ext}"),
+    })
 }
 
 /// Where a Designer chat's attachment goes in the draft; `None` refuses it.
@@ -286,19 +299,20 @@ mod tests {
     }
 
     #[test]
-    fn free_path_suffixes_collisions_before_the_extension() {
+    fn candidates_suffix_collisions_before_the_extension() {
         let taken = ["d/a.png", "d/a-2.png"];
-        let free = free_path("d", "a.png", |p| taken.contains(&p));
+        let free = candidates("d", "a.png").find(|p| !taken.contains(&p.as_str()));
         assert_eq!(free.as_deref(), Some("d/a-3.png"));
+        assert_eq!(candidates("d", "b.png").next().as_deref(), Some("d/b.png"));
         assert_eq!(
-            free_path("d", "b.png", |_| false).as_deref(),
-            Some("d/b.png")
+            candidates("d", "readme").take(2).collect::<Vec<_>>(),
+            ["d/readme", "d/readme-2"]
         );
+        assert_eq!(candidates("d", "a.png").count(), MAX_CANDIDATES as usize);
         assert_eq!(
-            free_path("d", "readme", |p| p == "d/readme").as_deref(),
-            Some("d/readme-2")
+            candidates("d", "a.png").last().as_deref(),
+            Some("d/a-999.png")
         );
-        assert_eq!(free_path("d", "a.png", |_| true), None);
     }
 
     #[test]

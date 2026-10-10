@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { attachmentNote, attachmentUrl, splitAttachments, type ChatAttachment } from './chatAttachments'
+import { attachmentNote, attachmentUrl, DESIGNER_ACCEPT, splitAttachments, type ChatAttachment } from './chatAttachments'
 
 const file = (path: string): ChatAttachment => ({ path, mimetype: 'image/png', size: 1, target: 'file' })
 const asset = (path: string): ChatAttachment => ({ path, mimetype: 'image/png', size: 1, target: 'design' })
@@ -35,5 +35,28 @@ describe('chatAttachments', () => {
       '/api/files/by-path/uploads/chat/2026-10/a.png?thumbnail=true',
     )
     expect(attachmentUrl('assets/img/logo.png', true)).toBe('/api/design/draft/assets/img/logo.png')
+    expect(attachmentUrl('assets/fonts/inter.woff2')).toBe('/api/design/draft/assets/fonts/inter.woff2')
+  })
+
+  it('attachmentUrl links nothing outside the two attachment folders', () => {
+    for (const path of [
+      'uploads/chat/../secret.png',
+      'uploads/chat//a.png',
+      'assets/img/./a.png',
+      'uploads/other/a.png',
+      'templates/base.html',
+      'assets/css/style.css',
+      '/uploads/chat/a.png',
+      'https://evil.example/a.png',
+    ]) {
+      expect(attachmentUrl(path), path).toBeNull()
+    }
+  })
+
+  it('DESIGNER_ACCEPT lists exactly the image and font extensions the server takes', () => {
+    expect(DESIGNER_ACCEPT.split(',')).toEqual([
+      '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.svg', '.ico',
+      '.woff', '.woff2', '.ttf', '.otf', '.eot',
+    ])
   })
 })

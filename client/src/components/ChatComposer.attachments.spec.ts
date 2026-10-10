@@ -4,7 +4,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import ChatComposer from './ChatComposer.vue'
 import { useAssistantStore } from '../stores/assistant'
 import type { AssistantSessionDetail } from '../types'
-import type { ChatAttachment } from '../lib/chatAttachments'
+import { DESIGNER_ACCEPT, type ChatAttachment } from '../lib/chatAttachments'
 
 function open(id: number, agent_profile = 'build') {
   const assistant = useAssistantStore()
@@ -152,7 +152,7 @@ describe('ChatComposer attachments', () => {
     vi.spyOn(assistant, 'uploadAttachment').mockResolvedValue(stored('assets/img/logo.png', 'design'))
     const send = vi.spyOn(assistant, 'sendMessage').mockResolvedValue({} as AssistantSessionDetail)
     const wrapper = mount(ChatComposer)
-    expect(wrapper.find('input[type="file"]').attributes('accept')).toContain('.woff2')
+    expect(wrapper.find('input[type="file"]').attributes('accept')).toBe(DESIGNER_ACCEPT)
     await pick(wrapper, [png('logo.png')])
     await wrapper.find('form').trigger('submit')
     await flushPromises()

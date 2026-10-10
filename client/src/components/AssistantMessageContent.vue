@@ -106,8 +106,10 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
       {{ userMessage.body }}
       <ul v-if="userMessage.paths.length" class="mt-2 flex flex-wrap gap-2 whitespace-normal" aria-label="Attachments">
         <li v-for="path in userMessage.paths" :key="path">
+          <span v-if="!attachmentUrl(path)" class="text-xs">{{ path }}</span>
           <a
-            :href="attachmentUrl(path)"
+            v-else
+            :href="attachmentUrl(path)!"
             target="_blank"
             rel="noopener"
             class="inline-flex items-center gap-1 text-xs underline"
@@ -115,7 +117,7 @@ async function decideAll(calls: ToolCallView[], approve: boolean, remember = fal
           >
             <img
               v-if="isImagePath(path)"
-              :src="attachmentUrl(path, true)"
+              :src="attachmentUrl(path, true) ?? undefined"
               alt=""
               class="h-12 w-12 rounded object-cover bg-surface"
               @error="($event.target as HTMLImageElement).hidden = true"
