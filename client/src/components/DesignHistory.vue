@@ -1,0 +1,72 @@
+<script setup lang="ts">
+// Every published version, newest first; restoring copies one into the
+// draft (never straight to live) — publishing it is a separate step.
+import { onMounted, ref } from 'vue'
+import { useDesignStore } from '../stores/design'
+
+const emit = defineEmits<{ restored: [id: string]; close: [] }>()
+
+const design = useDesignStore()
+const loading = ref(true)
+const busy = ref<string | null>(null)
+const error = ref('')
+
+function message(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
+async function restore(id: string) {
+  const changes = design.state?.changes.length ?? 0
+  const lost = changes ? ` The ${changes} unpublished change(s) in the draft are replaced.` : ''
+  if (!confirm(`Restore version ${id} into the draft?${lost}`)) return
+  busy.value = id
+  error.value = ''
+  try {
+    await design.restore(id)
+    emit('restored', id)
+  } catch (e) {
+    error.value = message(e)
+  } finally {
+    busy.value = null
+  }
+}
+
+onMounted(async () => {
+  try {
+    await design.loadHistory()
+  } catch (e) {
+    error.value = message(e)
+  } finally {
+    loading.value = false
+  }
+})
+</script>
+
+<template>
+  <section class="bg-white rounded shadow p-3 text-sm">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="font-semibold">Historie</h2>
+      <button type="button" class="text-gray-500 hover:text-gray-800" aria-label="Close" @click="emit('close')">
+        ✕
+      </button>
+    </div>
+    <p v-if="error" class="text-red-700 mb-2">{{ error }}</p>
+    <p v-if="loading" class="text-gray-400">Loading…</p>
+    <p v-else-if="design.history.length === 0" class="text-gray-500">Nothing published yet.</p>
+    <ul v-else class="divide-y max-h-64 overflow-auto">
+      <li v-for="(h, i) in design.history" :key="h.id" class="flex flex-wrap items-center gap-2 py-1.5">
+        <span class="font-medium">{{ new Date(h.at).toLocaleString() }}</span>
+        <span class="text-gray-500">by {{ h.by }} · {{ h.files }} files</span>
+        <span v-if="i === 0" class="text-xs rounded px-1.5 bg-green-100 text-green-800">latest</span>
+        <button
+          type="button"
+          class="ml-auto text-blue-600 hover:underline disabled:opacity-50"
+          :disabled="busy !== null"
+          @click="restore(h.id)"
+        >
+          {{ busy === h.id ? 'Restoring…' : 'Restore to draft' }}
+        </button>
+      </li>
+    </ul>
+  </section>
+</template>

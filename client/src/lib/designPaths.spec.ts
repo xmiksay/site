@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
   ancestorFolders,
+  defaultUploadPath,
   designFileUrl,
   fileStatus,
   isImagePath,
   isTextPath,
   parentFolder,
+  previewPath,
   validateDesignPath,
   visibleRows,
 } from './designPaths'
@@ -44,9 +46,26 @@ describe('path helpers', () => {
 
   it('encodes each segment but keeps slashes', () => {
     expect(designFileUrl('assets/img/a b#.png')).toBe('/api/design/draft/assets/img/a%20b%23.png')
-    expect(designFileUrl('templates/x.html', true)).toBe(
+    expect(designFileUrl('templates/x.html', 'baked')).toBe(
       '/api/design/draft/templates/x.html?source=baked',
     )
+    expect(designFileUrl('templates/x.html', 'published')).toBe(
+      '/api/design/draft/templates/x.html?source=published',
+    )
+  })
+
+  it('keeps preview paths on this origin', () => {
+    expect(previewPath('')).toBe('/')
+    expect(previewPath(' about?x=1 ')).toBe('/about?x=1')
+    expect(previewPath('//evil.example/x')).toBe('/evil.example/x')
+    expect(previewPath('/\\evil.example')).toBe('/evil.example')
+  })
+
+  it('routes uploads by type: images and fonts into assets/, the rest into the folder', () => {
+    expect(defaultUploadPath('Logo.PNG', 'templates')).toBe('assets/img/Logo.PNG')
+    expect(defaultUploadPath('inter.woff2', '')).toBe('assets/fonts/inter.woff2')
+    expect(defaultUploadPath('extra.css', 'assets/css')).toBe('assets/css/extra.css')
+    expect(defaultUploadPath('notes.txt', '')).toBe('notes.txt')
   })
 
   it('derives parent and ancestor folders', () => {

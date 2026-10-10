@@ -2,7 +2,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useDesignStore } from './design'
 import { api, apiBlob, ApiError } from '../api'
-import type { DesignState } from '../types'
+import type { DesignState, WsEnvelope } from '../types'
+
+let wsHandler: ((envelope: WsEnvelope) => void) | undefined
+vi.mock('./ws', () => ({
+  useWsStore: () => ({
+    on: (_topic: string, handler: (envelope: WsEnvelope) => void) => {
+      wsHandler = handler
+      return () => {}
+    },
+  }),
+}))
 
 vi.mock('../api', async (importActual) => {
   const actual = await importActual<typeof import('../api')>()
@@ -102,15 +112,18 @@ describe('design store', () => {
     expect(store.state?.last_reload?.error).toBe('bucket down')
   })
 
-  it('publish POSTs, then reloads the draft state', async () => {
+  it('publish POSTs, reloads the draft state and records the version', async () => {
     const entry = { id: '2026-10-10T12:00:00.000000Z', at: '2026-10-10T12:00:00Z', by: 'me', files: 3 }
     apiMock.mockResolvedValueOnce(entry)
     apiMock.mockResolvedValueOnce(designState())
     const store = useDesignStore()
+    const revision = store.revision
 
-    expect(await store.publish()).toEqual(entry)
+    expect(await store.publish()).toEqual({ kind: 'published', entry })
     expect(apiMock).toHaveBeenNthCalledWith(1, '/api/design/publish', { method: 'POST' })
     expect(apiMock).toHaveBeenNthCalledWith(2, '/api/design/draft')
+    expect(store.history[0]).toEqual(entry)
+    expect(store.revision).toBe(revision + 1)
   })
 
   it('publish(true) forces past a conflict', async () => {
@@ -120,13 +133,39 @@ describe('design store', () => {
     expect(apiMock).toHaveBeenNthCalledWith(1, '/api/design/publish?force=true', { method: 'POST' })
   })
 
-  it('a rejected publish (409) rethrows and keeps the state', async () => {
+  it('a 409 conflict resolves with the paths and keeps the state', async () => {
     const store = useDesignStore()
     const before = designState()
     store.state = before
-    apiMock.mockRejectedValueOnce(new ApiError(409, 'design/ changed outside the draft'))
-    await expect(store.publish()).rejects.toThrow('changed outside the draft')
+    apiMock.mockRejectedValueOnce(
+      new ApiError(
+        409,
+        'design/ changed outside the draft since it was started: templates/base.html; discard the draft to adopt those changes, or publish with force=true to overwrite them',
+      ),
+    )
+    expect(await store.publish()).toMatchObject({ kind: 'conflict', paths: ['templates/base.html'] })
+    expect(apiMock).toHaveBeenCalledTimes(1)
     expect(store.state).toStrictEqual(before)
+  })
+
+  it('a 409 with nothing to publish resolves as "nothing"', async () => {
+    apiMock.mockRejectedValueOnce(new ApiError(409, 'nothing to publish: the draft matches the live design'))
+    expect(await useDesignStore().publish()).toMatchObject({ kind: 'nothing' })
+  })
+
+  it('a 422 resolves with one error per template problem', async () => {
+    apiMock.mockRejectedValueOnce(
+      new ApiError(422, 'templates/a.html:2: undefined value (rendering 404); templates/b.html: syntax error'),
+    )
+    expect(await useDesignStore().publish()).toEqual({
+      kind: 'invalid',
+      errors: ['templates/a.html:2: undefined value (rendering 404)', 'templates/b.html: syntax error'],
+    })
+  })
+
+  it('other publish failures reject', async () => {
+    apiMock.mockRejectedValueOnce(new ApiError(503, 'storage unavailable'))
+    await expect(useDesignStore().publish()).rejects.toThrow('storage unavailable')
   })
 
   it('discard POSTs and adopts the returned state', async () => {
@@ -141,8 +180,63 @@ describe('design store', () => {
   it('fetchText requests the baked source when asked', async () => {
     apiBlobMock.mockResolvedValueOnce({ blob: new Blob(['hello']), filename: 'base.html' })
     const store = useDesignStore()
-    const text = await store.fetchText('templates/base.html', true)
+    const text = await store.fetchText('templates/base.html', 'baked')
     expect(apiBlobMock).toHaveBeenCalledWith('/api/design/draft/templates/base.html?source=baked')
     expect(text).toBe('hello')
+  })
+
+  it('loadHistory lists the versions; restore POSTs the encoded id and adopts the draft', async () => {
+    const entries = [{ id: '2026-10-10T12:00:00Z', at: '2026-10-10T12:00:00Z', by: 'me', files: 3 }]
+    apiMock.mockResolvedValueOnce(entries)
+    const store = useDesignStore()
+    await store.loadHistory()
+    expect(apiMock).toHaveBeenCalledWith('/api/design/history')
+    expect(store.history).toEqual(entries)
+
+    const restored = designState({ changes: [{ path: 'templates/base.html', kind: 'modified' }] })
+    apiMock.mockResolvedValueOnce(restored)
+    const revision = store.revision
+    await store.restore('2026-10-10T12:00:00Z')
+    expect(apiMock).toHaveBeenLastCalledWith('/api/design/history/2026-10-10T12%3A00%3A00Z/restore', {
+      method: 'POST',
+    })
+    expect(store.state).toEqual(restored)
+    expect(store.revision).toBe(revision + 1)
+  })
+
+  it('setPreview POSTs the toggle', async () => {
+    apiMock.mockResolvedValueOnce({ on: true })
+    await useDesignStore().setPreview(true)
+    expect(apiMock).toHaveBeenCalledWith('/api/design/preview', {
+      method: 'POST',
+      body: JSON.stringify({ on: true }),
+    })
+  })
+
+  it('a design WS event bumps the revision and refreshes a loaded draft', async () => {
+    const store = useDesignStore()
+    wsHandler!({ topic: 'design', event: 'draft_changed', payload: { action: 'put', path: 'a' } })
+    expect(store.revision).toBe(1)
+    expect(apiMock).not.toHaveBeenCalled()
+
+    store.state = designState()
+    apiMock.mockResolvedValueOnce(designState({ changes: [{ path: 'templates/base.html', kind: 'modified' }] }))
+    wsHandler!({ topic: 'design', event: 'draft_changed', payload: { action: 'put', path: 'a' } })
+    await vi.waitFor(() => expect(store.state?.changes).toHaveLength(1))
+    expect(store.revision).toBe(2)
+    expect(apiMock).toHaveBeenCalledWith('/api/design/draft')
+  })
+
+  it('a published WS event also refreshes a loaded history', async () => {
+    const store = useDesignStore()
+    store.state = designState()
+    store.history = [{ id: 'old', at: 'x', by: 'me', files: 1 }]
+    const fresh = [{ id: 'new', at: 'y', by: 'ai-admin', files: 2 }, ...store.history]
+    apiMock.mockImplementation(async (url: string) =>
+      (url === '/api/design/history' ? fresh : designState()) as never,
+    )
+    wsHandler!({ topic: 'design', event: 'published', payload: fresh[0] })
+    await vi.waitFor(() => expect(store.history[0].id).toBe('new'))
+    apiMock.mockReset()
   })
 })

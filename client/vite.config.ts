@@ -8,6 +8,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': 'http://localhost:3000',
+      // Everything outside the SPA is the public site, for the Design
+      // studio's preview iframe.
+      '^/(?!admin(/|$)|api/)': 'http://localhost:3000',
     },
   },
 })

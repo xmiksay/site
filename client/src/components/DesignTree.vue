@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { DesignFile } from '../types'
+import type { DesignChange, DesignFile } from '../types'
 import { DESIGN_ROOTS, ancestorFolders, fileStatus, visibleRows } from '../lib/designPaths'
 import type { DesignTreeRow } from '../lib/designPaths'
 
@@ -8,11 +8,14 @@ const props = defineProps<{
   files: DesignFile[]
   selected: string | null
   folder: string
+  /** Unpublished draft changes, marked per file. */
+  changes?: DesignChange[]
 }>()
 const emit = defineEmits<{ select: [path: string]; folder: [path: string] }>()
 
 const expanded = ref(new Set<string>(DESIGN_ROOTS))
 const rows = computed(() => visibleRows(props.files, expanded.value))
+const changed = computed(() => new Map((props.changes ?? []).map((c) => [c.path, c.kind])))
 
 watch(
   () => props.selected,
@@ -61,6 +64,13 @@ const badge: Record<string, { label: string; cls: string }> = {
           {{ row.kind === 'folder' ? (expanded.has(row.path) ? '▾' : '▸') : '' }}
         </span>
         <span class="truncate">{{ row.name }}{{ row.kind === 'folder' ? '/' : '' }}</span>
+        <span
+          v-if="changed.has(row.path)"
+          class="shrink-0 text-[10px] font-sans font-semibold text-blue-700"
+          :title="`Draft: ${changed.get(row.path)} (not live yet)`"
+        >
+          ● {{ changed.get(row.path) === 'added' ? 'new' : 'changed' }}
+        </span>
         <span
           v-if="row.file && badge[fileStatus(row.file)]"
           class="ml-auto shrink-0 rounded px-1.5 text-[10px] font-sans"
