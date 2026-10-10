@@ -22,7 +22,7 @@ make verify          # pre-"done" gate: lint + all tests
 ## Backend unit tests (Rust)
 
 Pure-logic tests live **in-module** in a `#[cfg(test)] mod tests` block at the
-bottom of the file under test — no `tests/` directory, no dev-dependencies.
+bottom of the file under test — no `tests/` directory.
 Good targets are dependency-free functions. Most modules carry one by now
 (`src/ai/*`, `src/export/*`, `src/routes/oauth/security.rs`, `src/templates/`,
 …); representative examples:
@@ -345,3 +345,40 @@ executes on every PR rather than self-skipping.
   - `tests/assistant_session_parallel_approval.rs` — regression: a decision
     on one of several parallel tool calls settles per *tool call*, not per
     whole-session, so approving one call can't hang on its siblings.
+
+## Timing under load
+
+`make test` often runs on a machine already loaded by other builds, and CI
+runners are slow in their own way, so a test must not encode how fast
+something happens (#124):
+
+- **No wall-clock assertions.** "Took less than N s" measures the machine as
+  much as the code. Assert the cause instead — `ai::mcp::tests::
+  mcp_requests_are_not_paced` checks the pool config's request spacing
+  (`60_000 / rpm` ms), not a stopwatch around a handshake. A regression that
+  would *hang* fails on its own (e.g. a stuck `approve` answers the 180s
+  `TURN_TIMEOUT`'s 500, not 200).
+- **Timer-only behavior runs on a paused clock** (`#[tokio::test(start_paused
+  = true)]`, tokio `test-util` is a dev-dependency): `elapsed` then counts
+  timer time only — `connect_with_timeout_bounds_a_server_that_never_answers`
+  sees exactly its bound. Not for code that waits on real sockets with other
+  timers armed: auto-advance would fire those spuriously.
+- **Wait for the specific event or state, never `sleep` and hope.** Subscribe
+  to `holly` *before* the request whose events you need, then drain to the
+  one event that marks it done — `assistant_session_generation.rs`'s
+  `create_settled_session` consumes the create's own `ModelChanged` so a later
+  `PATCH`'s events can't be confused with it. Polling persisted state (`GET`
+  until both calls show up) is fine with a generous deadline (`PERSIST_WAIT`)
+  that only a broken run reaches; a short retry budget is a flake.
+- **Production code gets the same rule.** "Re-read until two reads agree"
+  against `DbSink`'s async writer only narrows a race; `approve` now waits for
+  an exact persistence barrier (`open_calls_after`). To reproduce a lagging
+  writer locally, hold `LOCK TABLE assistant_events IN EXCLUSIVE MODE` in a
+  loop from `psql` (blocks the writer's `INSERT`s, not the handlers'
+  `SELECT`s) while the test runs.
+- **Hand-built logs must match what the engine writes.** A fixture inserted
+  straight into `assistant_events` (`assistant_session_subagent_resume.rs`)
+  carries each session's `AgentChanged` after its `SessionStarted`: replay
+  restores the profile from that record, and without it the resumed session
+  silently runs under the default profile — which only showed up once resume
+  stopped racing.

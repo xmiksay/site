@@ -33,17 +33,18 @@
 //! backstop" the issue calls for — the next phase does not need to call
 //! `Holly::hibernate` itself unless it wants tighter control.
 
+mod awaiting;
 mod live;
 mod profiles;
 mod prompt_cache;
 mod session_tree;
 
+use awaiting::AwaitingDecisions;
 use live::LiveSessions;
 pub use profiles::{
     BUILD_PROFILE, DESIGNER_PROFILE, PAGE_WRITER_PROFILE, RESEARCHER_PROFILE, SWITCHABLE_PROFILES,
 };
 use prompt_cache::load_system_prompt;
-use session_tree::evict_on_hibernate_or_end;
 pub use session_tree::{
     record_session_started, root_session_of, user_id_from_session, user_id_from_session_awaiting,
 };
@@ -54,7 +55,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use entanglement_core::{
-    AgentProfile, EngineConfig, Holly, OutEvent, Permission, PermissionProfile, SessionId,
+    AgentProfile, EngineConfig, Holly, Permission, PermissionProfile, SessionId,
     SystemPromptResolver, ToolSpec, ToolSpecResolver,
 };
 use entanglement_runtime::hooks::Hooks;
@@ -64,7 +65,6 @@ use entanglement_runtime::skills::SkillRegistry;
 use entanglement_runtime::tool_runner;
 use parking_lot::RwLock;
 use sea_orm::DatabaseConnection;
-use tokio::sync::broadcast;
 
 use crate::ai::catalog::SiteCatalog;
 use crate::ai::config::AiConfig;
@@ -98,6 +98,7 @@ pub struct SiteEngine {
     /// module doc for what puts an id in and what takes it out, and why
     /// resuming without it would silently discard history.
     live_sessions: LiveSessions,
+    awaiting: AwaitingDecisions,
     // Kept alive for the process lifetime (a tokio task keeps running once
     // spawned regardless of whether its `JoinHandle` is dropped, but holding
     // these documents intent and leaves room for a future graceful shutdown).
@@ -245,39 +246,8 @@ impl SiteEngine {
         let holly = Holly::spawn(cfg);
 
         let live_sessions = LiveSessions::default();
-        // Tracks session liveness (`live_sessions`) and, for #17, sub-agent
-        // parent links (`session_tree`) — both folded from the same
-        // `Holly::subscribe()` broadcast `mcp.rs`/`ws_bridge.rs` also tap.
-        let hibernate_watcher = {
-            let live = live_sessions.handle();
-            let mut sub = holly.subscribe();
-            tokio::spawn(async move {
-                loop {
-                    match sub.recv().await {
-                        Ok(ev) => {
-                            evict_on_hibernate_or_end(&live, &ev);
-                            if let OutEvent::SessionStarted {
-                                session, parent, ..
-                            } = &ev
-                            {
-                                record_session_started(session.clone(), parent.clone());
-                                // #101: children count as live too. A sub-agent
-                                // is never `mark_live`d by a handler (nothing
-                                // here mints its id), so without this the cache
-                                // could only ever say "unknown" for one — and
-                                // `send_message` on a child needs to tell an
-                                // already-running child (just prompt it) from a
-                                // hibernated one (resume it first), since
-                                // `Holly::resume` refuses a live id.
-                                live.insert(session.clone());
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-            })
-        };
+        let awaiting = AwaitingDecisions::default();
+        let hibernate_watcher = live::spawn_watcher(&holly, &live_sessions, &awaiting);
 
         let resolver: Arc<dyn PermissionResolver> = policy.clone();
         let grants: Arc<dyn GrantStore> = policy.clone();
@@ -318,6 +288,7 @@ impl SiteEngine {
             session_tool_specs,
             system_prompt_cache,
             live_sessions,
+            awaiting,
             tool_executor,
             persistence_task,
             refresh_task,
@@ -370,6 +341,18 @@ impl SiteEngine {
     /// needs `persistence::resume_child_session` first.
     pub async fn await_live(&self, session: &SessionId) -> bool {
         self.live_sessions.await_live(session).await
+    }
+
+    /// Wait (up to `limit`) until `session`'s `request_id` has an approval
+    /// waiter parked in the engine — see [`awaiting`]'s module doc for why
+    /// `approve` must not send a decision before then.
+    pub async fn await_decision_waiter(
+        &self,
+        session: &SessionId,
+        request_id: &str,
+        limit: Duration,
+    ) -> bool {
+        self.awaiting.wait_for(session, request_id, limit).await
     }
 }
 

@@ -219,6 +219,22 @@ async fn resume_replays_a_live_sub_agent_from_the_db_log_alone() {
         ),
     )
     .await;
+    // A live session always logs its starting profile as `AgentChanged` right
+    // after `SessionStarted`, and that record — not `SessionStarted`'s
+    // `profile` — is what replay restores the profile from.
+    insert(
+        &fx.db,
+        &root,
+        LogRecord::new(
+            child.clone(),
+            LogPayload::Out(OutEvent::AgentChanged {
+                session: child.clone(),
+                agent: "page-writer".into(),
+                profile_detail: None,
+            }),
+        ),
+    )
+    .await;
     insert(
         &fx.db,
         &root,
@@ -356,10 +372,10 @@ async fn resume_replays_a_live_sub_agent_from_the_db_log_alone() {
     // asynchronously re-offers its parked `page_edit` call as a fresh
     // `ToolExec`, which is what actually drives the permission resolution
     // this test exists to exercise (and registers the `PendingDecisions`
-    // waiter the approve below needs). Give that a moment to land before
-    // approving, or the approve could race a `PendingDecisions` entry that
-    // hasn't been (re-)registered yet.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // waiter the approve below needs). Approving straight away is deliberate:
+    // `approve` itself must wait for that waiter (`await_decision_waiter`,
+    // #124) — a fixed sleep here used to lose the race under load, and the
+    // dropped decision hung the request for the whole `TURN_TIMEOUT`.
 
     // Approve it — `PendingDecisions` is keyed by `(session, request_id)`, so
     // this only resolves if `approve`'s `session_for_call` routing correctly

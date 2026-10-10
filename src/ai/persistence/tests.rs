@@ -248,3 +248,59 @@ fn a_dropped_append_is_tallied_per_root_and_flushed_as_one_gap_tombstone() {
         "drain must clear the tally so it isn't double-flushed"
     );
 }
+
+fn started(session: &SessionId, parent: Option<&SessionId>) -> LogRecord {
+    LogRecord::new(
+        session.clone(),
+        LogPayload::Out(OutEvent::SessionStarted {
+            session: session.clone(),
+            parent: parent.cloned(),
+            predecessor: None,
+            profile: "build".into(),
+            model: None,
+            user: None,
+            root: parent.is_none(),
+            ts: 0,
+        }),
+    )
+}
+
+fn hibernated(session: &SessionId) -> LogRecord {
+    LogRecord::new(
+        session.clone(),
+        LogPayload::Out(OutEvent::SessionHibernated {
+            session: session.clone(),
+            ts: 0,
+        }),
+    )
+}
+
+#[test]
+fn live_tree_orders_parents_before_children_and_skips_settled_ones() {
+    let root = SessionId::new("root");
+    let child = SessionId::new("child");
+    let grandchild = SessionId::new("grandchild");
+    let gone = SessionId::new("gone");
+    let records = vec![
+        started(&root, None),
+        started(&child, Some(&root)),
+        started(&grandchild, Some(&child)),
+        started(&gone, Some(&root)),
+        hibernated(&gone),
+        out_record(&child, 1),
+    ];
+    assert_eq!(live_tree(&records, &root), vec![root, child, grandchild]);
+}
+
+#[test]
+fn live_tree_revives_a_child_started_again_after_hibernating() {
+    let root = SessionId::new("root");
+    let child = SessionId::new("child");
+    let records = vec![
+        started(&root, None),
+        started(&child, Some(&root)),
+        hibernated(&child),
+        started(&child, Some(&root)),
+    ];
+    assert_eq!(live_tree(&records, &root), vec![root, child]);
+}

@@ -46,6 +46,11 @@ use crate::entity::{assistant_event, assistant_session};
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
+/// How long `approve` waits for a call's approval waiter to be (re-)parked.
+/// Re-offering is a policy check and a task hop; only a call that is no
+/// longer pending reaches this.
+const DECISION_WAITER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[derive(serde::Deserialize)]
 pub struct SendMessage {
     pub text: String,
@@ -148,6 +153,19 @@ pub async fn approve(
         // wrong for a stale/unknown/misrouted sub-agent call id.
         let target_session =
             session_for_call_awaiting(&state.db, &root, &prior, &d.tool_call_id).await?;
+        // A just-resumed session re-offers its parked call asynchronously; a
+        // decision sent before its waiter exists is dropped and this request
+        // would sit out `TURN_TIMEOUT` (#124). Sent anyway on a miss, as
+        // before: only an already-resolved call ever misses.
+        if !engine
+            .await_decision_waiter(&target_session, &d.tool_call_id, DECISION_WAITER_TIMEOUT)
+            .await
+        {
+            tracing::warn!(
+                tool_call_id = %d.tool_call_id,
+                "no parked approval waiter for this call; sending the decision anyway"
+            );
+        }
         if d.approve {
             msgs.push(InMsg::Approve {
                 session: target_session,

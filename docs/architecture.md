@@ -505,13 +505,14 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   catalog's default model (`catalog.default_model()`) so a freshly-spawned
   session budgets sensibly before any `SetModel` narrows it to the session's
   actual pinned model — which is why that default must resolve
-  deterministically (see `catalog.rs` below). Three submodules (kept under the 400-line cap):
+  deterministically (see `catalog.rs` below). Submodules (kept under the 400-line cap):
   `engine/profiles.rs` (the `researcher`/`page-writer`/`designer` profile roster and their prompt suffixes, below),
   `engine/session_tree.rs`
   (`root_session_of`/`user_id_from_session`/`user_id_from_session_awaiting`,
   re-exported from `engine.rs` so every existing `crate::ai::engine::...` call
-  site is unchanged), and `engine/prompt_cache.rs` (the system-prompt
-  read-and-refresh loop).
+  site is unchanged), `engine/prompt_cache.rs` (the system-prompt
+  read-and-refresh loop), `engine/live.rs` (the live-session set and the
+  session watcher task) and `engine/awaiting.rs` (parked approval waiters).
   - **Tool registry (issue #38):** `spawn` builds the local (built-in,
     non-MCP) `ToolRegistry` once and wraps it in a `SharedRegistry`
     (`entanglement_runtime::tools::SharedRegistry`, an
@@ -674,12 +675,23 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   broadcast-lag path — and `resume_session` (issue #28) no longer hard-refuses
   a session with a detected gap; it resumes from the intact prefix strictly
   before the gap (`truncate_at_gap`), so a session stays resumable forever
-  instead of every future `ensure_live` failing. `resume_session` passes
+  instead of every future `ensure_live` failing. `resume_session` loads
   `assistant_events`' whole root file (root + any sub-agent children, since
-  they share one `root_session_id`) to `Holly::resume` in one call —
-  entanglement 0.6.0's `resume` cascades over the *whole* spawn sub-tree
-  itself (ADR-0112), re-materializing a child that was still live as of where
-  the log stopped, so no per-child loop is needed here. That one shared
+  they share one `root_session_id`) but resumes it **one session at a time,
+  parent first** (`live_tree`: the root, then every sub-agent still live as
+  of where the log stopped, breadth-first), each from its own records, and
+  waits for each one's start `AgentChanged` before resuming its children
+  (#124). Entanglement 0.6.0's own cascade (ADR-0112) spawns the whole live
+  sub-tree at once, so a child could re-offer its parked call before its
+  parent announced itself — the executor then failed closed on the unknown
+  ancestor ("restricted by ancestor agent `unknown`") and refused the call,
+  and the persistence tap filed the child's new records under the child's
+  own id. Holly only used the cascade's children list to spawn them, so the
+  same sessions end up live. `approve` additionally waits for the call's
+  approval waiter (`SiteEngine::await_decision_waiter`, `engine/awaiting.rs`,
+  folded from `ToolRequest`s by the session watcher in `engine/live.rs`): a
+  resumed session re-offers asynchronously, and a decision that reaches the
+  engine before its waiter exists is silently dropped. That one shared
   `root_session_id` is exactly why `assistant_sessions.root_engine_session_id`
   (m_032, #99) stores an *engine* id rather than a pointer to the root row:
   every one of these three filters (`resume_session`,
@@ -870,7 +882,7 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     leaves pre-compaction children on the older key). `GET` and
     `POST .../messages`/`approve` *are* allowed on a child: upstream never
     closes a finished sub-agent, so `ensure_target_live` (`sessions/turn.rs`)
-    resumes the **root** (whose ADR-0112 cascade re-materializes descendants),
+    resumes the **root** (`resume_session` re-materializes live descendants),
     checks `SiteEngine::await_live` for the child, and only then rebuilds it
     from its own slice of the root's log via
     `persistence::resume_child_session`. `load_prior_records` stays
