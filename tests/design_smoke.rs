@@ -1,15 +1,16 @@
 //! `templates::smoke::smoke_render` (#117) against a real database: the baked
 //! design renders clean under strict undefined handling, and a design with
-//! an undefined variable or a syntax error is reported with template + line.
+//! an undefined variable or a syntax error is reported with template + line,
+//! also in branches only the contract's example contexts reach.
 //!
 //! Gated on `DATABASE_URL` (skips when unset). Creates its own throwaway
-//! `users`/`pages` rows and deletes them when done.
+//! `users`/`pages`/`tags` rows and deletes them when done.
 
 use std::sync::Arc;
 
 use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
 use site::design::DesignStore;
-use site::entity::{page, user};
+use site::entity::{page, tag, user};
 use site::storage::Storage;
 use site::templates::smoke::{SmokeReport, smoke_render};
 
@@ -183,4 +184,43 @@ async fn syntax_errors_are_reported_with_template_and_line() {
         "only 404.html is broken: {:#?}",
         report.errors
     );
+}
+
+#[tokio::test]
+async fn branches_only_examples_reach_are_checked_too() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    // With a tag in the DB the real-data search renders the `tag` branch and
+    // never a query; only the example contexts reach `{% elif q %}`.
+    let t = tag::ActiveModel {
+        name: Set(format!("design-smoke-{}", uuid::Uuid::new_v4())),
+        description: Set(None),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .expect("insert throwaway tag");
+
+    let baked = String::from_utf8(
+        DesignStore::new(None)
+            .load("templates/page_search.html")
+            .expect("baked page_search.html"),
+    )
+    .unwrap();
+    let broken = baked.replacen("{% elif q %}{{ q }}", "{% elif q %}{{ qq }}", 1);
+    assert_ne!(broken, baked, "baked page_search.html changed shape");
+    let report = smoke(&db, &[("templates/page_search.html", &broken)]).await;
+
+    tag::Entity::delete_by_id(t.id).exec(&db).await.unwrap();
+
+    let err = report
+        .errors
+        .iter()
+        .find(|e| e.template == "page_search.html")
+        .unwrap_or_else(|| panic!("page_search error missing: {:#?}", report.errors));
+    assert_eq!(err.line, Some(2));
+    assert!(err.message.contains("undefined"), "{}", err.message);
+    assert!(err.case.starts_with("example context"), "{}", err.case);
 }

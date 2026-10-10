@@ -123,6 +123,7 @@ pub struct Crumb {
 /// A tag; its listing lives at `/tag/{id}`.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct TagView {
+    /// Tag id; `/tag/{id}` redirects to its search listing.
     pub id: i32,
     /// Unique tag name.
     pub name: String,
@@ -174,7 +175,7 @@ pub struct FilePartial {
 /// `markdown/gallery.html` — `<gallery>`.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct GalleryPartial {
-    /// Gallery id (unique per page render, e.g. for lightbox grouping).
+    /// The gallery's database id (e.g. to group its lightbox).
     pub id: i32,
     /// Gallery title.
     pub title: String,

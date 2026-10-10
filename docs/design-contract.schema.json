@@ -1,0 +1,607 @@
+{
+  "$defs": {
+    "Crumb": {
+      "description": "One breadcrumb: `a/b` yields `{a, /a}` then `{b, /a/b}`.",
+      "properties": {
+        "href": {
+          "description": "Absolute URL of the path up to this segment.",
+          "type": "string"
+        },
+        "label": {
+          "description": "The path segment.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "href"
+      ],
+      "type": "object"
+    },
+    "GalleryItem": {
+      "description": "One gallery file.",
+      "properties": {
+        "hash": {
+          "description": "SHA-256 of the file: full size at `/files/{hash}`, thumbnail at `/files/{hash}/nahled`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The file's full path.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Last segment of the file's path.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hash",
+        "title",
+        "path"
+      ],
+      "type": "object"
+    },
+    "MenuItem": {
+      "description": "One menu entry.",
+      "properties": {
+        "label": {
+          "description": "The menu item's title.",
+          "type": "string"
+        },
+        "path": {
+          "description": "`/{path}`; the home item (path `\"\"`) is not listed — link `/` explicitly.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "label"
+      ],
+      "type": "object"
+    },
+    "MenuNode": {
+      "description": "A menu entry with the entries nested under its path.",
+      "properties": {
+        "children": {
+          "description": "Entries whose path continues this one; empty for a leaf.",
+          "items": {
+            "$ref": "#/$defs/MenuNode"
+          },
+          "type": "array"
+        },
+        "label": {
+          "description": "The menu item's title.",
+          "type": "string"
+        },
+        "path": {
+          "description": "`/{path}`; the home item (path `\"\"`) is not listed — link `/` explicitly.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "label",
+        "children"
+      ],
+      "type": "object"
+    },
+    "PageView": {
+      "description": "A page as templates see it.",
+      "properties": {
+        "created_at": {
+          "description": "`YYYY-MM-DD HH:MM:SS[.f]` — format it with the `timeformat` filter.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Page id (admin editor at `/admin/pages/{id}/edit`).",
+          "format": "int32",
+          "type": "integer"
+        },
+        "modified_at": {
+          "description": "`YYYY-MM-DD HH:MM:SS[.f]` — format it with the `timeformat` filter.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Canonical path without a leading slash; the page is served at `/{path}`.",
+          "type": "string"
+        },
+        "private": {
+          "description": "Private pages are only rendered for logged-in visitors.",
+          "type": "boolean"
+        },
+        "summary": {
+          "description": "Short description for listings.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tag_ids": {
+          "description": "Ids of the page's tags.",
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "summary",
+        "tag_ids",
+        "private",
+        "created_at",
+        "modified_at"
+      ],
+      "type": "object"
+    },
+    "TagView": {
+      "description": "A tag; its listing lives at `/tag/{id}`.",
+      "properties": {
+        "description": {
+          "description": "Optional longer description.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Tag id; `/tag/{id}` redirects to its search listing.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "name": {
+          "description": "Unique tag name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "description"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "templates": {
+    "404.html": {
+      "description": "Variables every page template gets (they all extend `base.html`).",
+      "properties": {
+        "logged_in": {
+          "description": "Whether the visitor has an admin session (private items are included).",
+          "type": "boolean"
+        },
+        "menu_list": {
+          "description": "Visible menu entries in `order_index` order, flat.",
+          "items": {
+            "$ref": "#/$defs/MenuItem"
+          },
+          "type": "array"
+        },
+        "menu_tree": {
+          "description": "The same entries nested by path prefix (`/a` contains `/a/b`).",
+          "items": {
+            "$ref": "#/$defs/MenuNode"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "menu_list",
+        "menu_tree",
+        "logged_in"
+      ],
+      "title": "Layout",
+      "type": "object"
+    },
+    "base.html": {
+      "description": "Variables every page template gets (they all extend `base.html`).",
+      "properties": {
+        "logged_in": {
+          "description": "Whether the visitor has an admin session (private items are included).",
+          "type": "boolean"
+        },
+        "menu_list": {
+          "description": "Visible menu entries in `order_index` order, flat.",
+          "items": {
+            "$ref": "#/$defs/MenuItem"
+          },
+          "type": "array"
+        },
+        "menu_tree": {
+          "description": "The same entries nested by path prefix (`/a` contains `/a/b`).",
+          "items": {
+            "$ref": "#/$defs/MenuNode"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "menu_list",
+        "menu_tree",
+        "logged_in"
+      ],
+      "title": "Layout",
+      "type": "object"
+    },
+    "markdown/fen.html": {
+      "description": "`markdown/fen.html` — `<fen>`, a static chess position.",
+      "properties": {
+        "fen": {
+          "description": "The FEN string.",
+          "type": "string"
+        },
+        "size_class": {
+          "description": "`\"\"`, `\" size-sm\"` or `\" size-lg\"` — append it to a class attribute.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fen",
+        "size_class"
+      ],
+      "title": "FenPartial",
+      "type": "object"
+    },
+    "markdown/file.html": {
+      "description": "`markdown/file.html` — `<file>` of a non-image file (a download link).",
+      "properties": {
+        "description": {
+          "description": "The file's description, defaulting to `title`.",
+          "type": "string"
+        },
+        "hash": {
+          "description": "SHA-256 of the file, served at `/files/{hash}`.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Last segment of the file's path.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hash",
+        "title",
+        "description"
+      ],
+      "title": "FilePartial",
+      "type": "object"
+    },
+    "markdown/gallery.html": {
+      "description": "`markdown/gallery.html` — `<gallery>`.",
+      "properties": {
+        "id": {
+          "description": "The gallery's database id (e.g. to group its lightbox).",
+          "format": "int32",
+          "type": "integer"
+        },
+        "items": {
+          "description": "The gallery's files in order; empty for an empty gallery.",
+          "items": {
+            "$ref": "#/$defs/GalleryItem"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Gallery title.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "items"
+      ],
+      "title": "GalleryPartial",
+      "type": "object"
+    },
+    "markdown/img.html": {
+      "description": "`markdown/img.html` — `<image>`, or `<file>` of an `image/*` file.",
+      "properties": {
+        "alt": {
+          "description": "The `alt` attribute, defaulting to `title`.",
+          "type": "string"
+        },
+        "hash": {
+          "description": "SHA-256 of the file: full size at `/files/{hash}`, thumbnail at `/files/{hash}/nahled`.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Last segment of the file's path.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hash",
+        "title",
+        "alt"
+      ],
+      "title": "ImgPartial",
+      "type": "object"
+    },
+    "markdown/json.html": {
+      "description": "`markdown/json.html` — `<json>`, a jq query result.",
+      "properties": {
+        "columns": {
+          "description": "Column headers (empty when the result has no object rows).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "description": "Render type; currently always `table`.",
+          "type": "string"
+        },
+        "rows": {
+          "description": "Cell text, one list per row.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "columns",
+        "rows"
+      ],
+      "title": "JsonPartial",
+      "type": "object"
+    },
+    "markdown/mermaid.html": {
+      "description": "`markdown/mermaid.html` — `<mermaid>` or a ```` ```mermaid ```` fence.",
+      "properties": {
+        "size_class": {
+          "description": "`\"\"`, `\" size-sm\"` or `\" size-lg\"` — append it to a class attribute.",
+          "type": "string"
+        },
+        "source": {
+          "description": "The Mermaid source.",
+          "type": "string"
+        },
+        "svg": {
+          "description": "Server-rendered SVG; empty when rendering failed (then show `source`). Output it with `| safe`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "svg",
+        "source",
+        "size_class"
+      ],
+      "title": "MermaidPartial",
+      "type": "object"
+    },
+    "markdown/page.html": {
+      "description": "`markdown/page.html` — `<page>` transclusion of another page.",
+      "properties": {
+        "inner_html": {
+          "description": "Its rendered HTML. Output it with `| safe`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Path of the transcluded page.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "inner_html"
+      ],
+      "title": "PagePartial",
+      "type": "object"
+    },
+    "markdown/pgn.html": {
+      "description": "`markdown/pgn.html` — `<pgn>`, a playable game.",
+      "properties": {
+        "move": {
+          "description": "The `move` attribute as written (`N`, `first`, `last`), `none` when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pgn": {
+          "description": "The PGN text.",
+          "type": "string"
+        },
+        "size_class": {
+          "description": "`\"\"`, `\" size-sm\"` or `\" size-lg\"` — append it to a class attribute.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pgn",
+        "size_class",
+        "move"
+      ],
+      "title": "PgnPartial",
+      "type": "object"
+    },
+    "page_search.html": {
+      "description": "`page_search.html` — `/search` with its query, filters and one result page.",
+      "properties": {
+        "limit": {
+          "description": "Page size (1–100, default 20).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "logged_in": {
+          "description": "Whether the visitor has an admin session (private items are included).",
+          "type": "boolean"
+        },
+        "menu_list": {
+          "description": "Visible menu entries in `order_index` order, flat.",
+          "items": {
+            "$ref": "#/$defs/MenuItem"
+          },
+          "type": "array"
+        },
+        "menu_tree": {
+          "description": "The same entries nested by path prefix (`/a` contains `/a/b`).",
+          "items": {
+            "$ref": "#/$defs/MenuNode"
+          },
+          "type": "array"
+        },
+        "next_offset": {
+          "description": "Offset of the next result page, `none` on the last.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "description": "Index of the first result shown.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pages": {
+          "description": "The current result page.",
+          "items": {
+            "$ref": "#/$defs/PageView"
+          },
+          "type": "array"
+        },
+        "path_prefix": {
+          "description": "Path prefix filter (`?path=`), empty when absent.",
+          "type": "string"
+        },
+        "prev_offset": {
+          "description": "Offset of the previous result page, `none` on the first.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "q": {
+          "description": "Full-text query (`?q=`), empty when absent.",
+          "type": "string"
+        },
+        "tag": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TagView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The tag named by `tag_name`, or `none` when absent or unknown."
+        },
+        "tag_name": {
+          "description": "Tag filter as typed (`?tag=`), empty when absent.",
+          "type": "string"
+        },
+        "total": {
+          "description": "Number of matches across all result pages.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "menu_list",
+        "menu_tree",
+        "logged_in",
+        "q",
+        "tag_name",
+        "tag",
+        "path_prefix",
+        "pages",
+        "total",
+        "limit",
+        "offset",
+        "prev_offset",
+        "next_offset"
+      ],
+      "title": "PageSearchContext",
+      "type": "object"
+    },
+    "path_page.html": {
+      "description": "`path_page.html` — a menu item or a page resolved from the request path.\nExactly one of `page` (a page) or `menu_id` (a menu item) is set.",
+      "properties": {
+        "body_html": {
+          "description": "The page's markdown rendered to HTML, directives expanded. Output it with `| safe`.",
+          "type": "string"
+        },
+        "breadcrumbs": {
+          "description": "Cumulative path segments of the page (empty for a menu item).",
+          "items": {
+            "$ref": "#/$defs/Crumb"
+          },
+          "type": "array"
+        },
+        "logged_in": {
+          "description": "Whether the visitor has an admin session (private items are included).",
+          "type": "boolean"
+        },
+        "menu_id": {
+          "description": "Id of the menu item, or `none` when the path resolved to a page.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "menu_list": {
+          "description": "Visible menu entries in `order_index` order, flat.",
+          "items": {
+            "$ref": "#/$defs/MenuItem"
+          },
+          "type": "array"
+        },
+        "menu_tree": {
+          "description": "The same entries nested by path prefix (`/a` contains `/a/b`).",
+          "items": {
+            "$ref": "#/$defs/MenuNode"
+          },
+          "type": "array"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The page, or `none` when the path resolved to a menu item."
+        },
+        "tags": {
+          "description": "Tags attached to the page (empty for a menu item).",
+          "items": {
+            "$ref": "#/$defs/TagView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "menu_list",
+        "menu_tree",
+        "logged_in",
+        "body_html",
+        "page",
+        "breadcrumbs",
+        "tags",
+        "menu_id"
+      ],
+      "title": "PathPageContext",
+      "type": "object"
+    }
+  },
+  "title": "Site design template contract"
+}

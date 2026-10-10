@@ -7,6 +7,8 @@ drifts from the code. -->
 What every template of the public site receives. Templates are
 [MiniJinja](https://docs.rs/minijinja) (Jinja2 syntax); HTML output is
 auto-escaped by file extension, so emit pre-rendered HTML with `| safe`.
+The same contract as JSON Schema (`templates.<name>` per template, shared
+`$defs`): [`design-contract.schema.json`](design-contract.schema.json).
 
 ## Template resolution
 
@@ -43,7 +45,8 @@ Besides MiniJinja's built-in filters:
 - `/assets/{path}` — a static file of the design (`assets/{path}`).
 - `/files/{hash}` — a stored file's bytes by SHA-256; `/files/{hash}/nahled` —
   its thumbnail (images).
-- `/{path}` — a page or menu item; `/` is the home menu item (path `""`).
+- `/{path}` — a page or menu item; `/` is the home menu item (path `""`),
+  which `menu_list`/`menu_tree` never contain — link `/` explicitly.
 - `/search` — search (`q`, `tag`, `path`, `limit`, `offset`); `/tag/{id}`
   redirects to `/search?tag={name}`.
 - `/admin` — the admin; `/admin/pages/{id}/edit`, `/admin/menu/{id}/edit` edit

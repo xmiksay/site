@@ -13,7 +13,7 @@ use crate::entity::menu;
 /// One menu entry.
 #[derive(Debug, serde::Serialize, schemars::JsonSchema, Clone)]
 pub struct MenuItem {
-    /// Absolute URL (`/` for the home page).
+    /// `/{path}`; the home item (path `""`) is not listed — link `/` explicitly.
     pub path: String,
     /// The menu item's title.
     pub label: String,
@@ -22,7 +22,7 @@ pub struct MenuItem {
 /// A menu entry with the entries nested under its path.
 #[derive(Debug, serde::Serialize, schemars::JsonSchema, Clone)]
 pub struct MenuNode {
-    /// Absolute URL (`/` for the home page).
+    /// `/{path}`; the home item (path `""`) is not listed — link `/` explicitly.
     pub path: String,
     /// The menu item's title.
     pub label: String,

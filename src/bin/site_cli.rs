@@ -80,7 +80,12 @@ async fn main() {
             }
         }
         Some("design") if args.get(2).map(String::as_str) == Some("contract") => {
-            print!("{}", site::templates::contract::markdown());
+            use site::templates::contract;
+            if args.get(3).map(String::as_str) == Some("--schema") {
+                print!("{}", contract::json_schema_text());
+            } else {
+                print!("{}", contract::markdown());
+            }
         }
         _ => {
             eprintln!("Usage: site_cli <command>");
@@ -94,7 +99,7 @@ async fn main() {
                 "  design push <dir>                       Upload a design folder into the design draft\n                                          (not while an admin publishes, discards or restores)"
             );
             eprintln!(
-                "  design contract                         Print the template contract (docs/design-contract.md)"
+                "  design contract [--schema]              Print the template contract (docs/design-contract.md / .schema.json)"
             );
             std::process::exit(1);
         }

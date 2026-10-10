@@ -1,7 +1,8 @@
 //! The design template contract: every template the site renders, its typed
 //! context (from [`super::context`]) and the conventions around it, as
 //! Markdown ([`markdown`]) and JSON Schema ([`json_schema`]). Committed as
-//! `docs/design-contract.md` (`make contract`); a test fails on drift.
+//! `docs/design-contract.md` and `docs/design-contract.schema.json`
+//! (`make contract`); a test fails on drift.
 
 use schemars::generate::SchemaSettings;
 use schemars::{JsonSchema, Schema, SchemaGenerator};
@@ -50,6 +51,11 @@ fn to_json(value: impl Serialize) -> Value {
     serde_json::to_value(value).unwrap_or_else(|e| Value::String(e.to_string()))
 }
 
+/// A page-template example as an admin sees it, then as a visitor.
+fn logged_in_and_out<T: Serialize>(sample: fn(bool) -> T) -> Vec<Value> {
+    vec![to_json(sample(true)), to_json(sample(false))]
+}
+
 pub const TEMPLATES: &[TemplateSpec] = &[
     TemplateSpec {
         name: "base.html",
@@ -57,7 +63,7 @@ pub const TEMPLATES: &[TemplateSpec] = &[
         about: "Page skeleton every page template extends (`{% extends \"base.html\" %}`); \
                 children fill `{% block title %}` and `{% block content %}`.",
         schema: schema_of::<Layout>,
-        samples: || vec![to_json(samples::layout(true))],
+        samples: || logged_in_and_out(samples::layout),
     },
     TemplateSpec {
         name: "path_page.html",
@@ -65,10 +71,9 @@ pub const TEMPLATES: &[TemplateSpec] = &[
         about: "Any other path: the menu item, else the page stored at that path.",
         schema: schema_of::<PathPageContext>,
         samples: || {
-            vec![
-                to_json(samples::path_page_page(true)),
-                to_json(samples::path_page_menu(false)),
-            ]
+            let mut out = logged_in_and_out(samples::path_page_page);
+            out.extend(logged_in_and_out(samples::path_page_menu));
+            out
         },
     },
     TemplateSpec {
@@ -76,14 +81,18 @@ pub const TEMPLATES: &[TemplateSpec] = &[
         kind: TemplateKind::Page,
         about: "`/search?q=&tag=&path=&limit=&offset=`.",
         schema: schema_of::<PageSearchContext>,
-        samples: || vec![to_json(samples::page_search(false))],
+        samples: || {
+            let mut out = logged_in_and_out(samples::page_search);
+            out.extend(logged_in_and_out(samples::page_search_query));
+            out
+        },
     },
     TemplateSpec {
         name: "404.html",
         kind: TemplateKind::Page,
         about: "A path with no menu item or page, or a private one for an anonymous visitor.",
         schema: schema_of::<Layout>,
-        samples: || vec![to_json(samples::layout(false))],
+        samples: || logged_in_and_out(samples::layout),
     },
     TemplateSpec {
         name: "markdown/page.html",
@@ -287,11 +296,12 @@ pub fn markdown() -> String {
         }
         properties_table(def, "Field", &mut out);
     }
-    out.push_str(&format!(
-        "## JSON Schema\n\n```json\n{}\n```\n",
-        pretty(&json_schema())
-    ));
     out
+}
+
+/// [`json_schema`] pretty-printed — what `docs/design-contract.schema.json` holds.
+pub fn json_schema_text() -> String {
+    format!("{}\n", pretty(&json_schema()))
 }
 
 #[cfg(test)]
@@ -304,6 +314,11 @@ mod tests {
         assert!(
             committed == markdown(),
             "docs/design-contract.md is stale — run `make contract` and commit it"
+        );
+        let committed = include_str!("../../docs/design-contract.schema.json");
+        assert!(
+            committed == json_schema_text(),
+            "docs/design-contract.schema.json is stale — run `make contract` and commit it"
         );
     }
 

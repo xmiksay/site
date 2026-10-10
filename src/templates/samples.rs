@@ -19,16 +19,16 @@ pub(super) fn layout(logged_in: bool) -> Layout {
     };
     Layout {
         menu_list: vec![
-            item("/", "Home"),
             item("/notes", "Notes"),
             item("/notes/rust", "Rust"),
+            item("/about", "About"),
         ],
         menu_tree: vec![
-            leaf("/", "Home"),
             MenuNode {
                 children: vec![leaf("/notes/rust", "Rust")],
                 ..leaf("/notes", "Notes")
             },
+            leaf("/about", "About"),
         ],
         logged_in,
     }
@@ -98,6 +98,22 @@ pub(super) fn page_search(logged_in: bool) -> PageSearchContext {
         offset: 1,
         prev_offset: Some(0),
         next_offset: Some(2),
+    }
+}
+
+/// A plain full-text query: no tag (the `q` branches), nothing found.
+pub(super) fn page_search_query(logged_in: bool) -> PageSearchContext {
+    PageSearchContext {
+        tag_name: String::new(),
+        tag: None,
+        path_prefix: String::new(),
+        pages: Vec::new(),
+        total: 0,
+        limit: 20,
+        offset: 0,
+        prev_offset: None,
+        next_offset: None,
+        ..page_search(logged_in)
     }
 }
 

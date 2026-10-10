@@ -3,16 +3,14 @@
 //! collecting every failure instead of stopping at the first. Validates a
 //! design (or a draft) before it goes live.
 
-use std::collections::BTreeSet;
-
 use anyhow::Context as _;
 use minijinja::Environment;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use serde::Serialize;
 
 use super::context::{Layout, PageSearchContext, PageView, TagView};
-use super::contract::{TEMPLATES, TemplateKind};
-use super::{DesignLoader, samples, strict_environment};
+use super::contract::TEMPLATES;
+use super::{DesignLoader, strict_environment};
 use crate::entity::{menu, page, tag};
 use crate::markdown;
 use crate::repo::pages_search;
@@ -62,10 +60,13 @@ const DIRECTIVE_MARKERS: [&str; 9] = [
 /// Smoke-render the design `load` resolves (`templates/…` → bytes): 404 and
 /// `base.html`, the home menu item, the newest page plus the first page using
 /// each directive, and search with and without a tag — each anonymous and
-/// logged in. Partials no real page reaches, and page shapes the data lacks
-/// (no menu item, no page), render with the contract's example contexts.
+/// logged in. Then every template renders with each of the contract's example
+/// contexts, covering branches the real data does not reach.
 ///
-/// `Err` only for a database failure; template failures are in the report.
+/// Template failures are in the report. `Err` when one of the smoke render's
+/// own queries (home menu item, pages, tag, search) fails; the rendering
+/// helpers it shares with live requests handle a DB error as they do there
+/// (empty menu, no tags, a directive's "not found" text).
 pub async fn smoke_render(
     db: &DatabaseConnection,
     storage: &Storage,
@@ -74,7 +75,6 @@ pub async fn smoke_render(
     let mut run = Run {
         env: strict_environment(load),
         report: SmokeReport::default(),
-        seen: BTreeSet::new(),
     };
     let base = Layout::new(build_menu(db, true).await, true);
     let layout = |logged_in| Layout {
@@ -87,36 +87,21 @@ pub async fn smoke_render(
         run.page("base.html", "layout", logged_in, &layout(logged_in));
     }
 
-    match home_menu(db).await? {
-        Some(m) => {
-            let case = format!("menu `/{}`", m.path);
-            let body = run.markdown(db, storage, &m.markdown, &case).await;
-            for logged_in in [false, true] {
-                let ctx = menu_context(layout(logged_in), &m, body.clone());
-                run.page("path_page.html", &case, logged_in, &ctx);
-            }
-        }
-        None => {
-            for logged_in in [false, true] {
-                let ctx = samples::path_page_menu(logged_in);
-                run.page("path_page.html", "example menu item", logged_in, &ctx);
-            }
+    if let Some(m) = home_menu(db).await? {
+        let case = format!("menu `/{}`", m.path);
+        let body = run.markdown(db, storage, &m.markdown, &case).await;
+        for logged_in in [false, true] {
+            let ctx = menu_context(layout(logged_in), &m, body.clone());
+            run.page("path_page.html", &case, logged_in, &ctx);
         }
     }
 
-    let pages = sample_pages(db).await?;
-    for pg in &pages {
+    for pg in &sample_pages(db).await? {
         let case = format!("page `{}`", pg.path);
         let body = run.markdown(db, storage, &pg.markdown, &case).await;
         for logged_in in [false, true] {
             let ctx = page_context(db, layout(logged_in), pg, body.clone()).await;
             run.page("path_page.html", &case, logged_in, &ctx);
-        }
-    }
-    if pages.is_empty() {
-        for logged_in in [false, true] {
-            let ctx = samples::path_page_page(logged_in);
-            run.page("path_page.html", "example page", logged_in, &ctx);
         }
     }
 
@@ -140,11 +125,11 @@ pub async fn smoke_render(
         }
     }
 
-    for spec in TEMPLATES.iter().filter(|t| t.kind == TemplateKind::Partial) {
-        if !run.seen.contains(spec.name) {
-            for sample in spec.samples() {
-                run.render(spec.name, "example context", &sample);
-            }
+    // Real data only reaches the branches it happens to need (no query, one
+    // result page, …); the examples cover the rest of every template.
+    for spec in TEMPLATES {
+        for (i, sample) in spec.samples().iter().enumerate() {
+            run.render(spec.name, &format!("example context {}", i + 1), sample);
         }
     }
     Ok(run.report)
@@ -153,8 +138,6 @@ pub async fn smoke_render(
 struct Run {
     env: Environment<'static>,
     report: SmokeReport,
-    /// Templates rendered so far.
-    seen: BTreeSet<String>,
 }
 
 impl Run {
@@ -165,7 +148,6 @@ impl Run {
 
     fn render(&mut self, name: &str, case: &str, ctx: &impl Serialize) {
         self.report.cases.push(format!("{name}: {case}"));
-        self.seen.insert(name.to_string());
         let result = self.env.get_template(name).and_then(|t| t.render(ctx));
         if let Err(e) = result {
             self.error(name, case, &e);
@@ -184,7 +166,6 @@ impl Run {
         let (html, checks) = markdown::render_checked(md, db, storage, &self.env, true).await;
         for name in checks.rendered {
             self.report.cases.push(format!("{name}: {case}"));
-            self.seen.insert(name);
         }
         for (name, e) in checks.errors {
             self.error(&name, case, &e);

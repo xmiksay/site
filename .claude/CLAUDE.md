@@ -40,7 +40,7 @@ make build      # build client + the binaries
 make dev        # hot-reload admin SPA (vite)
 make verify     # pre-"done" gate: lint + tests
 make check      # fast cargo check
-make contract   # regenerate docs/design-contract.md after changing a template context
+make contract   # regenerate docs/design-contract.{md,schema.json} after changing a template context
 make            # list all targets
 ```
 
