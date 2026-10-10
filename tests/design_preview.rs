@@ -86,6 +86,7 @@ async fn draft_preview_is_admin_only_and_marked() {
     let app = Router::new()
         .nest("/api", site::routes::api::router(state.clone()))
         .route("/assets/{*path}", get(public::assets::serve))
+        .merge(public::export::router())
         .fallback(get(public::catch_all))
         .with_state(state);
 
@@ -204,6 +205,19 @@ async fn draft_preview_is_admin_only_and_marked() {
     assert_eq!(asset.body, "DRAFT-CSS");
     assert_eq!(asset.cache_control(), "no-store");
     assert!(!asset.body.contains(BANNER), "no banner outside HTML");
+    // Export errors in preview are marked too, and stay JSON on the API.
+    let export = format!("/api/export/pages/{}?format=pdf", pg.id);
+    let failed = call(&app, "GET", &export, &both, "").await;
+    assert_eq!(
+        failed.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "no MDCAST_URL"
+    );
+    assert_eq!(failed.cache_control(), "no-store");
+    assert!(failed.body.starts_with('{') && !failed.body.contains(BANNER));
+    let public_export = call(&app, "GET", &format!("{url}?format=nope"), &both, "").await;
+    assert_eq!(public_export.status, StatusCode::BAD_REQUEST);
+    assert_eq!(public_export.cache_control(), "no-store");
 
     // An edit shows on the next page load; assets reuse the draft that page
     // load built, so they never queue on storage.

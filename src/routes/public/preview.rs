@@ -70,6 +70,13 @@ impl FromRequestParts<AppState> for AssetLook {
 }
 
 impl Look {
+    /// For a route already behind `require_login_api`: no second session
+    /// lookup, and a draft that cannot be loaded is the caller's error to
+    /// report (JSON on the API).
+    pub async fn logged_in(state: &AppState, jar: &CookieJar) -> Result<Self, DesignError> {
+        Look::with(state, requested(jar), true, true).await
+    }
+
     async fn with(
         state: &AppState,
         preview: bool,

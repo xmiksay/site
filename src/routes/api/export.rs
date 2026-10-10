@@ -4,10 +4,11 @@
 //! privacy check — any logged-in user can export any page.
 
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use axum_extra::extract::CookieJar;
 use sea_orm::EntityTrait;
 
 use crate::entity::page;
@@ -25,14 +26,24 @@ pub struct ExportQuery {
     pub format: String,
 }
 
+/// `Extension<i32>` is the session `require_login_api` already checked.
 async fn export_page(
     State(state): State<AppState>,
-    look: Look,
+    Extension(_user): Extension<i32>,
+    jar: CookieJar,
     Path(id): Path<i32>,
     Query(q): Query<ExportQuery>,
 ) -> ApiResult<Response> {
-    let format = ExportFormat::parse(&q.format)
-        .ok_or_else(|| ApiError::BadRequest(format!("unknown export format `{}`", q.format)))?;
+    // In draft preview the export uses the draft's mdcast templates and brand.
+    let look = Look::logged_in(&state, &jar).await?;
+    // Every answer, errors included, is marked when it is preview output.
+    let resp = export_by_id(&state, &look, id, &q.format).await;
+    Ok(look.finish(resp.into_response()))
+}
+
+async fn export_by_id(state: &AppState, look: &Look, id: i32, raw: &str) -> ApiResult<Response> {
+    let format = ExportFormat::parse(raw)
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown export format `{raw}`")))?;
 
     let Some(client) = &state.mdcast else {
         return Err(ApiError::ServiceUnavailable(
@@ -45,13 +56,12 @@ async fn export_page(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    // In draft preview the export uses the draft's mdcast templates and brand.
-    let env = look.env(&state);
+    let env = look.env(state);
     let artifact = export::render_page(
         client,
         &state.db,
         &state.storage,
-        look.design(&state),
+        look.design(state),
         &env,
         &pg.markdown,
         Some(pg.path.clone()),
@@ -80,7 +90,7 @@ async fn export_page(
     );
     let filename = format!("{slug}.{}", format.target().extension());
 
-    let resp = (
+    Ok((
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, format.content_type().to_string()),
@@ -91,6 +101,5 @@ async fn export_page(
         ],
         artifact.bytes.to_vec(),
     )
-        .into_response();
-    Ok(look.finish(resp))
+        .into_response())
 }
