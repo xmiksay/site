@@ -77,7 +77,7 @@ docker compose exec app ./site_migration
 | `SERPER_API_KEY` | Optional — enables the `web_search` tool inside the AI assistant | unset |
 | `MDCAST_URL` | Base URL of the remote [`mdcast-server`](https://github.com/xmiksay/mdcast) that renders PDF/slides exports — export routes answer 503 while unset | unset |
 | `MDCAST_TOKEN` | Bearer token for `mdcast-server` (unset sends a placeholder, fine for a tokenless server) | unset |
-| `STORAGE_KIND` | Where file and thumbnail bytes live: `db` (`file_blobs.data`), `fs` or `s3`. Move existing blobs with `site_cli storage migrate` before switching | `db` |
+| `STORAGE_KIND` | Where file and thumbnail bytes live: `db` (`file_blobs.data`), `fs` or `s3`. Also holds the keyed objects (design overrides). Move existing blobs and objects with `site_cli storage migrate` before switching | `db` |
 | `STORAGE_DIR` | Root directory for `STORAGE_KIND=fs` (created at start) | `./data` |
 | `S3_ENDPOINT` | S3-compatible endpoint for `STORAGE_KIND=s3` (empty → AWS) | unset |
 | `S3_BUCKET` | Bucket (required for `s3`) | unset |

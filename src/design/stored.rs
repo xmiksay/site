@@ -140,14 +140,6 @@ impl DesignStore {
         storage: &Storage,
         change: Option<Change>,
     ) -> Result<(), DesignError> {
-        if !storage.has_objects() {
-            if change.is_some() {
-                return Err(storage::Error::NoObjectStore.into());
-            }
-            *self.stored.write() = Arc::default();
-            return Ok(());
-        }
-
         let current = self.stored.read().clone();
         let mut files = HashMap::new();
         for object in storage.list(DESIGN_PREFIX).await? {

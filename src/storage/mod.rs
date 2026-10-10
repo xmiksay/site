@@ -6,10 +6,12 @@
 //! Every backend keeps a `file_blobs` row per blob (hash, size): the
 //! `files`/`file_thumbnails` foreign keys point at it, and `storage migrate`
 //! walks it. Only the `db` backend fills its `data` column. Object keys are
-//! `blobs/{hash[0..2]}/{hash}`. Object backends also hold keyed objects
-//! (design overrides under `design/…`, see [`objects`]).
+//! `blobs/{hash[0..2]}/{hash}`. Every backend also holds keyed objects
+//! (design overrides under `design/…`, see [`objects`]): object keys on
+//! `fs`/`s3`, `storage_objects` rows on `db`.
 
 pub mod config;
+mod db_objects;
 pub mod migrate;
 mod objects;
 
@@ -51,9 +53,6 @@ pub enum Error {
     InvalidHash(String),
     #[error("invalid storage key {0:?}")]
     InvalidKey(String),
-    /// Keyed objects (design overrides) need an object backend.
-    #[error("the db storage backend holds no keyed objects; use STORAGE_KIND fs or s3")]
-    NoObjectStore,
     #[error("storage unavailable: {0}")]
     Unavailable(#[source] object_store::Error),
     #[error(transparent)]
@@ -70,6 +69,9 @@ pub struct Download {
 pub struct Storage {
     db: DatabaseConnection,
     objects: Option<Objects>,
+    /// `db` backend only: `scoped` prefixes, each ending in `/`, prepended to
+    /// every `storage_objects` key.
+    key_prefix: String,
 }
 
 #[derive(Clone)]
@@ -90,7 +92,11 @@ impl Storage {
     }
 
     pub fn db(db: DatabaseConnection) -> Self {
-        Self { db, objects: None }
+        Self {
+            db,
+            objects: None,
+            key_prefix: String::new(),
+        }
     }
 
     /// A directory: atomic writes (temp file + rename) with fsync.
@@ -129,6 +135,7 @@ impl Storage {
         Self {
             db,
             objects: Some(Objects { store, kind }),
+            key_prefix: String::new(),
         }
     }
 
@@ -138,7 +145,8 @@ impl Storage {
     }
 
     /// The same backend with every object key under `prefix/` (tests isolate
-    /// themselves in one bucket this way). A `db` backend is returned as is.
+    /// themselves in one bucket or table this way). Blobs stay shared on `db`:
+    /// they are content-addressed `file_blobs` rows.
     pub fn scoped(&self, prefix: &str) -> Self {
         let objects = self.objects.as_ref().map(|o| Objects {
             store: Arc::new(PrefixStore::new(Arc::clone(&o.store), prefix)),
@@ -147,6 +155,7 @@ impl Storage {
         Self {
             db: self.db.clone(),
             objects,
+            key_prefix: format!("{}{prefix}/", self.key_prefix),
         }
     }
 

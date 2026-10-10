@@ -186,7 +186,9 @@ async fn unreachable_s3_is_unavailable_and_records_nothing() {
 }
 
 async fn migrate_from_db_into(db: &DatabaseConnection, target: &TestStorage) {
-    let source = Storage::db(db.clone());
+    // Scoped: an unscoped db source would also copy other tests' keyed objects.
+    let source_ts = TestStorage::db(db);
+    let source = &source_ts.storage;
     let a = source
         .put_blob(&unique_bytes("migrate a"))
         .await
@@ -197,11 +199,11 @@ async fn migrate_from_db_into(db: &DatabaseConnection, target: &TestStorage) {
         .expect("b");
     let hashes = vec![a.clone(), b.clone()];
 
-    let report = migrate::migrate(&source, &target.storage, &hashes)
+    let report = migrate::migrate(source, &target.storage, &hashes)
         .await
         .expect("migrate");
-    assert_eq!(report.copied, hashes, "{report:?}");
-    assert!(report.problems.is_empty(), "{report:?}");
+    assert_eq!(report.blobs.copied, hashes, "{report:?}");
+    assert_eq!(report.problems().count(), 0, "{report:?}");
     for hash in &hashes {
         let got = target.storage.get_blob(hash).await.expect("get");
         assert_eq!(got, source.get_blob(hash).await.expect("source get"));
@@ -209,18 +211,18 @@ async fn migrate_from_db_into(db: &DatabaseConnection, target: &TestStorage) {
     // The source is only read.
     assert!(blob_row(db, &a).await.expect("row").data.is_some());
 
-    let again = migrate::migrate(&source, &target.storage, &hashes)
+    let again = migrate::migrate(source, &target.storage, &hashes)
         .await
         .expect("re-run");
-    assert_eq!(again.present, hashes, "re-run is a no-op: {again:?}");
-    assert!(again.copied.is_empty() && again.problems.is_empty());
+    assert_eq!(again.blobs.present, hashes, "re-run is a no-op: {again:?}");
+    assert!(again.blobs.copied.is_empty() && again.problems().count() == 0);
 
     let unknown = hash_blob(&unique_bytes("nowhere"));
-    let missing = migrate::migrate(&source, &target.storage, std::slice::from_ref(&unknown))
+    let missing = migrate::migrate(source, &target.storage, std::slice::from_ref(&unknown))
         .await
         .expect("missing source");
-    assert_eq!(missing.problems.len(), 1, "{missing:?}");
-    assert!(missing.problems[0].contains("missing in the source"));
+    assert_eq!(missing.blobs.problems.len(), 1, "{missing:?}");
+    assert!(missing.blobs.problems[0].contains("missing in the source"));
 
     delete_blob_rows(db, &hashes).await;
 }
@@ -249,7 +251,8 @@ async fn migrate_keeps_differing_target_content_and_refuses_db_to_db() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    let source = Storage::db(db.clone());
+    let source_ts = TestStorage::db(&db);
+    let source = &source_ts.storage;
     let data = unique_bytes("differs");
     let hash = source.put_blob(&data).await.expect("put");
 
@@ -262,14 +265,14 @@ async fn migrate_keeps_differing_target_content_and_refuses_db_to_db() {
     std::fs::write(&path, b"tampered").expect("write tampered object");
 
     let hashes = vec![hash.clone()];
-    let report = migrate::migrate(&source, &target.storage, &hashes)
+    let report = migrate::migrate(source, &target.storage, &hashes)
         .await
         .expect("migrate");
-    assert_eq!(report.problems.len(), 1, "{report:?}");
-    assert!(report.problems[0].contains("different content"));
+    assert_eq!(report.blobs.problems.len(), 1, "{report:?}");
+    assert!(report.blobs.problems[0].contains("different content"));
     assert_eq!(std::fs::read(&path).expect("read"), b"tampered");
 
-    let err = migrate::migrate(&source, &Storage::db(db.clone()), &hashes)
+    let err = migrate::migrate(source, &Storage::db(db.clone()), &hashes)
         .await
         .expect_err("db → db");
     assert!(err.to_string().contains("both the database"), "{err}");

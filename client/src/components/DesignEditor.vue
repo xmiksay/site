@@ -5,7 +5,7 @@ import { designFileUrl, fileStatus, isImagePath, isTextPath } from '../lib/desig
 import { formatBytes } from '../lib/format'
 import type { DesignFile } from '../types'
 
-const props = defineProps<{ file: DesignFile; editable: boolean }>()
+const props = defineProps<{ file: DesignFile }>()
 const emit = defineEmits<{ dirty: [value: boolean] }>()
 
 const design = useDesignStore()
@@ -56,7 +56,7 @@ async function load() {
     if (isText.value) {
       content.value = await design.fetchText(props.file.path)
       original.value = content.value
-      editing.value = props.editable && props.file.overridden
+      editing.value = props.file.overridden
     } else if (isImage.value) {
       setPreview(await design.fetchContent(props.file.path))
     }
@@ -163,46 +163,44 @@ onBeforeUnmount(() => {
       >
         Download
       </a>
-      <template v-if="editable">
-        <template v-if="isText">
-          <button
-            v-if="!editing && status === 'baked'"
-            :disabled="busy"
-            class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 disabled:opacity-50"
-            @click="startOverride"
-          >
-            Override
-          </button>
-          <button
-            v-if="editing"
-            :disabled="busy || !dirty"
-            class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 disabled:opacity-50"
-            @click="save"
-          >
-            {{ busy ? 'Saving…' : 'Save' }}
-          </button>
-          <button
-            v-if="editing && !file.overridden"
-            :disabled="busy"
-            class="rounded border border-gray-300 px-3 py-1.5 hover:bg-gray-50"
-            @click="cancelOverride"
-          >
-            Cancel
-          </button>
-        </template>
-        <label v-else class="rounded border border-gray-300 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">
-          Replace…
-          <input type="file" class="hidden" :disabled="busy" @change="replace" />
-        </label>
+      <template v-if="isText">
         <button
-          v-if="file.overridden"
+          v-if="!editing && status === 'baked'"
           :disabled="busy"
-          class="ml-auto text-red-600 hover:underline disabled:opacity-50"
-          @click="removeOverride"
+          class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 disabled:opacity-50"
+          @click="startOverride"
         >
-          {{ file.baked ? 'Revert to baked' : 'Delete override' }}
+          Override
+        </button>
+        <button
+          v-if="editing"
+          :disabled="busy || !dirty"
+          class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 disabled:opacity-50"
+          @click="save"
+        >
+          {{ busy ? 'Saving…' : 'Save' }}
+        </button>
+        <button
+          v-if="editing && !file.overridden"
+          :disabled="busy"
+          class="rounded border border-gray-300 px-3 py-1.5 hover:bg-gray-50"
+          @click="cancelOverride"
+        >
+          Cancel
         </button>
       </template>
+      <label v-else class="rounded border border-gray-300 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">
+        Replace…
+        <input type="file" class="hidden" :disabled="busy" @change="replace" />
+      </label>
+      <button
+        v-if="file.overridden"
+        :disabled="busy"
+        class="ml-auto text-red-600 hover:underline disabled:opacity-50"
+        @click="removeOverride"
+      >
+        {{ file.baked ? 'Revert to baked' : 'Delete override' }}
+      </button>
     </div>
   </div>
 </template>

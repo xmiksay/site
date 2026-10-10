@@ -66,7 +66,6 @@ impl From<crate::storage::Error> for ApiError {
             }
             Error::Db(db) => db.into(),
             Error::InvalidKey(key) => Self::BadRequest(format!("invalid path {key:?}")),
-            Error::NoObjectStore => Self::Conflict(err.to_string()),
             Error::InvalidHash(_) => {
                 tracing::error!("{err}");
                 Self::Internal("internal error".into())

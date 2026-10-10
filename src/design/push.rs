@@ -20,9 +20,6 @@ pub struct Report {
 }
 
 pub async fn push(storage: &Storage, dir: &Path) -> Result<Report> {
-    if !storage.has_objects() {
-        bail!("STORAGE_KIND=db holds no design overrides; set it to fs or s3");
-    }
     let mut report = Report::default();
     let mut files = Vec::new();
     for (rel, path) in walk(dir)? {

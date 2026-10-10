@@ -85,7 +85,7 @@ async fn main() {
             eprintln!("  create-user <username> <password>       Create a user");
             eprintln!("  change-password <username> <password>   Change password");
             eprintln!(
-                "  storage migrate --from db | --from-dir <path>\n                                          Copy every blob into the configured STORAGE_KIND"
+                "  storage migrate --from db | --from-dir <path>\n                                          Copy every blob and object into the configured STORAGE_KIND"
             );
             eprintln!(
                 "  design push <dir>                       Upload a design folder as storage overrides"
@@ -95,8 +95,8 @@ async fn main() {
     }
 }
 
-/// Copy every blob into the configured backend; `Ok(false)` when any blob
-/// could not be copied (the report lists which).
+/// Copy every blob and keyed object into the configured backend; `Ok(false)`
+/// when any could not be copied (the report lists which).
 async fn storage_migrate(args: &[String]) -> anyhow::Result<bool> {
     use anyhow::{Context as _, bail};
     use site::storage::{Storage, StorageConfig, migrate};
@@ -116,11 +116,13 @@ async fn storage_migrate(args: &[String]) -> anyhow::Result<bool> {
 
     let hashes = target.known_hashes().await?;
     let report = migrate::migrate(&source, &target, &hashes).await?;
-    for problem in &report.problems {
+    let mut ok = true;
+    for problem in report.problems() {
         eprintln!("  {problem}");
+        ok = false;
     }
     println!("{}", report.summary());
-    Ok(report.problems.is_empty())
+    Ok(ok)
 }
 
 /// Upload a design folder; the server applies it on its next reload.

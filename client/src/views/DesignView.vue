@@ -93,12 +93,6 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnload))
       {{ error }}
     </p>
     <p
-      v-if="design.state && !design.editable"
-      class="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded p-2"
-    >
-      Design overrides need STORAGE_KIND fs or s3; showing the baked design.
-    </p>
-    <p
       v-if="design.state?.local_dir"
       class="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded p-2"
     >
@@ -116,13 +110,12 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnload))
             @folder="folder = $event"
           />
         </div>
-        <DesignUpload v-if="design.editable" :folder="folder" @uploaded="onUploaded" />
+        <DesignUpload :folder="folder" @uploaded="onUploaded" />
       </div>
       <DesignEditor
         v-if="selectedFile"
         :key="`${selectedFile.path}:${editorGeneration}`"
         :file="selectedFile"
-        :editable="design.editable"
         @dirty="dirty = $event"
       />
       <p v-else class="text-gray-400 text-sm">Select a file to view or override it.</p>

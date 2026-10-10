@@ -117,18 +117,23 @@ executes on every PR rather than self-skipping.
 
 - `tests/storage.rs` — one suite over every blob backend (`db`, `fs`, `s3`),
   `storage migrate`, and the public `/files/{hash}` route over fs plus a dead
-  S3 endpoint (503). Backends come from `tests/common/storage.rs`
-  (`#[path]`-included): a temp dir, or a random `test-<uuid>/` prefix in the
-  Garage test bucket, removed on drop. The S3 tests **fail, not skip**, without
+  S3 endpoint (503). `tests/storage_objects.rs` — the same for keyed objects
+  (#114): put/get/list/delete/versions on every backend, `db` scope isolation,
+  and `storage migrate` copying objects db→fs, db→s3, fs→db (re-run no-op,
+  differing target content kept). Backends come from
+  `tests/common/storage.rs` (`#[path]`-included): a random `test-<uuid>/` key
+  prefix in `storage_objects` (`db`), a temp dir, or a random `test-<uuid>/`
+  prefix in the Garage test bucket, removed on drop. The S3 tests **fail, not skip**, without
   `TEST_S3_ENDPOINT/BUCKET/REGION/ACCESS_KEY_ID/SECRET_ACCESS_KEY` — CI passes
   them from GitHub secrets; locally `make test-integration` reads exactly
   these lines from `.env` (see `.env.example`) and never `.env`'s
   `DATABASE_URL`.
-- `tests/design.rs`, `tests/design_api.rs` — design overrides (#110):
-  `DesignStore::apply` over fs and S3 (save, 422-style rejection of a broken
-  template, external edit + reload, failed reload keeps the design, delete),
-  dead S3 → 503, `design push`; and `/api/design` over a full `AppState`
-  driving what the public 404 page renders (fs) and staying read-only (db).
+- `tests/design.rs`, `tests/design_api.rs` — design overrides (#110, #114):
+  `DesignStore::apply` over db, fs and S3 (save, 422-style rejection of a
+  broken template, external edit + reload, failed reload keeps the design,
+  delete), dead S3 → 503, `design push` over db and fs; and `/api/design` over
+  a full `AppState` driving what the public 404 page renders (fs, and db with
+  the state's storage swapped for a scoped one after startup).
 - `tests/policy_db.rs` — `SitePolicy`/`tool_permissions` resolution against a
   real `tool_permissions` table (FK to `users`, so it can't be faked
   in-memory).

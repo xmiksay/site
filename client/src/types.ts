@@ -361,7 +361,6 @@ export interface DesignFile {
 
 export interface DesignState {
   storage: DesignStorageKind
-  editable: boolean
   local_dir: boolean
   last_reload: DesignReloadStatus | null
   files: DesignFile[]
