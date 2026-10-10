@@ -126,8 +126,8 @@ export const useAssistantStore = defineStore('assistant', () => {
     id: number,
     input: { instructions?: string; kept?: number } = {},
   ) {
-    // Answers the successor session; adopting it moves `current` to a new id,
-    // and the watch above then clears `sending`.
+    // Compaction keeps the row id (only the engine session is repointed), so
+    // the answer is adopted like any other turn's.
     return forSession(id, () =>
       api<AssistantSessionDetail>(`/api/assistant/sessions/${id}/compact`, {
         method: 'POST',

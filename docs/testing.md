@@ -134,7 +134,10 @@ executes on every PR rather than self-skipping.
   these lines from `.env` (see `.env.example`) and never `.env`'s
   `DATABASE_URL`.
 - `tests/design.rs`, `tests/design_publish.rs`,
-  `tests/design_publish_failures.rs`, `tests/design_api.rs` — the
+  `tests/design_publish_failures.rs`, `tests/design_api.rs` (its full-router
+  harness with a logged-in throwaway user is `tests/common/design_app.rs`,
+  `#[path]`-included; its publish rejections assert the structured
+  `code`/`details` body) — the
   design in storage (#110, #114, #115): `DesignStore::reload` over db, fs and
   S3 (bucket edit + reload, failed reload keeps the design, delete), dead S3 →
   503, `design push` over db and fs; the draft/publish/history flow over db,
