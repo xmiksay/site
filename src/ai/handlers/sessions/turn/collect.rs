@@ -145,6 +145,8 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
     let mut seen_outputs: std::collections::HashSet<(SessionId, String)> =
         std::collections::HashSet::new();
     let mut drain_checked: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
+    let mut continue_unchecked: std::collections::HashSet<SessionId> =
+        std::collections::HashSet::new();
 
     let mut descendants: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
     let mut settled_sessions: std::collections::HashSet<SessionId> =
@@ -200,8 +202,17 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
                 && let Some((db, root)) = drain_check
                 && drain_checked.insert(ev_session.clone())
             {
-                let open = routing::open_calls_after(db, root, &ev_session, request_id).await?;
-                open_others.extend(open.into_iter().filter(|k| !seen_outputs.contains(k)));
+                match routing::open_calls_after(db, root, &ev_session, request_id).await {
+                    Ok(open) => {
+                        open_others.extend(open.into_iter().filter(|k| !seen_outputs.contains(k)))
+                    }
+                    // The decisions already took effect, so no 500: answer
+                    // without the continuation, as for a partial batch.
+                    Err(e) => {
+                        tracing::warn!(error = ?e, "could not read open tool calls; not waiting for the continuation");
+                        continue_unchecked.insert(ev_session.clone());
+                    }
+                }
             }
             // Our own decisions for this session just drained *and* nothing
             // else was left open for it either — it's now safe to also wait
@@ -209,7 +220,10 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
             // every `ToolOutput` for this session, not just ours, since a
             // sibling resolving (concurrently, elsewhere) can be what
             // finally empties `open_others` for it.
-            if ours_drained && !open_others.iter().any(|(s, _)| s == &ev_session) {
+            if ours_drained
+                && !continue_unchecked.contains(&ev_session)
+                && !open_others.iter().any(|(s, _)| s == &ev_session)
+            {
                 session_targets.insert(ev_session.clone());
             }
         }

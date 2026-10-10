@@ -649,13 +649,17 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   on every admission and release — twelve `fsync`s per MCP handshake +
   `tools/list`, enough under disk load to blow the 10s bounds and drop the
   server — and caps concurrency per URL across every process and
-  connection; it only coordinates sibling processes sharing a key, which a
-  single `site_server` has none of. In-process pacing, concurrency and
-  `Retry-After` gates stay on. Because each endpoint's pool
-  state is a `.state`/`.lock` pair on disk that nothing else evicts,
-  `state.rs::create_state` runs a best-effort `prune_stale` sweep
-  (`prune_endpoint_state`) at startup — idle >1h and provably dead pairs only,
-  logged, never fatal. Holds the same `SharedRegistry` handle
+  connection. Pacing, concurrency and `Retry-After` gates inside each
+  `HttpClient` stay on. What the site gives up is small: besides sibling
+  processes (a single `site_server` has none), the file also joined
+  separate `HttpClient`s for the same endpoint + key within this process,
+  and `catalog.rs`'s `refresh()` builds a fresh client per provider on every
+  refresh — so right after an admin edit, sessions still on the old client
+  and those on the new one no longer share a 429 cool-down or a concurrency
+  cap until the old turns finish. With the gate off nothing is written under
+  `${data_dir}/entanglement/endpoints/` and nothing is swept; `.state`/
+  `.lock` pairs left there by earlier versions are inert and can be deleted
+  by hand. Holds the same `SharedRegistry` handle
   `engine.rs` wraps at spawn (issue #38): every time `routes_for_user`
   (re)connects a user's servers — a cold cache or a 60s TTL expiry —
   `register_routes` registers each newly discovered `"{server}__{tool}"`
@@ -691,7 +695,9 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   approval waiter (`SiteEngine::await_decision_waiter`, `engine/awaiting.rs`,
   folded from `ToolRequest`s by the session watcher in `engine/live.rs`): a
   resumed session re-offers asynchronously, and a decision that reaches the
-  engine before its waiter exists is silently dropped. That one shared
+  engine before its waiter exists is silently dropped. A call whose latest
+  `ToolRequest` already has a persisted `ToolOutput` (a stale UI, a double
+  click) is refused with `400` instead of waited for. That one shared
   `root_session_id` is exactly why `assistant_sessions.root_engine_session_id`
   (m_032, #99) stores an *engine* id rather than a pointer to the root row:
   every one of these three filters (`resume_session`,

@@ -8,11 +8,12 @@ use std::time::Duration;
 
 use entanglement_core::{OutEvent, SessionId};
 use entanglement_runtime::session_store::{LogPayload, LogRecord};
+use sea_orm::sea_query::Expr;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 use super::load_prior_records;
 use crate::ai::tool_permissions::Effect;
-use crate::entity::tool_permission;
+use crate::entity::{assistant_event, tool_permission};
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
@@ -71,28 +72,53 @@ pub(super) async fn open_calls_after(
     session: &SessionId,
     output: &str,
 ) -> ApiResult<Vec<(SessionId, String)>> {
+    // Matches the persisted `LogRecord` shape: `{"payload": {"kind": …}}`.
+    let barrier = serde_json::json!({ "payload": {
+        "kind": "tool_output", "session": session.0, "request_id": output,
+    }});
     let deadline = tokio::time::Instant::now() + PERSIST_BARRIER_TIMEOUT;
     loop {
-        let records = load_prior_records(db, root).await?;
-        let landed = records.iter().any(|r| {
-            r.session == *session
-                && matches!(&r.payload,
-                    LogPayload::Out(OutEvent::ToolOutput { request_id, .. }) if request_id == output)
-        });
-        if landed || tokio::time::Instant::now() >= deadline {
-            if !landed {
-                tracing::warn!(
-                    request_id = output,
-                    "tool output never reached assistant_events; open calls may be stale"
-                );
-            }
-            return Ok(open_tool_requests(&records)
-                .into_iter()
-                .filter(|(s, _)| s == session)
-                .collect());
+        let landed = assistant_event::Entity::find()
+            .filter(assistant_event::Column::RootSessionId.eq(root.0.clone()))
+            .filter(Expr::cust_with_values("payload @> $1", [barrier.clone()]))
+            .one(db)
+            .await?
+            .is_some();
+        if landed {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!(
+                request_id = output,
+                "tool output never reached assistant_events; open calls may be stale"
+            );
+            break;
         }
         tokio::time::sleep(PERSIST_POLL_INTERVAL).await;
     }
+    let records = load_prior_records(db, root).await?;
+    Ok(open_tool_requests(&records)
+        .into_iter()
+        .filter(|(s, _)| s == session)
+        .collect())
+}
+
+/// Whether `session`'s latest `ToolRequest` for `call_id` in `records` already
+/// has its `ToolOutput` — a decision for it can only be a no-op. The latest
+/// one, since a later round may reuse a request id.
+pub(super) fn call_resolved(records: &[LogRecord], session: &SessionId, call_id: &str) -> bool {
+    let Some(asked) = records.iter().rposition(|r| {
+        r.session == *session
+            && matches!(&r.payload,
+                LogPayload::Out(OutEvent::ToolRequest { request_id, .. }) if request_id == call_id)
+    }) else {
+        return false;
+    };
+    records[asked..].iter().any(|r| {
+        r.session == *session
+            && matches!(&r.payload,
+                LogPayload::Out(OutEvent::ToolOutput { request_id, .. }) if request_id == call_id)
+    })
 }
 
 /// Persist an "always deny" `tool_permissions` rule for the tool behind
@@ -228,4 +254,56 @@ pub async fn session_for_call_awaiting(
     Err(ApiError::BadRequest(format!(
         "tool call `{call_id}` is unknown or already resolved"
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(session: &SessionId, id: &str) -> LogRecord {
+        LogRecord::new(
+            session.clone(),
+            LogPayload::Out(OutEvent::ToolRequest {
+                session: session.clone(),
+                seq: 1,
+                request_id: id.into(),
+                tool: "tag_create".into(),
+                input: "{}".into(),
+            }),
+        )
+    }
+
+    fn output(session: &SessionId, id: &str) -> LogRecord {
+        LogRecord::new(
+            session.clone(),
+            LogPayload::Out(OutEvent::ToolOutput {
+                session: session.clone(),
+                seq: 2,
+                request_id: id.into(),
+                tool: "tag_create".into(),
+                output: "ok".into(),
+                content: Vec::new(),
+            }),
+        )
+    }
+
+    #[test]
+    fn call_resolved_only_once_its_latest_request_has_an_output() {
+        let s = SessionId::new("s");
+        let other = SessionId::new("other");
+        assert!(!call_resolved(&[request(&s, "a")], &s, "a"));
+        assert!(call_resolved(&[request(&s, "a"), output(&s, "a")], &s, "a"));
+        // Same id answered on another session, or reused by a later round.
+        assert!(!call_resolved(
+            &[request(&s, "a"), output(&other, "a")],
+            &s,
+            "a"
+        ));
+        assert!(!call_resolved(
+            &[request(&s, "a"), output(&s, "a"), request(&s, "a")],
+            &s,
+            "a"
+        ));
+        assert!(!call_resolved(&[], &s, "a"));
+    }
 }

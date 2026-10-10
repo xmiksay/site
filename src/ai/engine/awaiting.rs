@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashSet;
-use entanglement_core::{OutEvent, SessionId};
+use entanglement_core::{AgentState, OutEvent, SessionId};
 use tokio::sync::Notify;
 
 #[derive(Clone, Default)]
@@ -45,8 +45,15 @@ impl AwaitingDecisions {
             } => {
                 self.calls.remove(&(session.clone(), request_id.clone()));
             }
+            // A turn only ends with every call resolved — or cancelled by a
+            // `Stop`, which unwinds the parked waiters without a `ToolOutput`.
             OutEvent::SessionHibernated { session, .. }
-            | OutEvent::SessionEnded { session, .. } => {
+            | OutEvent::SessionEnded { session, .. }
+            | OutEvent::Done { session, .. }
+            | OutEvent::Status {
+                session,
+                state: AgentState::Done,
+            } => {
                 self.calls.retain(|(s, _)| s != session);
             }
             _ => {}
@@ -129,6 +136,22 @@ mod tests {
         awaiting.fold(&OutEvent::SessionHibernated {
             session: session.clone(),
             ts: 0,
+        });
+        assert!(
+            !awaiting
+                .wait_for(&session, "call-1", Duration::from_secs(1))
+                .await
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stopped_turn_forgets_its_parked_calls() {
+        let awaiting = AwaitingDecisions::default();
+        let session = SessionId::new_uuid();
+        awaiting.fold(&request(&session, "call-1"));
+        awaiting.fold(&OutEvent::Status {
+            session: session.clone(),
+            state: AgentState::Done,
         });
         assert!(
             !awaiting

@@ -377,7 +377,7 @@ something happens (#124):
   loop from `psql` (blocks the writer's `INSERT`s, not the handlers'
   `SELECT`s) while the test runs.
 - **Hand-built logs must match what the engine writes.** A fixture inserted
-  straight into `assistant_events` (`assistant_session_subagent_resume.rs`)
+  straight into `assistant_events` (`tests/common/resume_log.rs`)
   carries each session's `AgentChanged` after its `SessionStarted`: replay
   restores the profile from that record, and without it the resumed session
   silently runs under the default profile — which only showed up once resume

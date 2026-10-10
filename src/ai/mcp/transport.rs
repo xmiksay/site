@@ -63,10 +63,15 @@ pub(super) const MCP_ENDPOINT_RPM: u32 = 60_000;
 /// under heavy disk load, which silently dropped the server from the user's
 /// tool list (#124). Its concurrency cap is also keyed by URL across every
 /// process and connection, undoing the per-connect isolation
-/// [`mcp_pool_client`] exists for. The gate coordinates sibling `skutter`
-/// processes sharing one API key; `site_server` is one process, and every
-/// in-process gate (pacing, concurrency, `Retry-After`) stays on for LLM and
-/// MCP traffic alike. The provider reads it per endpoint, so it must be set
+/// [`mcp_pool_client`] exists for. Every gate held inside one `HttpClient`
+/// (pacing, concurrency, `Retry-After`) stays on for LLM and MCP traffic
+/// alike. What is given up: the file also joined *separate* clients for the
+/// same endpoint + key, and `ai::catalog`'s `refresh()` builds a fresh client
+/// per provider on every refresh — so after an admin edit, sessions still on
+/// the old client and those on the new one no longer share a 429 cool-down or
+/// a concurrency cap until the old ones finish their turn. A narrow, brief
+/// overlap, against a fixed fsync tax on every request. The provider reads it
+/// per endpoint, so it must be set
 /// before any thread exists: `site_server`'s `main`, and `.cargo/config.toml`
 /// for `cargo test`/`cargo run`.
 pub const NO_SHARED_ENDPOINT_STATE_ENV: &str = "ENTANGLEMENT_NO_SHARED_ENDPOINT_STATE";

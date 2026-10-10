@@ -20,6 +20,8 @@
 //! like a live spawn's.
 
 mod common;
+#[path = "common/resume_log.rs"]
+mod resume_log;
 #[path = "common/scripted.rs"]
 mod scripted;
 
@@ -29,11 +31,7 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use chrono::Utc;
 use common::{send, test_db_url};
-use entanglement_core::{
-    ContentPart, InMsg, Llm, LlmRequest, LlmResponse, LlmStream, OutEvent, SessionId,
-    stream_from_response,
-};
-use entanglement_runtime::session_store::{LogPayload, LogRecord};
+use entanglement_core::{Llm, LlmRequest, LlmResponse, LlmStream, SessionId, stream_from_response};
 use scripted::{scripted_cleanup, setup_scripted};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde_json::json;
@@ -55,22 +53,6 @@ impl Llm for ResumeScriptedLlm {
             tool_calls: vec![],
         }))
     }
-}
-
-/// Insert one `LogRecord` into `assistant_events` under `root`'s
-/// `root_session_id` — same shape `DbSink`/`entanglement_runtime`'s
-/// persistence tap produce, but callable directly so a whole root+child log
-/// can be fabricated without ever running a live turn (see the module doc).
-async fn insert(db: &sea_orm::DatabaseConnection, root: &SessionId, record: LogRecord) {
-    let value = serde_json::to_value(&record).expect("serialize LogRecord");
-    site::entity::assistant_event::ActiveModel {
-        root_session_id: Set(root.0.clone()),
-        payload: Set(value),
-        ..Default::default()
-    }
-    .insert(db)
-    .await
-    .expect("insert assistant_event row");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -112,177 +94,7 @@ async fn resume_replays_a_live_sub_agent_from_the_db_log_alone() {
     .expect("insert assistant_session row");
     let db_session_id = saved.id;
 
-    // The root's own settled turn: prompt → spawn `page-writer` → the spawn's
-    // own immediate reply (naming the child, #421/ADR-0113's synthesized
-    // prompt is a *runtime*-side behavior for a live spawn — here the
-    // equivalent user-role framing message for the child is inserted
-    // directly, below) → done.
-    insert(
-        &fx.db,
-        &root,
-        LogRecord::new(
-            root.clone(),
-            LogPayload::Out(OutEvent::SessionStarted {
-                session: root.clone(),
-                parent: None,
-                predecessor: None,
-                profile: "build".into(),
-                model: None,
-                user: None,
-                root: true,
-                ts: 0,
-            }),
-        ),
-    )
-    .await;
-    insert(
-        &fx.db,
-        &root,
-        LogRecord::new(
-            root.clone(),
-            LogPayload::In(InMsg::prompt(root.clone(), "draft a page")),
-        ),
-    )
-    .await;
-    insert(
-        &fx.db,
-        &root,
-        LogRecord::new(
-            root.clone(),
-            LogPayload::Out(OutEvent::ToolCall {
-                session: root.clone(),
-                seq: 1,
-                request_id: "spawn-1".into(),
-                tool: "agent_spawn".into(),
-                input: format!(
-                    r#"{{"agent":"page-writer","prompt":"create a page at path {path} with markdown content 'hello from a resumed sub-agent'"}}"#
-                ),
-            }),
-        ),
-    )
-    .await;
-    insert(
-        &fx.db,
-        &root,
-        LogRecord::new(
-            root.clone(),
-            LogPayload::Out(OutEvent::ToolOutput {
-                session: root.clone(),
-                seq: 2,
-                request_id: "spawn-1".into(),
-                tool: "agent_spawn".into(),
-                output: format!(
-                    "Sub-agent launched under the `page-writer` profile. agent_id: {}. \
-                     Call agent_poll with this agent_id to await its answer.",
-                    child.0
-                ),
-                content: Vec::<ContentPart>::new(),
-            }),
-        ),
-    )
-    .await;
-    insert(
-        &fx.db,
-        &root,
-        LogRecord::new(
-            root.clone(),
-            LogPayload::Out(OutEvent::Done {
-                session: root.clone(),
-                seq: 3,
-            }),
-        ),
-    )
-    .await;
-
-    // The child's own log, filed under the *same* `root_session_id` (the
-    // `DbSink`/persistence-tap convention `crate::ai::projection::project`
-    // and the engine's own cascaded resume both depend on) — started, framed
-    // by its spawning prompt, and parked on a pending `page_edit` call (a
-    // fresh test user has no `tool_permissions` rows, so `page_edit` defaults
-    // to `Ask` — this is genuinely a **live**, unresolved sub-agent as of
-    // where the log stops).
-    insert(
-        &fx.db,
-        &root,
-        LogRecord::new(
-            child.clone(),
-            LogPayload::Out(OutEvent::SessionStarted {
-                session: child.clone(),
-                parent: Some(root.clone()),
-                predecessor: None,
-                profile: "page-writer".into(),
-                model: None,
-                user: None,
-                root: false,
-                ts: 0,
-            }),
-        ),
-    )
-    .await;
-    // A live session always logs its starting profile as `AgentChanged` right
-    // after `SessionStarted`, and that record — not `SessionStarted`'s
-    // `profile` — is what replay restores the profile from.
-    insert(
-        &fx.db,
-        &root,
-        LogRecord::new(
-            child.clone(),
-            LogPayload::Out(OutEvent::AgentChanged {
-                session: child.clone(),
-                agent: "page-writer".into(),
-                profile_detail: None,
-            }),
-        ),
-    )
-    .await;
-    insert(
-        &fx.db,
-        &root,
-        LogRecord::new(
-            child.clone(),
-            LogPayload::In(InMsg::prompt(
-                child.clone(),
-                format!(
-                    "create a page at path {path} with markdown content 'hello from a resumed sub-agent'"
-                ),
-            )),
-        ),
-    )
-    .await;
-    insert(
-        &fx.db,
-        &root,
-        LogRecord::new(
-            child.clone(),
-            LogPayload::Out(OutEvent::ToolCall {
-                session: child.clone(),
-                seq: 1,
-                request_id: "edit-1".into(),
-                tool: "page_edit".into(),
-                input: format!(
-                    r#"{{"path":"{path}","markdown":"hello from a resumed sub-agent"}}"#
-                ),
-            }),
-        ),
-    )
-    .await;
-    insert(
-        &fx.db,
-        &root,
-        LogRecord::new(
-            child.clone(),
-            LogPayload::Out(OutEvent::ToolRequest {
-                session: child.clone(),
-                seq: 2,
-                request_id: "edit-1".into(),
-                tool: "page_edit".into(),
-                input: format!(
-                    r#"{{"path":"{path}","markdown":"hello from a resumed sub-agent"}}"#
-                ),
-            }),
-        ),
-    )
-    .await;
+    resume_log::insert_parked_subagent_log(&fx.db, &root, &child, &path).await;
 
     // First touch: `GET` resumes the root, which — thanks to ADR-0112 —
     // cascades the still-parked `page-writer` child back to life too, purely

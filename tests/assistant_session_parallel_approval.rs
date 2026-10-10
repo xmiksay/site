@@ -242,6 +242,22 @@ async fn approving_calls_one_at_a_time_settles_each_promptly_and_the_last_contin
          pending call was decided: {approved_b:#}"
     );
 
+    // A stale re-submit (double click) is refused outright rather than sent
+    // as a no-op the request would then wait out.
+    let (status, again) = send(
+        &fx.app,
+        "POST",
+        &format!("/assistant/sessions/{db_session_id}/messages/0/approve"),
+        &fx.cookie,
+        Some(json!({ "decisions": [{ "tool_call_id": call_ids[0], "approve": true }] })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "re-approve call A: {again}"
+    );
+
     for name in [&tag_a, &tag_b] {
         if let Some(row) = tag::Entity::find()
             .filter(tag::Column::Name.eq(name.as_str()))

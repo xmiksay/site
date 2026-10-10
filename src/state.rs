@@ -1,6 +1,5 @@
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::ai::AiConfig;
 use crate::ai::engine::SiteEngine;
@@ -28,37 +27,6 @@ pub struct AppState {
     pub mdcast: Option<mdcast_client::Client>,
 }
 
-/// How long a shared endpoint-state file must have sat untouched before the
-/// startup sweep may remove it — long enough that a pair belonging to any
-/// endpoint still in rotation is never a candidate. Matches what
-/// entanglement's own binary sweeps with.
-const ENDPOINT_STATE_MAX_IDLE: Duration = Duration::from_secs(3600);
-
-/// Best-effort sweep of leaked cross-process endpoint state (#97). Every LLM
-/// request and every MCP connect writes a `.state`/`.lock` pair under
-/// `${data_dir}/entanglement/endpoints/` keyed by the endpoint's URL, and
-/// nothing in normal operation removes one — so an edited MCP server URL, a
-/// rotated key or a changed provider `base_url` orphans its pair forever (248
-/// → 916 files over one debugging session here). `prune_stale` only deletes
-/// pairs that are *both* idle past `ENDPOINT_STATE_MAX_IDLE` and carry no live
-/// lease, cool-down or recent request, so it can never sweep state another
-/// process is relying on. Blocking file I/O (each candidate is opened under
-/// its advisory lock), hence the blocking pool; and never fatal — a failed
-/// sweep just means the litter stays another boot.
-async fn prune_endpoint_state() {
-    match tokio::task::spawn_blocking(|| {
-        entanglement_provider::prune_stale(ENDPOINT_STATE_MAX_IDLE)
-    })
-    .await
-    {
-        Ok(0) => tracing::debug!("startup sweep found no orphaned endpoint-state files"),
-        Ok(removed) => {
-            tracing::info!("startup sweep removed {removed} orphaned endpoint-state file(s)")
-        }
-        Err(e) => tracing::warn!("startup endpoint-state sweep failed: {e}"),
-    }
-}
-
 pub async fn create_state(config: &Config) -> AppState {
     let db = sea_orm::Database::connect(&config.database_url)
         .await
@@ -81,10 +49,6 @@ pub async fn create_state(config: &Config) -> AppState {
         .reload(&storage, &tmpl)
         .await
         .expect("Failed to load design overrides from storage");
-
-    // Before the engine (and its per-provider HTTP clients) starts writing
-    // fresh endpoint state of its own.
-    prune_endpoint_state().await;
 
     let ai_config = Arc::new(AiConfig::new());
     let ws_hub = Arc::new(WsHub::new());

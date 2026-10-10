@@ -35,7 +35,7 @@ use axum::Json;
 use axum::extract::{Extension, Path, State};
 use entanglement_core::{ApprovalScope, InMsg, SessionId};
 use entanglement_runtime::session_store::LogRecord;
-use routing::remember_deny;
+use routing::{call_resolved, remember_deny};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 
 use super::tree::root_engine_id;
@@ -153,10 +153,18 @@ pub async fn approve(
         // wrong for a stale/unknown/misrouted sub-agent call id.
         let target_session =
             session_for_call_awaiting(&state.db, &root, &prior, &d.tool_call_id).await?;
+        // A stale UI or a double click: nothing is parked, so a decision
+        // would be a silent no-op the request then waits out.
+        if call_resolved(&prior, &target_session, &d.tool_call_id) {
+            return Err(ApiError::BadRequest(format!(
+                "tool call `{}` is already resolved",
+                d.tool_call_id
+            )));
+        }
         // A just-resumed session re-offers its parked call asynchronously; a
         // decision sent before its waiter exists is dropped and this request
-        // would sit out `TURN_TIMEOUT` (#124). Sent anyway on a miss, as
-        // before: only an already-resolved call ever misses.
+        // would sit out `TURN_TIMEOUT` (#124). Sent anyway on a miss: the
+        // call's output may only be lagging behind in `assistant_events`.
         if !engine
             .await_decision_waiter(&target_session, &d.tool_call_id, DECISION_WAITER_TIMEOUT)
             .await
