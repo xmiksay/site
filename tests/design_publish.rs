@@ -59,7 +59,7 @@ fn live(design: &DesignStore, path: &str) -> Option<Vec<u8>> {
     design.load(path)
 }
 
-async fn exercise(ts: &TestStorage) {
+async fn exercise(db: &DatabaseConnection, ts: &TestStorage) {
     let (design, tmpl) = setup();
     let storage = &ts.storage;
     design.reload(storage, &tmpl).await.expect("reload");
@@ -79,7 +79,7 @@ async fn exercise(ts: &TestStorage) {
             .is_none()
     );
     let err = design
-        .publish(storage, &tmpl, "alice", false)
+        .publish(db, storage, &tmpl, "alice", false)
         .await
         .expect_err("uninitialized");
     assert!(matches!(err, DesignError::NothingToPublish), "{err:?}");
@@ -128,7 +128,7 @@ async fn exercise(ts: &TestStorage) {
     // A broken template fails validation: nothing written, nothing live.
     put(&design, storage, "templates/404.html", "{% if %}").await;
     let err = design
-        .publish(storage, &tmpl, "alice", false)
+        .publish(db, storage, &tmpl, "alice", false)
         .await
         .expect_err("broken publish");
     assert!(matches!(err, DesignError::Invalid(_)), "{err:?}");
@@ -144,7 +144,7 @@ async fn exercise(ts: &TestStorage) {
 
     put(&design, storage, "templates/404.html", "DRAFT-1").await;
     let first = design
-        .publish(storage, &tmpl, "alice", false)
+        .publish(db, storage, &tmpl, "alice", false)
         .await
         .expect("publish");
     assert_eq!(first.by, "alice");
@@ -188,7 +188,7 @@ async fn exercise(ts: &TestStorage) {
         "a reverted baked file equal to its published copy is no change"
     );
     let second = design
-        .publish(storage, &tmpl, "bob", false)
+        .publish(db, storage, &tmpl, "bob", false)
         .await
         .expect("publish 2");
     assert!(live(&design, "assets/css/extra.css").is_none());
@@ -226,7 +226,7 @@ async fn exercise(ts: &TestStorage) {
     let read = design.draft_read(storage, "templates/404.html").await;
     assert_eq!(read.expect("read").as_deref(), Some(&b"DRAFT-2"[..]));
     let err = design
-        .publish(storage, &tmpl, "bob", false)
+        .publish(db, storage, &tmpl, "bob", false)
         .await
         .expect_err("no-op");
     assert!(matches!(err, DesignError::NothingToPublish), "{err:?}");
@@ -238,7 +238,7 @@ async fn exercise(ts: &TestStorage) {
         .expect("bucket edit");
     put(&design, storage, "assets/css/new.css", "n{}").await;
     let err = design
-        .publish(storage, &tmpl, "bob", false)
+        .publish(db, storage, &tmpl, "bob", false)
         .await
         .expect_err("conflict");
     match &err {
@@ -246,7 +246,7 @@ async fn exercise(ts: &TestStorage) {
         other => panic!("expected a conflict, got {other:?}"),
     }
     design
-        .publish(storage, &tmpl, "bob", true)
+        .publish(db, storage, &tmpl, "bob", true)
         .await
         .expect("forced publish");
     assert_eq!(
@@ -262,7 +262,7 @@ async fn exercise(ts: &TestStorage) {
     design.draft_discard(storage).await.expect("discard");
     put(&design, storage, "assets/css/new.css", "n2{}").await;
     design
-        .publish(storage, &tmpl, "bob", false)
+        .publish(db, storage, &tmpl, "bob", false)
         .await
         .expect("publish after discard");
     assert_eq!(
@@ -292,7 +292,7 @@ async fn draft_publish_history_over_db() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    exercise(&TestStorage::db(&db)).await;
+    exercise(&db, &TestStorage::db(&db)).await;
 }
 
 #[tokio::test]
@@ -301,7 +301,7 @@ async fn draft_publish_history_over_fs() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    exercise(&TestStorage::fs(&db)).await;
+    exercise(&db, &TestStorage::fs(&db)).await;
 }
 
 #[tokio::test]
@@ -310,5 +310,5 @@ async fn draft_publish_history_over_s3() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    exercise(&TestStorage::s3(&db)).await;
+    exercise(&db, &TestStorage::s3(&db)).await;
 }

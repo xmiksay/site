@@ -1,6 +1,7 @@
 //! `/api/design` (#110, #115) over a full `AppState`: the draft API (tree +
 //! changes, raw text and binary files, delete, discard), publish (422 on a
-//! broken template, live untouched), history and restore, the WS
+//! template that fails to compile or the strict smoke render, live
+//! untouched), history and restore, the WS
 //! `design.*` events, and Reload after a bucket edit — all driving what the
 //! public 404 page renders, over fs and db storage.
 //!
@@ -249,6 +250,24 @@ async fn exercise(app: &App, ts: &TestStorage, kind: &str) {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
+
+    // So does one that compiles but fails the strict smoke render, here in
+    // a branch only the contract's example contexts reach (a search query).
+    let search = "/api/design/draft/templates/page_search.html";
+    let baked = site::design::DesignStore::new(None).baked("templates/page_search.html");
+    let baked = String::from_utf8(baked.expect("baked page_search")).expect("utf-8");
+    let broken = baked.replacen("{% elif q %}{{ q }}", "{% elif q %}{{ qq }}", 1);
+    assert_eq!(app.call("PUT", search, broken).await.0, StatusCode::OK);
+    let (status, body) = app.json("POST", "/api/design/publish", "").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let error = body["error"].as_str().unwrap_or("");
+    assert!(
+        error.contains("templates/page_search.html:2: undefined"),
+        "{body}"
+    );
+    assert_eq!(app.public_404().await, baked_404, "live untouched");
+    assert_eq!(app.call("DELETE", search, "").await.0, StatusCode::OK);
+
     let (status, first) = app.json("POST", "/api/design/publish", "").await;
     assert_eq!(status, StatusCode::OK, "{first}");
     assert_eq!(first["by"], app.username.as_str());

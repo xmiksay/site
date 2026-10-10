@@ -147,7 +147,9 @@ executes on every PR rather than self-skipping.
   and deleted in `design/` outside the draft as conflicts (db, fs), the
   version-id collision bump (unit test in `publish.rs`), and a mirror failing midway restoring the previous `design/` (fs, via a
   read-only directory — skipped when running as root); and the
-  `/api/design/*` routes over a full `AppState` driving what the public 404
+  `/api/design/*` routes over a full `AppState` (a publish rejected with 422
+  for a compile error and for a strict smoke render error in a branch only
+  an example context reaches, then a clean draft publishing) driving what the public 404
   page renders, raw binary files and the `design.*` WS events, registered
   straight on `AppState.ws_hub` (fs, and db with the state's storage swapped
   for a scoped one after startup).

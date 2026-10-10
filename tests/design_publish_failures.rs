@@ -89,7 +89,7 @@ fn conflict_paths(err: DesignError) -> Vec<String> {
 /// still is that snapshot; otherwise the rolled-forward paths surface as a
 /// conflict. A marker whose snapshot is incomplete is dropped without
 /// touching `design/`.
-async fn exercise_recovery(ts: &TestStorage) {
+async fn exercise_recovery(db: &DatabaseConnection, ts: &TestStorage) {
     let storage = &ts.storage;
     let (design, tmpl) = setup();
     design.reload(storage, &tmpl).await.expect("reload");
@@ -119,7 +119,7 @@ async fn exercise_recovery(ts: &TestStorage) {
     let id2 = "2026-10-10T13:00:00.000000Z";
     leave_pending(storage, id2, &one_file("ROLLED-2"), 1).await;
     let err = design
-        .publish(storage, &tmpl, "dave", false)
+        .publish(db, storage, &tmpl, "dave", false)
         .await
         .expect_err("rolled-forward paths conflict");
     assert_eq!(conflict_paths(err), ["templates/404.html"]);
@@ -130,7 +130,7 @@ async fn exercise_recovery(ts: &TestStorage) {
     );
     assert_eq!(design.history(storage).await.expect("history").len(), 2);
     design
-        .publish(storage, &tmpl, "dave", true)
+        .publish(db, storage, &tmpl, "dave", true)
         .await
         .expect("forced");
 
@@ -141,7 +141,7 @@ async fn exercise_recovery(ts: &TestStorage) {
     design.reload(storage, &tmpl).await.expect("reload");
     put(&design, storage, "assets/css/b.css", "b{}").await;
     design
-        .publish(storage, &tmpl, "dave", false)
+        .publish(db, storage, &tmpl, "dave", false)
         .await
         .expect("no conflict after a re-base");
     assert_eq!(design.history(storage).await.expect("history").len(), 5);
@@ -156,13 +156,13 @@ async fn exercise_recovery(ts: &TestStorage) {
 }
 
 /// `design/` files added and deleted outside the draft are both conflicts.
-async fn exercise_external_add_and_delete(ts: &TestStorage) {
+async fn exercise_external_add_and_delete(db: &DatabaseConnection, ts: &TestStorage) {
     let storage = &ts.storage;
     let (design, tmpl) = setup();
     design.reload(storage, &tmpl).await.expect("reload");
     put(&design, storage, "assets/css/mine.css", "m{}").await;
     design
-        .publish(storage, &tmpl, "erin", false)
+        .publish(db, storage, &tmpl, "erin", false)
         .await
         .expect("publish");
 
@@ -176,7 +176,7 @@ async fn exercise_external_add_and_delete(ts: &TestStorage) {
         .expect("bucket delete");
     put(&design, storage, "assets/css/next.css", "n{}").await;
     let err = design
-        .publish(storage, &tmpl, "erin", false)
+        .publish(db, storage, &tmpl, "erin", false)
         .await
         .expect_err("conflict");
     assert_eq!(
@@ -191,7 +191,7 @@ async fn external_add_and_delete_conflict_over_db() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    exercise_external_add_and_delete(&TestStorage::db(&db)).await;
+    exercise_external_add_and_delete(&db, &TestStorage::db(&db)).await;
 }
 
 #[tokio::test]
@@ -200,7 +200,7 @@ async fn external_add_and_delete_conflict_over_fs() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    exercise_external_add_and_delete(&TestStorage::fs(&db)).await;
+    exercise_external_add_and_delete(&db, &TestStorage::fs(&db)).await;
 }
 
 #[tokio::test]
@@ -209,7 +209,7 @@ async fn recover_interrupted_publish_over_db() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    exercise_recovery(&TestStorage::db(&db)).await;
+    exercise_recovery(&db, &TestStorage::db(&db)).await;
 }
 
 #[tokio::test]
@@ -218,7 +218,7 @@ async fn recover_interrupted_publish_over_fs() {
         eprintln!("skipping: DATABASE_URL not set");
         return;
     };
-    exercise_recovery(&TestStorage::fs(&db)).await;
+    exercise_recovery(&db, &TestStorage::fs(&db)).await;
 }
 
 /// A mirror that fails midway (a read-only directory under `design/`) puts
@@ -238,7 +238,7 @@ async fn failed_mirror_restores_the_previous_design_over_fs() {
     design.reload(storage, &tmpl).await.expect("reload");
     put(&design, storage, "assets/css/style.css", "v1{}").await;
     design
-        .publish(storage, &tmpl, "alice", false)
+        .publish(&db, storage, &tmpl, "alice", false)
         .await
         .expect("publish");
 
@@ -257,7 +257,7 @@ async fn failed_mirror_restores_the_previous_design_over_fs() {
     put(&design, storage, "assets/css/style.css", "v2{}").await;
     put(&design, storage, "assets/locked/x.css", "x{}").await;
     let err = design
-        .publish(storage, &tmpl, "alice", false)
+        .publish(&db, storage, &tmpl, "alice", false)
         .await
         .expect_err("mirror fails");
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("chmod");
