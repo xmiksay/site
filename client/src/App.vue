@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from './stores/auth'
 import { useWsStore } from './stores/ws'
-import type { DataScheme } from './types'
+import { useColorScheme } from './lib/colorScheme'
 
 const auth = useAuthStore()
 const ws = useWsStore()
 const router = useRouter()
 
 const mobileOpen = ref(false)
-const dataScheme = ref<DataScheme>('light')
+const { scheme: dataScheme, choose: chooseScheme } = useColorScheme()
 
 watch(() => router.currentRoute.value.fullPath, () => {
   mobileOpen.value = false
@@ -25,26 +25,9 @@ watch(
   { immediate: true },
 )
 
-watch(dataScheme, (scheme) => {
-  applyDataScheme(scheme)
-  localStorage.setItem('dataScheme', scheme)
-})
-
-onMounted(() => {
-  const savedScheme = localStorage.getItem('dataScheme')
-  const scheme = savedScheme === 'light' ? 'light' : 'dark'
-
-  applyDataScheme(scheme)
-  dataScheme.value = scheme
-})
-
 async function handleLogout() {
   await auth.logout()
   router.push('/login')
-}
-
-function applyDataScheme(scheme: DataScheme) {
-  document.documentElement.setAttribute('data-scheme', scheme)
 }
 </script>
 
@@ -130,9 +113,8 @@ function applyDataScheme(scheme: DataScheme) {
                 type="checkbox"
                 id="dark-toggle"
                 class="sr-only peer"
-                v-model="dataScheme"
-                true-value="dark"
-                false-value="light"
+                :checked="dataScheme === 'dark'"
+                @change="chooseScheme(($event.target as HTMLInputElement).checked ? 'dark' : 'light')"
               />
               <div class="w-9 h-5 bg-fg-1 rounded-full peer-checked:bg-accent duration-200"></div>
               <div class="absolute left-0.5 top-0.5 bg-white w-4 h-4 rounded-full duration-200 peer-checked:translate-x-full flex items-center justify-center text-line-on-dark peer-checked:[&>.sun]:hidden peer-checked:[&>.moon]:block">

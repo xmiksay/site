@@ -117,7 +117,7 @@ Admin UI chrome: colours come from the semantic tokens in
 `text-danger`, `bg-accent-bg`, …, each a `light-dark()` pair) and buttons from
 `button.css` (`button-primary`, `button-outline-danger`, …) — never raw Tailwind
 palette shades, so the sidebar's dark-mode toggle (`App.vue`, `data-scheme` on
-`<html>`, persisted in `localStorage`, dark until switched) restyles
+`<html>`; follows the OS `prefers-color-scheme` until the user picks a scheme, which is then persisted in `localStorage` — `lib/colorScheme.ts`) restyles
 everything. The chat is one component, `ChatPanel.vue` (`ChatPanelHeader` with
 the title and `AssistantSessionToolbar` plus an `actions` slot,
 `ChatMessageList` with the transcript, live turn and sub-agent cards,
