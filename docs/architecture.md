@@ -62,8 +62,12 @@ src/
                           # render entrypoint the public/admin export routes
                           # call (#67), and load_brand (#68)
   design/                # mod.rs: DesignStore (DESIGN_DIR → stored → baked);
-                          # stored.rs: design/… overrides, validated reload;
-                          # push.rs: `site_cli design push`
+                          # stored.rs: published design/… objects, validated
+                          # reload, validate_for_publish; draft.rs: the
+                          # shared design-draft/ (init, edit, discard,
+                          # change list, mirror); publish.rs: publish,
+                          # design-history/ snapshots, restore, crash
+                          # recovery; push.rs: `site_cli design push`
   storage/               # mod.rs: Storage (db | fs | s3 over object_store) —
                           # put_blob/get_blob/get_blob_stream by sha256;
                           # objects.rs: keyed get/put/delete/list on every
@@ -117,7 +121,8 @@ files               id, path unique (m_017), hash (SHA-256), mimetype,
 file_blobs          hash PK, data bytea? (only STORAGE_KIND=db, m_033),
                     size_bytes (deduped by hash; one row per blob on every backend)
 storage_objects     key PK, data bytea, etag (sha256 of data), updated_at
-                    -- keyed objects (design/…) of STORAGE_KIND=db only (m_034)
+                    -- keyed objects (design/…, design-draft/…,
+                    -- design-history/…) of STORAGE_KIND=db only (m_034)
 file_thumbnails     file_id PK, hash, width, height, mimetype
 galleries           id, path unique (m_020), title, description?,
                     file_ids INT[], audit
@@ -201,7 +206,7 @@ File and thumbnail bytes go through `Storage` (`src/storage/`, held as `AppState
 | `fs` | `STORAGE_DIR/blobs/{hash[0..2]}/{hash}` | Atomic writes (temp file + rename), fsync |
 | `s3` | `{bucket}/blobs/{hash[0..2]}/{hash}` | `object_store` AWS client; 5 s connect / 30 s read timeout, 2 retries within 15 s, no total timeout (long downloads stream) |
 
-**Keyed objects** sit next to the blobs on every backend (`src/storage/objects.rs`): `put(key, bytes)` / `get(key)` / `delete(key)` (idempotent) / `list(prefix)` (recursive under the directory `prefix/`, sorted, each with a `Version` = ETag + size + mtime) — object keys on `fs`/`s3`, `storage_objects` rows on `db` (m_034; ETag = sha256 of the data, mtime = `updated_at`, written as one upsert). Keys are validated (`parse_key`: no empty/`.`/`..` segments, no control characters). `scoped(prefix)` puts every key under `prefix/` on every backend (a `PrefixStore` on `fs`/`s3`, a key prefix on `db` — `db` blobs stay shared `file_blobs` rows); tests isolate themselves this way. Design overrides (`design/…`) are stored this way.
+**Keyed objects** sit next to the blobs on every backend (`src/storage/objects.rs`): `put(key, bytes)` / `get(key)` / `delete(key)` (idempotent) / `list(prefix)` (recursive under the directory `prefix/`, sorted, each with a `Version` = ETag + size + mtime) — object keys on `fs`/`s3`, `storage_objects` rows on `db` (m_034; ETag = sha256 of the data, mtime = `updated_at`, written as one upsert). Keys are validated (`parse_key`: no empty/`.`/`..` segments, no control characters). `scoped(prefix)` puts every key under `prefix/` on every backend (a `PrefixStore` on `fs`/`s3`, a key prefix on `db` — `db` blobs stay shared `file_blobs` rows); tests isolate themselves this way. The design (`design/…`, `design-draft/…`, `design-history/…`) is stored this way.
 
 Every backend keeps one `file_blobs` row per blob (hash, size) — the FK target of `files.hash`/`file_thumbnails.hash` and the list `storage migrate` walks; only `db` fills `data` (nullable since m_033). Writes put the object **before** the row, so a row never points at unwritten bytes; a DB failure after the put leaves a harmless orphan (content-addressed, and there is no blob GC). Thumbnails are best effort: a failed thumbnail write only means `has_thumbnail: false`.
 
@@ -211,13 +216,48 @@ Errors: an unreachable `fs`/`s3` backend is `storage::Error::Unavailable` → AP
 
 ## Design overrides
 
-A deployment's own design lives in storage as `design/{path}` objects (`fs`: `STORAGE_DIR/design/…`, `s3`: the bucket, `db`: `storage_objects` rows), `path` under `templates/`, `assets/` or `mdcast/` (`src/design/stored.rs`). They are held in RAM (`DesignStore.stored`, swapped wholesale) — requests never touch storage.
+A deployment's own design lives in storage (`fs`: under `STORAGE_DIR/`, `s3`: the bucket, `db`: `storage_objects` rows), `path` always under `templates/`, `assets/` or `mdcast/`:
 
-**Reload** (`DesignStore::apply`, serialized by a mutex): list `design/`, download only objects whose version (ETag + size + mtime) changed, apply the pending admin change if any, syntax-check every override template (UTF-8 + MiniJinja parse — render-time errors such as an unknown variable are not caught), then write the change to storage and swap the overlay in, and recompile the release build's frozen template environment (`Templates::refresh`). Any failure leaves storage and the running design untouched. A plain reload records its outcome (`last_reload`, shown in the admin; storage and DB failures appear only as `storage unavailable` / `database error`, the detail goes to the log) either way; a rejected admin save leaves it alone.
+| Keys | What |
+|---|---|
+| `design/{path}` | The **published** design, what the public site serves over the baked bundle (`src/design/stored.rs`). Held in RAM (`DesignStore.stored`, swapped wholesale) — requests never touch storage |
+| `design-draft/{path}` | The one shared **draft** per site (`src/design/draft.rs`), edited by any admin; invisible to the public site |
+| `design-history/{id}/{path}` + `design-history/{id}/meta.json` | A full snapshot of the draft per publish (`src/design/publish.rs`), `id` = the UTC RFC 3339 publish time (`2026-10-10T12:00:00.123456Z`, sorts chronologically), `meta.json` = `{id, at, by (username), files}`. Never deleted |
+| `design-draft.json` | The draft's meta (`DraftMeta`): present = initialized; its **base** = the sha256 of every `design/` object the draft was started from (a history id alone would miss bucket edits) |
+| `design-publish-pending.json` | Set only while a publish is between its snapshot and its history entry (recovery, below) |
 
-**Ways in:** edit objects directly in the bucket (Garage admin UI, `aws s3`, rclone) and click **Reload** in the admin Design page (`POST /api/design/reload`); or use the Design page itself (tree of baked / overridden / override-only files, upload/replace/delete, inline text editor — every save reloads at once, a broken template answers 422); or `site_cli design push <dir>` (uploads a folder in the bundle layout, skips other paths, refuses the whole push on a broken template; the server picks it up on the next Reload).
+Both the published design and the draft are read **over the baked bundle**: a path neither holds shows its baked default. Deleting a baked file from the draft therefore *reverts* it to the default, and an initialized draft with no files at all is the pure baked bundle.
 
-**Startup** loads the overlay before serving; unreachable storage or a broken override refuses the start rather than serving the baked design in place of the site's own. Every backend holds overrides (`db` since #114, edited through the Design page or `design push`). Reloads are per process (single replica assumed). MCP and the AI assistant have no design access.
+**Draft lifecycle.** Until its first mutation the draft is *uninitialized*: GETs show the published view, report no changes and **never write**. The first mutation (`draft_put`/`draft_delete`, `site_cli design push`, discard, restore) copies the published view (baked ∪ `design/` in storage) into `design-draft/` and writes the meta last (an interrupted init is redone), so the draft holds the full bundle. Discard and restore **re-base** it on the current `design/`.
+
+**Draft API** (`DesignStore::{draft, draft_read, draft_put, draft_delete, draft_discard}`, serialized by the draft mutex, which also caches the draft's bytes by version): raw bytes in and out, not validated (the draft may be broken while being worked on). `draft()` returns `initialized`, its files and the **change list** — the draft view against the published view (RAM), `added`/`modified`/`deleted` per path. Every mutation broadcasts `design.draft_changed` on the WS hub.
+
+**Publish** (`DesignStore::publish(storage, templates, by, force)`, under `reload_lock` then the draft mutex, so within the server process publishes, reloads and draft edits never interleave — `site_cli design push` is outside that, see "Ways in"):
+1. complete a pending publish if the marker is set (below), reloading after it;
+2. checks, each rejection changing nothing: an uninitialized draft → **409** `nothing to publish`; its full view fails `stored::validate_for_publish` (every template UTF-8 + MiniJinja compile today; #117's smoke render plugs in there) → **422**; read the current `design/` from storage — if the draft view equals the live view → **409** `nothing to publish` (no version is created); if `design/` changed since the draft's base (bucket edit, a push to `design/` by hand, a publish from a stale process) → **409** `design/ changed outside the draft since it was started: <paths>` unless `force` (`POST /api/design/publish?force=true`), which overwrites them;
+3. pick the version id (the current UTC time, bumped by 1 µs while `design-history/{id}/` already holds anything) and write the snapshot `design-history/{id}/…`;
+4. write the pending marker (the history entry);
+5. **mirror** draft → `design/` (write what differs, then delete what the draft lacks — keys under the bundle roots only);
+6. reload (list, validate, swap the RAM overlay, recompile templates);
+7. write `meta.json`, delete the marker, re-base the draft on the new `design/`.
+
+Visitors switch designs only at step 6's RAM swap, so the running site never serves a half-mirrored `design/`.
+
+Failure guarantees:
+- **Rejected or storage down before step 4**: live `design/` and the running design untouched; at worst an orphan snapshot without `meta.json` (ignored by the history).
+- **Mirror or reload fails (steps 5–6)**: the previous `design/` objects are mirrored back from step 2's copy (each path holds either the old or the new bytes, so the reverse mirror restores exactly) and only then the marker is dropped; the error (503 storage unavailable / 500) says exactly which happened — `previous design restored`; `previous design restored, but the publish marker could not be cleared`; or `restoring the previous design failed` — the latter two adding that the next reload, publish or start completes this publish. The running design never changed, the draft keeps the unpublished edits.
+- **A marker left behind** (crash after step 4, or either failed cleanup above) is resolved as early as possible: at the start of **every** reload (including startup's) and publish, under `reload_lock` (and the draft mutex for its draft part, same lock order). Its snapshot — complete and validated before the marker was written — is rolled forward: mirrored to `design/`, recorded (`meta.json`), the marker dropped. The draft's base moves to the snapshot only if the draft's files still equal it; a draft changed since (discarded, restored, edited) keeps its base, so its next publish answers 409 for the rolled-forward paths instead of silently reverting them. A reload that completed a pending publish says so in its status (`last_reload.completed_publish`) and broadcasts `design.published`; one completed at the start of a publish is only logged. A marker whose snapshot file count does not match is dropped without touching `design/`. So a stale marker cannot sit around and later overwrite newer bucket edits.
+- **Recording fails after going live (step 7)**: the publish is live and reported as such; a missing history entry is written by the next reload/publish/start (the marker stays), a stale draft base only makes the next publish ask for `force`.
+
+**History / restore:** `DesignStore::history` lists every `meta.json`, newest first; `restore(id)` copies that snapshot into the **draft** (never straight to live) and re-bases it — publish it to go live.
+
+**Baked updates are shadowed.** After the first publish `design/` holds a full copy of the bundle, so improved baked files shipped by a later release do **not** reach the site on their own — the deployment's design is pinned. To adopt one, compare it in the admin (`GET /api/design/draft/{path}?source=baked` vs `?source=published`) and revert that file in the draft (`DELETE /api/design/draft/{path}` — the draft view falls back to the new baked default), then publish. Discarding the draft does *not* adopt baked changes (it copies the published `design/` back).
+
+**Reload** (`DesignStore::reload`, under `reload_lock`): complete a pending publish (above), list `design/`, download only objects whose version (ETag + size + mtime) changed, syntax-check every template, then swap the overlay in and recompile the release build's frozen template environment (`Templates::refresh`). A failure leaves the running design untouched. It records its outcome (`last_reload`, shown in the admin; storage and DB failures appear only as `storage unavailable` / `database error`, the detail goes to the log) either way.
+
+**Ways in:** the admin Design page (edits the draft through `/api/design/draft/*`; interim "Draft — not live" label with Publish — confirming a forced publish on a conflict — and Discard buttons until the Design studio, #119); `site_cli design push <dir>` (uploads a folder in the bundle layout **into the draft**, initializing it if needed, skips other paths, keeps draft files the folder lacks, refuses the whole push on a broken template; it goes live through the same publish. The CLI is another process: it emits **no WS events** (open admin tabs see the push on their next refresh) and takes **no lock** shared with the server, so it must not run while an admin publishes, discards or restores — the draft could end up mixed); or, for professionals, edit `design/` objects directly in the bucket (Garage admin UI, `aws s3`, rclone) and click **Reload** (`POST /api/design/reload`). A bucket edit bypasses the draft: the next publish answers 409 listing the edited paths — **discard** the draft (after Reload) to adopt them, or force to overwrite them.
+
+**Startup** runs a reload (completing a pending publish first) before serving; unreachable storage or a broken override refuses the start rather than serving the baked design in place of the site's own. Every backend holds the design (`db` since #114). Reloads and the draft cache are per process (single replica assumed). MCP and the AI assistant have no design access yet (#118).
 
 ## Routes
 
@@ -249,9 +289,13 @@ A deployment's own design lives in storage as `design/{path}` objects (`fs`: `ST
 |---|---|---|
 | `/api/ws` | GET (upgrade) | Global authenticated WebSocket — see below |
 | `/api/export/pages/{id}?format=pdf\|slides` | GET | Export any page by id to PDF or reveal.js slides (see [Export (mdcast)](#export-mdcast)) |
-| `/api/design` | GET | Design state: storage kind, `local_dir`, `last_reload`, merged file list (`baked`/`overridden`/`size`) |
-| `/api/design/reload` | POST | Reload overrides from storage (after edits made directly in the bucket); 422 broken template, 503 storage down (fs/s3; db errors are 500) |
-| `/api/design/files/{*path}` | GET / PUT / DELETE | Effective file (`?source=baked` for the default) / write override from the raw body (20 MB) / remove override — writes reload at once; 400 bad path, 404 no override, 422 broken template |
+| `/api/design/draft` | GET | Draft state (read-only; an uninitialized draft shows the published view): storage kind, `local_dir`, `last_reload`, `initialized`, the draft view's files (`path`/`baked`/`overridden` = differs from baked/`size`) and `changes` vs published (`{path, kind: added\|modified\|deleted}`) |
+| `/api/design/draft/{*path}` | GET / PUT / DELETE | Draft file as raw bytes (`?source=draft` default \| `published` \| `baked`) / write it from the raw body (20 MB, text or binary, not validated) / remove the draft's copy (a baked file reverts to its default) — writes answer the draft state and broadcast `design.draft_changed`; 400 bad path, 404 not in the draft |
+| `/api/design/draft/discard` | POST | Reset the draft to the published view and re-base it; draft state, `design.draft_changed` |
+| `/api/design/publish[?force=true]` | POST | Publish the draft (see [Design overrides](#design-overrides)) → the new history entry, `design.published`. Rejections change nothing: 422 failed validation, 409 nothing to publish, 409 `design/` changed outside the draft (lists the paths; `force=true` overwrites them). 503 storage down / 500 otherwise when the mirror or reload failed (the message says whether the previous design was restored) |
+| `/api/design/history` | GET | Every published version `{id, at, by, files}`, newest first |
+| `/api/design/history/{id}/restore` | POST | Copy version `id` into the draft (never live) and re-base it; draft state, `design.draft_changed`; 404 unknown version |
+| `/api/design/reload` | POST | Complete a pending publish if any (then `last_reload.completed_publish` names it and `design.published` is broadcast), reload `design/` from storage (after edits made directly in the bucket) → draft state; 422 broken template, 503 storage down (fs/s3; db errors are 500) |
 
 ### OAuth2 + MCP
 
@@ -789,7 +833,9 @@ Two routes call `render_page`, both refusing **every** format with `503` up fron
 
 `GET /api/ws` upgrades to a single per-tab WebSocket, authenticated the same way as the rest of `/api/*` (session cookie, checked before the upgrade). `WsHub` (in `AppState.ws_hub`) is a `DashMap<user_id, Vec<mpsc::Sender<Envelope>>>` registry; each open tab holds one entry.
 
-Frames are JSON `Envelope { topic, event, payload }`, `topic` one of `assistant | pages | files | galleries | tags`:
+Frames are JSON `Envelope { topic, event, payload }`, `topic` one of `assistant | pages | files | galleries | tags | design`:
+
+- **`design`** — `draft_changed` after every mutation of the shared design draft (payload `{action: put|delete, path}`, `{action: discard}` or `{action: restore, version}`) and `published` (payload = the new history entry), broadcast to every connected user from the `src/routes/broadcast.rs` helpers (`design_draft_changed`/`design_published`).
 
 - **`pages` / `files` / `galleries` / `tags`** — `created`/`updated` (payload = the same summary shape the REST endpoint returns) / `deleted` (payload `{ id }`). Broadcast to **every** connected user via `WsHub::broadcast`/`broadcast_serialized` — these are shared site entities, not per-user. Published from the shared `src/routes/broadcast.rs` helpers, called after a successful create/update/delete from all three mutating edges — `src/routes/api/{pages,files,galleries,tags}.rs`, `src/routes/mcp/{pages,tags,files,galleries}.rs`, and `src/ai/tools/*.rs` — so a mutation over MCP or by the AI assistant broadcasts the same event a REST API mutation would (#25).
 - **`assistant`** — real, token-level streaming straight off `agent_engine.holly.subscribe()` (`src/ai/ws_bridge/`; the session-identity splice below lives in `ws_bridge/envelope.rs`), published only to the owning user's own connections via `WsHub::publish`. `event` is the forwarded `OutEvent`'s own `"kind"` tag and `payload` is that event's JSON shape (`entanglement_core::OutEvent` already derives `Serialize`) plus a spliced-in `db_session_id` (the `assistant_sessions.id` the engine's root `SessionId` resolves to, cached per session): `status` (`AgentState`: idle/thinking/waiting_approval/waiting_answer/done/error), `text_delta`/`reasoning_delta` (incremental text), `tool_call_delta` (incremental tool-input fragment), `tool_call` (display-only, full call), `tool_request` (needs approval — approve/reject the same way as an existing message's tool call, `POST .../messages/{any}/approve`, since the engine no longer keys approvals by message id), `tool_output`, `done`, `error`, `session_hibernated`, (#17) a sub-agent child's own `session_started` (`{session, profile, parent}`, `researcher`/`page-writer`), and (#88) `ambiguous_retry` (`{nudge}`, ADR-0118) — an ollama "stream died" stop with no tool calls and no confident finish signal, folded by the client's live-turn store into a transient `retrying: true` flag (cleared by the next `text_delta`/`done`/`error`) rather than any persisted transcript content, since `ai::projection::project` deliberately drops it (a round boundary, not a message). Any event belonging to a sub-agent child also carries `agent_session_id` (the child's own engine `SessionId`) so the client can render it nested under the spawning turn instead of the root's own top-level stream, plus `child_db_session_id` (#102) — the `assistant_sessions.id` of the child's own row, which since #99 it has. `db_session_id` deliberately still names the **root's** row for a child's events: the client filters the inline running-sub-agent card on it (`AssistantView.vue`'s `liveSubAgentsForCurrent`) and refetches the parent on the child's `done`, both of which would break if it meant the child — so the child's row id is strictly *additive*, which also removes any deploy-ordering constraint against the client. No `parent_db_session_id` is needed: `db_session_id` already *is* the root. Both child fields are absent on a root event, keeping that envelope byte-identical to pre-#17. `child_db_session_id` is resolved cache-only (seeded by `child_rows::ensure_child_row` when the child's `session_started` came through), so a child whose row never landed — its `session_started` lost to a broadcast lag, or its parent row not yet written — simply omits the field and keeps streaming under the root; `handlers::sessions::subagent_links` repairs the row out of band. `compacted` (#40) is the one `assistant.*` event *not* forwarded by `ws_bridge` — `handlers/sessions/compact.rs` publishes it directly once a manual compaction's fork/retire completes, carrying the real `OutEvent::Compacted` shape (`summary`, `kept`, `auto: false`) plus `db_session_id` and `successor_session_id`, so another open tab on the session notices its `engine_session_id` moved and refetches.

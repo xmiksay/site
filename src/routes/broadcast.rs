@@ -8,6 +8,7 @@
 
 use serde_json::json;
 
+use crate::design::publish::HistoryEntry;
 use crate::entity::{gallery, page, tag};
 use crate::repo::files as files_repo;
 use crate::routes::ws::{Topic, WsHub};
@@ -128,4 +129,23 @@ pub fn tag_updated(hub: &WsHub, tag: &tag::Model) {
 
 pub fn tag_deleted(hub: &WsHub, id: i32) {
     hub.broadcast_event(Topic::Tags, "deleted", json!({ "id": id }));
+}
+
+/// A mutation of the shared design draft: the `design.draft_changed`
+/// payload.
+#[derive(serde::Serialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum DraftChange<'a> {
+    Put { path: &'a str },
+    Delete { path: &'a str },
+    Discard,
+    Restore { version: &'a str },
+}
+
+pub fn design_draft_changed(hub: &WsHub, change: &DraftChange<'_>) {
+    hub.broadcast_serialized(Topic::Design, "draft_changed", change);
+}
+
+pub fn design_published(hub: &WsHub, entry: &HistoryEntry) {
+    hub.broadcast_serialized(Topic::Design, "published", entry);
 }

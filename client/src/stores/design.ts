@@ -2,14 +2,14 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api, apiBlob } from '../api'
 import { designFileUrl } from '../lib/designPaths'
-import type { DesignState } from '../types'
+import type { DesignHistoryEntry, DesignState } from '../types'
 
 export const useDesignStore = defineStore('design', () => {
   const state = ref<DesignState | null>(null)
   const files = computed(() => state.value?.files ?? [])
 
   async function load() {
-    state.value = await api<DesignState>('/api/design')
+    state.value = await api<DesignState>('/api/design/draft')
   }
 
   async function reload() {
@@ -36,6 +36,21 @@ export const useDesignStore = defineStore('design', () => {
     state.value = await api<DesignState>(designFileUrl(path), { method: 'DELETE' })
   }
 
+  // A 409 means design/ changed outside the draft (retry with `force`) or
+  // there is nothing to publish; the caller shows the server's message.
+  async function publish(force = false): Promise<DesignHistoryEntry> {
+    const entry = await api<DesignHistoryEntry>(
+      `/api/design/publish${force ? '?force=true' : ''}`,
+      { method: 'POST' },
+    )
+    await load()
+    return entry
+  }
+
+  async function discard() {
+    state.value = await api<DesignState>('/api/design/draft/discard', { method: 'POST' })
+  }
+
   async function fetchContent(path: string, baked = false): Promise<Blob> {
     return (await apiBlob(designFileUrl(path, baked))).blob
   }
@@ -44,5 +59,5 @@ export const useDesignStore = defineStore('design', () => {
     return await (await fetchContent(path, baked)).text()
   }
 
-  return { state, files, load, reload, save, remove, fetchContent, fetchText }
+  return { state, files, load, reload, save, remove, publish, discard, fetchContent, fetchText }
 })

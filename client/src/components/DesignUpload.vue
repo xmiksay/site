@@ -44,7 +44,7 @@ async function submit() {
 
 <template>
   <form class="bg-white rounded shadow p-3 space-y-2 text-sm" @submit.prevent="submit">
-    <h2 class="font-semibold">Upload override</h2>
+    <h2 class="font-semibold">Upload to draft</h2>
     <input :key="inputKey" type="file" @change="pick" />
     <input
       v-model="target"

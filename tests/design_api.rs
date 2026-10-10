@@ -1,6 +1,8 @@
-//! `/api/design` (#110) over a full `AppState`: fs storage driving what the
-//! public site renders (save, 422 on a broken template, external edit +
-//! Reload, revert), and the same over db storage (#114).
+//! `/api/design` (#110, #115) over a full `AppState`: the draft API (tree +
+//! changes, raw text and binary files, delete, discard), publish (422 on a
+//! broken template, live untouched), history and restore, the WS
+//! `design.*` events, and Reload after a bucket edit — all driving what the
+//! public 404 page renders, over fs and db storage.
 //!
 //! Gated on `DATABASE_URL` like every DB test.
 
@@ -9,18 +11,22 @@
 #[path = "common/storage.rs"]
 mod storage_fixture;
 
+use std::sync::Arc;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::get;
 use http_body_util::BodyExt;
 use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, EntityTrait, Set};
-use serde_json::Value;
+use serde_json::{Value, json};
 use site::auth::SESSION_COOKIE;
 use site::config::Config;
 use site::entity::{token, user};
+use site::routes::ws::{Envelope, Topic, WsHub};
 use site::storage::{Storage, StorageConfig};
 use storage_fixture::TestStorage;
+use tokio::sync::mpsc;
 use tower::ServiceExt;
 
 fn test_db_url() -> Option<String> {
@@ -41,6 +47,8 @@ struct App {
     db: DatabaseConnection,
     cookie: String,
     user_id: i32,
+    username: String,
+    hub: Arc<WsHub>,
 }
 
 /// `scoped` replaces the state's storage after startup: a db test isolates
@@ -59,8 +67,9 @@ async fn app(storage: StorageConfig, scoped: Option<Storage>) -> App {
         state.storage = scoped;
     }
     let db = state.db.clone();
+    let username = format!("design-{}", uuid::Uuid::new_v4());
     let saved = user::ActiveModel {
-        username: Set(format!("design-{}", uuid::Uuid::new_v4())),
+        username: Set(username.clone()),
         password_hash: Set("unused".into()),
         ..Default::default()
     }
@@ -79,6 +88,7 @@ async fn app(storage: StorageConfig, scoped: Option<Storage>) -> App {
     .insert(&db)
     .await
     .expect("insert session token");
+    let hub = state.ws_hub.clone();
     let app = Router::new()
         .nest("/api", site::routes::api::router(state.clone()))
         .fallback(get(site::routes::public::catch_all))
@@ -88,16 +98,18 @@ async fn app(storage: StorageConfig, scoped: Option<Storage>) -> App {
         db,
         cookie: format!("{SESSION_COOKIE}={nonce}"),
         user_id: saved.id,
+        username,
+        hub,
     }
 }
 
 impl App {
-    async fn call(&self, method: &str, uri: &str, body: &str) -> (StatusCode, Vec<u8>) {
+    async fn call(&self, method: &str, uri: &str, body: impl Into<Body>) -> (StatusCode, Vec<u8>) {
         let req = Request::builder()
             .method(method)
             .uri(uri)
             .header("cookie", &self.cookie)
-            .body(Body::from(body.to_string()))
+            .body(body.into())
             .expect("request");
         let resp = self.app.clone().oneshot(req).await.expect("response");
         let status = resp.status();
@@ -106,11 +118,16 @@ impl App {
     }
 
     async fn json(&self, method: &str, uri: &str, body: &str) -> (StatusCode, Value) {
-        let (status, bytes) = self.call(method, uri, body).await;
+        let (status, bytes) = self.call(method, uri, body.to_string()).await;
         (
             status,
             serde_json::from_slice(&bytes).unwrap_or(Value::Null),
         )
+    }
+
+    async fn public_404(&self) -> String {
+        let (_, page) = self.call("GET", "/no-such-page-for-design-test", "").await;
+        String::from_utf8_lossy(&page).into_owned()
     }
 
     async fn cleanup(self) {
@@ -130,41 +147,83 @@ fn entry<'a>(state: &'a Value, path: &str) -> &'a Value {
         .unwrap_or(&Value::Null)
 }
 
-#[tokio::test]
-async fn design_api_over_fs_drives_the_public_site() {
-    let Some(db) = test_db().await else {
-        eprintln!("skipping: DATABASE_URL not set");
-        return;
-    };
-    let ts = TestStorage::fs(&db);
-    let app = app(ts.fs_config(), None).await;
-    let marker = format!("DESIGN-{}", uuid::Uuid::new_v4());
+/// The next `design.*` event, skipping nothing: every draft mutation sends
+/// exactly one.
+fn next_design_event(rx: &mut mpsc::Receiver<Envelope>) -> (String, Value) {
+    let envelope = rx.try_recv().expect("a design event");
+    assert_eq!(envelope.topic, Topic::Design);
+    (envelope.event, envelope.payload)
+}
 
-    let (status, state) = app.json("GET", "/api/design", "").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(state["storage"], "fs");
+async fn exercise(app: &App, ts: &TestStorage, kind: &str) {
+    let (_tx, mut rx) = app.hub.register(app.user_id);
+    let marker = format!("DESIGN-{}", uuid::Uuid::new_v4());
+    let baked_404 = app.public_404().await;
+
+    let (status, state) = app.json("GET", "/api/design/draft", "").await;
+    assert_eq!(status, StatusCode::OK, "{state}");
+    assert_eq!(state["storage"], kind);
+    assert_eq!(state["changes"], json!([]));
+    assert_eq!(state["initialized"], false, "a GET never initializes");
     assert_eq!(entry(&state, "templates/404.html")["baked"], true);
-    assert!(
-        state["files"].as_array().expect("files").iter().all(|f| {
-            let p = f["path"].as_str().unwrap_or("");
-            ["templates/", "assets/", "mdcast/"]
-                .iter()
-                .any(|r| p.starts_with(r))
-        }),
-        "only bundle roots are listed"
-    );
+    assert_eq!(entry(&state, "templates/404.html")["overridden"], false);
 
     let (status, state) = app
-        .json("PUT", "/api/design/files/templates/404.html", &marker)
+        .json("PUT", "/api/design/draft/templates/404.html", &marker)
         .await;
     assert_eq!(status, StatusCode::OK, "{state}");
+    assert_eq!(state["initialized"], true);
     assert_eq!(entry(&state, "templates/404.html")["overridden"], true);
-    let (_, page) = app.call("GET", "/no-such-page-for-design-test", "").await;
-    assert_eq!(String::from_utf8_lossy(&page), marker);
+    assert_eq!(
+        state["changes"],
+        json!([{ "path": "templates/404.html", "kind": "modified" }])
+    );
+    assert_eq!(
+        next_design_event(&mut rx),
+        (
+            "draft_changed".into(),
+            json!({ "action": "put", "path": "templates/404.html" })
+        )
+    );
+    assert_eq!(app.public_404().await, baked_404, "invisible until publish");
+    let read = |source: &'static str| async move {
+        let uri = format!("/api/design/draft/templates/404.html{source}");
+        let (status, body) = app.call("GET", &uri, "").await;
+        assert_eq!(status, StatusCode::OK, "{source}");
+        String::from_utf8_lossy(&body).into_owned()
+    };
+    assert_eq!(read("").await, marker);
+    assert_eq!(read("?source=published").await, read("?source=baked").await);
 
-    let (status, body) = app
-        .json("PUT", "/api/design/files/templates/404.html", "{% for %}")
+    // Raw binary round trip, then delete.
+    let png = vec![0x89, b'P', b'N', b'G', 0, 0xff];
+    let (status, _) = app
+        .call("PUT", "/api/design/draft/assets/img/x.png", png.clone())
         .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, body) = app
+        .call("GET", "/api/design/draft/assets/img/x.png", "")
+        .await;
+    assert_eq!(body, png);
+    let (status, _) = app
+        .call("DELETE", "/api/design/draft/assets/img/x.png", "")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = app
+        .call("DELETE", "/api/design/draft/assets/img/x.png", "")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let events: Vec<_> = (0..2)
+        .map(|_| next_design_event(&mut rx).1["action"].clone())
+        .collect();
+    assert_eq!(events, [json!("put"), json!("delete")]);
+
+    // A broken template is accepted in the draft but blocks the publish.
+    let (status, _) = app
+        .call("PUT", "/api/design/draft/templates/404.html", "{% for %}")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = app.json("POST", "/api/design/publish", "").await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(
         body["error"]
@@ -173,84 +232,97 @@ async fn design_api_over_fs_drives_the_public_site() {
             .contains("templates/404.html"),
         "{body}"
     );
-    let (_, current) = app
-        .call("GET", "/api/design/files/templates/404.html", "")
-        .await;
-    assert_eq!(
-        String::from_utf8_lossy(&current),
-        marker,
-        "rejected save changed nothing"
+    assert_eq!(app.public_404().await, baked_404, "live untouched");
+    assert!(
+        ts.storage
+            .get("design/templates/404.html")
+            .await
+            .expect("get")
+            .is_none()
     );
 
-    let (status, baked) = app
+    let (status, _) = app
         .call(
-            "GET",
-            "/api/design/files/templates/404.html?source=baked",
-            "",
+            "PUT",
+            "/api/design/draft/templates/404.html",
+            marker.clone(),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert_ne!(String::from_utf8_lossy(&baked), marker);
+    let (status, first) = app.json("POST", "/api/design/publish", "").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["by"], app.username.as_str());
+    assert_eq!(app.public_404().await, marker);
+    while let Ok(e) = rx.try_recv() {
+        if e.event == "published" {
+            assert_eq!(e.payload["id"], first["id"]);
+        }
+    }
 
-    // Edited in the storage directly, picked up by Reload.
-    let StorageConfig::Fs { dir } = ts.fs_config() else {
-        unreachable!()
-    };
-    std::fs::write(dir.join("design/templates/404.html"), "EXTERNAL").expect("external edit");
-    let (status, state) = app.json("POST", "/api/design/reload", "").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(state["last_reload"]["ok"], true);
-    let (_, page) = app.call("GET", "/no-such-page-for-design-test", "").await;
-    assert_eq!(String::from_utf8_lossy(&page), "EXTERNAL");
-
-    let (status, state) = app
-        .json("DELETE", "/api/design/files/templates/404.html", "")
+    let (_, _) = app
+        .call("PUT", "/api/design/draft/templates/404.html", "SECOND")
         .await;
+    let (status, _) = app.json("POST", "/api/design/publish", "").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(entry(&state, "templates/404.html")["overridden"], false);
+    assert_eq!(app.public_404().await, "SECOND");
+    let (status, history) = app.json("GET", "/api/design/history", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history.as_array().map(Vec::len), Some(2), "{history}");
+    assert_eq!(history[1], first, "newest first");
+
+    while rx.try_recv().is_ok() {}
+    let id = first["id"].as_str().expect("id");
+    let (status, state) = app
+        .json("POST", &format!("/api/design/history/{id}/restore"), "")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{state}");
+    assert_eq!(
+        state["changes"],
+        json!([{ "path": "templates/404.html", "kind": "modified" }])
+    );
+    assert_eq!(
+        app.public_404().await,
+        "SECOND",
+        "restore goes to the draft"
+    );
+    assert_eq!(
+        next_design_event(&mut rx),
+        (
+            "draft_changed".into(),
+            json!({ "action": "restore", "version": id })
+        )
+    );
+
+    let (status, state) = app.json("POST", "/api/design/draft/discard", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state["changes"], json!([]));
+    assert_eq!(next_design_event(&mut rx).1, json!({ "action": "discard" }));
+    let (status, body) = app.json("POST", "/api/design/publish", "").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("nothing to publish"),
+        "{body}"
+    );
+
     let (status, _) = app
-        .call("DELETE", "/api/design/files/templates/404.html", "")
+        .call(
+            "POST",
+            "/api/design/history/2001-01-01T00:00:00Z/restore",
+            "",
+        )
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-
     for bad in ["preview/x.html", "templates/..%2Fx"] {
         let (status, _) = app
-            .call("PUT", &format!("/api/design/files/{bad}"), "x")
+            .call("PUT", &format!("/api/design/draft/{bad}"), "x")
             .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
-    app.cleanup().await;
-}
 
-#[tokio::test]
-async fn design_api_over_db_drives_the_public_site() {
-    let Some(db) = test_db().await else {
-        eprintln!("skipping: DATABASE_URL not set");
-        return;
-    };
-    let ts = TestStorage::db(&db);
-    let app = app(StorageConfig::Db, Some(ts.storage.clone())).await;
-    let marker = format!("DB-DESIGN-{}", uuid::Uuid::new_v4());
-
-    let (status, state) = app.json("GET", "/api/design", "").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(state["storage"], "db");
-
-    let (status, state) = app
-        .json("PUT", "/api/design/files/templates/404.html", &marker)
-        .await;
-    assert_eq!(status, StatusCode::OK, "{state}");
-    assert_eq!(entry(&state, "templates/404.html")["overridden"], true);
-    let (_, page) = app.call("GET", "/no-such-page-for-design-test", "").await;
-    assert_eq!(String::from_utf8_lossy(&page), marker);
-    let stored = ts
-        .storage
-        .get("design/templates/404.html")
-        .await
-        .expect("get");
-    assert_eq!(stored.as_deref(), Some(marker.as_bytes()));
-
-    // Edited in the table directly, picked up by Reload.
+    // Edited in the storage directly, picked up by Reload.
     ts.storage
         .put("design/templates/404.html", "EXTERNAL".into())
         .await
@@ -258,13 +330,48 @@ async fn design_api_over_db_drives_the_public_site() {
     let (status, state) = app.json("POST", "/api/design/reload", "").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(state["last_reload"]["ok"], true);
-    let (_, page) = app.call("GET", "/no-such-page-for-design-test", "").await;
-    assert_eq!(String::from_utf8_lossy(&page), "EXTERNAL");
-
-    let (status, state) = app
-        .json("DELETE", "/api/design/files/templates/404.html", "")
-        .await;
+    assert_eq!(app.public_404().await, "EXTERNAL");
+    assert_eq!(
+        state["changes"],
+        json!([{ "path": "templates/404.html", "kind": "modified" }]),
+        "the draft still holds the last published version"
+    );
+    // Publishing it would revert the bucket edit: 409 unless forced.
+    let (status, body) = app.json("POST", "/api/design/publish", "").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("changed outside the draft since it was started: templates/404.html"),
+        "{body}"
+    );
+    assert_eq!(app.public_404().await, "EXTERNAL");
+    let (status, _) = app.json("POST", "/api/design/publish?force=true", "").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(entry(&state, "templates/404.html")["overridden"], false);
+    assert_eq!(app.public_404().await, "SECOND");
+}
+
+#[tokio::test]
+async fn design_api_over_fs() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let ts = TestStorage::fs(&db);
+    let app = app(ts.fs_config(), None).await;
+    exercise(&app, &ts, "fs").await;
+    app.cleanup().await;
+}
+
+#[tokio::test]
+async fn design_api_over_db() {
+    let Some(db) = test_db().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let ts = TestStorage::db(&db);
+    let app = app(StorageConfig::Db, Some(ts.storage.clone())).await;
+    exercise(&app, &ts, "db").await;
     app.cleanup().await;
 }

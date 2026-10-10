@@ -1,14 +1,19 @@
 //! `site_cli design push <dir>`: upload a design folder (the old
-//! `DESIGN_DIR` layout) as `design/…` overrides. Idempotent; templates are
-//! syntax-checked before anything is written. The running server picks the
-//! files up on its next reload (admin Reload button or restart).
+//! `DESIGN_DIR` layout) into the shared draft (`design-draft/…`), initializing
+//! the draft first if needed. Files the folder lacks stay in the draft.
+//! Idempotent; templates are syntax-checked before anything is written. It
+//! goes live like any draft edit: published from the admin Design page.
+//! Another process than the server: no WS event, and no lock shared with the
+//! server's draft mutex, so it must not run during an admin publish, discard
+//! or restore.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 use bytes::Bytes;
 
-use super::stored::{DESIGN_PREFIX, check_path, validate};
+use super::draft::{DRAFT_PREFIX, ensure_init};
+use super::stored::{check_path, validate};
 use crate::storage::Storage;
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -39,8 +44,9 @@ pub async fn push(storage: &Storage, dir: &Path) -> Result<Report> {
         );
     }
 
+    ensure_init(storage).await?;
     for (rel, bytes) in files {
-        let key = format!("{DESIGN_PREFIX}/{rel}");
+        let key = format!("{DRAFT_PREFIX}/{rel}");
         if storage.get(&key).await?.as_ref() == Some(&bytes) {
             report.unchanged.push(rel);
             continue;

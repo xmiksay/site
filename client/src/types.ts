@@ -1,4 +1,4 @@
-export type WsTopic = 'assistant' | 'pages' | 'files' | 'galleries' | 'tags'
+export type WsTopic = 'assistant' | 'pages' | 'files' | 'galleries' | 'tags' | 'design'
 
 export interface WsEnvelope<T = any> {
   topic: WsTopic
@@ -350,6 +350,8 @@ export interface DesignReloadStatus {
   ok: boolean
   files: number
   error: string | null
+  /** A publish left pending that this reload completed first. */
+  completed_publish: DesignHistoryEntry | null
 }
 
 export interface DesignFile {
@@ -359,9 +361,27 @@ export interface DesignFile {
   size: number
 }
 
+export interface DesignChange {
+  path: string
+  kind: 'added' | 'modified' | 'deleted'
+}
+
+/** The shared draft (`GET /api/design/draft`): its view over the baked
+ *  bundle and what publishing it would change. */
 export interface DesignState {
   storage: DesignStorageKind
   local_dir: boolean
   last_reload: DesignReloadStatus | null
+  /** False until the draft's first edit (it then shows the published view). */
+  initialized: boolean
   files: DesignFile[]
+  changes: DesignChange[]
+}
+
+/** One published design version (`POST /api/design/publish`). */
+export interface DesignHistoryEntry {
+  id: string
+  at: string
+  by: string
+  files: number
 }

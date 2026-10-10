@@ -18,6 +18,8 @@ function designState(overrides: Partial<DesignState> = {}): DesignState {
     local_dir: false,
     last_reload: null,
     files: [{ path: 'templates/base.html', baked: true, overridden: false, size: 10 }],
+    initialized: true,
+    changes: [],
     ...overrides,
   }
 }
@@ -32,7 +34,7 @@ describe('design store', () => {
     apiMock.mockResolvedValueOnce(designState())
     const store = useDesignStore()
     await store.load()
-    expect(apiMock).toHaveBeenCalledWith('/api/design')
+    expect(apiMock).toHaveBeenCalledWith('/api/design/draft')
     expect(store.files).toHaveLength(1)
   })
 
@@ -47,7 +49,7 @@ describe('design store', () => {
     await store.save('templates/my page.html', 'abc')
 
     const [url, init] = apiMock.mock.calls[0]
-    expect(url).toBe('/api/design/files/templates/my%20page.html')
+    expect(url).toBe('/api/design/draft/templates/my%20page.html')
     expect(init).toMatchObject({ method: 'PUT', body: 'abc' })
     expect(new Headers(init!.headers).get('Content-Type')).toBe('application/octet-stream')
     expect(store.state).toEqual(fresh)
@@ -73,14 +75,14 @@ describe('design store', () => {
     apiMock.mockResolvedValueOnce(designState({ files: [] }))
 
     await store.remove('assets/css/x.css')
-    expect(apiMock).toHaveBeenCalledWith('/api/design/files/assets/css/x.css', { method: 'DELETE' })
+    expect(apiMock).toHaveBeenCalledWith('/api/design/draft/assets/css/x.css', { method: 'DELETE' })
     expect(store.files).toHaveLength(0)
   })
 
   it('reload POSTs and adopts the returned state', async () => {
     const store = useDesignStore()
     const fresh = designState({
-      last_reload: { at: '2026-10-09T18:00:00Z', ok: true, files: 12, error: null },
+      last_reload: { at: '2026-10-09T18:00:00Z', ok: true, files: 12, error: null, completed_publish: null },
     })
     apiMock.mockResolvedValueOnce(fresh)
     await store.reload()
@@ -91,7 +93,7 @@ describe('design store', () => {
   it('a failed reload refreshes the state to pick up last_reload, then rethrows', async () => {
     const store = useDesignStore()
     const failed = designState({
-      last_reload: { at: '2026-10-09T18:00:00Z', ok: false, files: 0, error: 'bucket down' },
+      last_reload: { at: '2026-10-09T18:00:00Z', ok: false, files: 0, error: 'bucket down', completed_publish: null },
     })
     apiMock.mockRejectedValueOnce(new ApiError(503, 'storage unavailable'))
     apiMock.mockResolvedValueOnce(failed)
@@ -100,11 +102,47 @@ describe('design store', () => {
     expect(store.state?.last_reload?.error).toBe('bucket down')
   })
 
+  it('publish POSTs, then reloads the draft state', async () => {
+    const entry = { id: '2026-10-10T12:00:00.000000Z', at: '2026-10-10T12:00:00Z', by: 'me', files: 3 }
+    apiMock.mockResolvedValueOnce(entry)
+    apiMock.mockResolvedValueOnce(designState())
+    const store = useDesignStore()
+
+    expect(await store.publish()).toEqual(entry)
+    expect(apiMock).toHaveBeenNthCalledWith(1, '/api/design/publish', { method: 'POST' })
+    expect(apiMock).toHaveBeenNthCalledWith(2, '/api/design/draft')
+  })
+
+  it('publish(true) forces past a conflict', async () => {
+    apiMock.mockResolvedValueOnce({ id: 'x', at: 'x', by: 'me', files: 1 })
+    apiMock.mockResolvedValueOnce(designState())
+    await useDesignStore().publish(true)
+    expect(apiMock).toHaveBeenNthCalledWith(1, '/api/design/publish?force=true', { method: 'POST' })
+  })
+
+  it('a rejected publish (409) rethrows and keeps the state', async () => {
+    const store = useDesignStore()
+    const before = designState()
+    store.state = before
+    apiMock.mockRejectedValueOnce(new ApiError(409, 'design/ changed outside the draft'))
+    await expect(store.publish()).rejects.toThrow('changed outside the draft')
+    expect(store.state).toStrictEqual(before)
+  })
+
+  it('discard POSTs and adopts the returned state', async () => {
+    const store = useDesignStore()
+    store.state = designState({ changes: [{ path: 'assets/a.css', kind: 'added' }] })
+    apiMock.mockResolvedValueOnce(designState())
+    await store.discard()
+    expect(apiMock).toHaveBeenCalledWith('/api/design/draft/discard', { method: 'POST' })
+    expect(store.state?.changes).toEqual([])
+  })
+
   it('fetchText requests the baked source when asked', async () => {
     apiBlobMock.mockResolvedValueOnce({ blob: new Blob(['hello']), filename: 'base.html' })
     const store = useDesignStore()
     const text = await store.fetchText('templates/base.html', true)
-    expect(apiBlobMock).toHaveBeenCalledWith('/api/design/files/templates/base.html?source=baked')
+    expect(apiBlobMock).toHaveBeenCalledWith('/api/design/draft/templates/base.html?source=baked')
     expect(text).toBe('hello')
   })
 })
