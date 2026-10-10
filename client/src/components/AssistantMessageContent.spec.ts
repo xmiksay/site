@@ -171,7 +171,7 @@ describe('AssistantMessageContent', () => {
     // No click target at all — a card that can't be opened must not look like
     // one that can.
     expect(wrapper.find('button').exists()).toBe(false)
-    await wrapper.get('div.border-gray-200').trigger('click')
+    await wrapper.get('div.border-line-2').trigger('click')
     expect(wrapper.emitted('selectSession')).toBeUndefined()
   })
 })

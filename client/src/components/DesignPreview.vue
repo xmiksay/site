@@ -107,14 +107,14 @@ onBeforeUnmount(() => {
     <form class="p-2 border-b flex items-center gap-2 text-sm" @submit.prevent="go">
       <input
         v-model="input"
-        class="min-w-0 flex-1 rounded border border-gray-300 px-2 py-1 font-mono"
+        class="min-w-0 flex-1 rounded border border-line-1 px-2 py-1 font-mono"
         aria-label="Preview path"
         placeholder="/"
       />
-      <button type="submit" class="rounded border border-gray-300 px-2 py-1 hover:bg-gray-50">Go</button>
+      <button type="submit" class="rounded border border-line-1 px-2 py-1 hover:bg-surface-raised">Go</button>
       <button
         type="button"
-        class="rounded border border-gray-300 px-2 py-1 hover:bg-gray-50"
+        class="rounded border border-line-1 px-2 py-1 hover:bg-surface-raised"
         title="Reload the preview (and turn draft preview back on)"
         @click="refresh"
       >
@@ -122,14 +122,14 @@ onBeforeUnmount(() => {
       </button>
       <button
         type="button"
-        class="rounded border border-gray-300 px-2 py-1 hover:bg-gray-50"
+        class="rounded border border-line-1 px-2 py-1 hover:bg-surface-raised"
         title="Open the preview in a new tab"
         @click="openInTab"
       >
         ↗
       </button>
     </form>
-    <p v-if="error" class="m-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2">{{ error }}</p>
+    <p v-if="error" class="m-2 text-sm text-danger-strong bg-danger-bg border border-danger-soft rounded p-2">{{ error }}</p>
     <iframe
       v-if="ready"
       :key="frameKey"

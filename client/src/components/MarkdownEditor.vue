@@ -230,12 +230,12 @@ const fileLikePicker = computed(
 )
 
 const tbBtn =
-  'rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-100 hover:border-gray-500'
+  'rounded border border-line-1 px-2 py-1 text-xs text-fg-2 hover:bg-surface-raised hover:border-line-strong'
 </script>
 
 <template>
-  <div class="border border-gray-200 rounded">
-    <div class="flex flex-wrap items-center gap-1 border-b border-gray-200 bg-gray-50 px-2 py-1.5">
+  <div class="border border-line-2 rounded">
+    <div class="flex flex-wrap items-center gap-1 border-b border-line-2 bg-surface-alt px-2 py-1.5">
       <button type="button" :class="tbBtn" title="Bold (Ctrl+B)" @click="insertBold"><b>B</b></button>
       <button type="button" :class="tbBtn" title="Italic (Ctrl+I)" @click="insertItalic"><i>I</i></button>
       <button type="button" :class="tbBtn" title="Heading" @click="insertHeading">H</button>
@@ -245,7 +245,7 @@ const tbBtn =
       <button type="button" :class="tbBtn" title="Link" @click="insertLink">Link</button>
       <button type="button" :class="tbBtn" title="Inline code" @click="insertInlineCode">`code`</button>
       <button type="button" :class="tbBtn" title="Code block" @click="insertCodeBlock">```</button>
-      <span class="mx-1 h-4 w-px bg-gray-300"></span>
+      <span class="mx-1 h-4 w-px bg-line-1"></span>
       <button type="button" :class="tbBtn" title="Insert image directive" @click="pickerKind = 'img'">&lt;image&gt;</button>
       <button type="button" :class="tbBtn" title="Insert file directive" @click="pickerKind = 'file'">&lt;file&gt;</button>
       <button type="button" :class="tbBtn" title="Insert gallery directive" @click="openGalleryPicker">&lt;gallery&gt;</button>
@@ -256,7 +256,7 @@ const tbBtn =
         <button
           type="button"
           class="px-3 py-1 rounded"
-          :class="tab === 'edit' ? 'bg-white font-medium border border-gray-300' : 'text-gray-500 hover:text-gray-800'"
+          :class="tab === 'edit' ? 'bg-surface font-medium border border-line-1' : 'text-fg-3 hover:text-fg-1'"
           @click="tab = 'edit'"
         >
           Edit
@@ -264,7 +264,7 @@ const tbBtn =
         <button
           type="button"
           class="px-3 py-1 rounded"
-          :class="tab === 'wysiwyg' ? 'bg-white font-medium border border-gray-300' : 'text-gray-500 hover:text-gray-800'"
+          :class="tab === 'wysiwyg' ? 'bg-surface font-medium border border-line-1' : 'text-fg-3 hover:text-fg-1'"
           @click="tab = 'wysiwyg'"
         >
           WYSIWYG
@@ -272,7 +272,7 @@ const tbBtn =
         <button
           type="button"
           class="px-3 py-1 rounded"
-          :class="tab === 'preview' ? 'bg-white font-medium border border-gray-300' : 'text-gray-500 hover:text-gray-800'"
+          :class="tab === 'preview' ? 'bg-surface font-medium border border-line-1' : 'text-fg-3 hover:text-fg-1'"
           @click="tab = 'preview'"
         >
           Preview
@@ -299,8 +299,8 @@ const tbBtn =
     />
 
     <div v-if="tab === 'preview'" class="relative">
-      <div v-if="previewLoading" class="px-3 py-1 text-xs text-gray-500">Rendering…</div>
-      <p v-if="previewError" class="px-3 py-1 text-xs text-red-600">{{ previewError }}</p>
+      <div v-if="previewLoading" class="px-3 py-1 text-xs text-fg-3">Rendering…</div>
+      <p v-if="previewError" class="px-3 py-1 text-xs text-danger">{{ previewError }}</p>
       <div ref="previewRef" class="prose max-w-none p-4" v-html="previewHtml"></div>
     </div>
 
@@ -314,22 +314,22 @@ const tbBtn =
 
     <div
       v-if="pickerKind === 'gallery'"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-overlay"
       @click.self="closePicker"
     >
-      <div class="flex max-h-[80vh] w-[min(480px,92vw)] flex-col overflow-hidden rounded-lg bg-white shadow-lg">
-        <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+      <div class="flex max-h-[80vh] w-[min(480px,92vw)] flex-col overflow-hidden rounded-lg bg-surface shadow-lg">
+        <div class="flex items-center justify-between border-b border-line-2 px-4 py-3">
           <h2 class="font-medium">Pick a gallery</h2>
-          <button class="text-gray-500 hover:text-gray-900" @click="closePicker">×</button>
+          <button class="text-fg-3 hover:text-fg-1" @click="closePicker">×</button>
         </div>
         <div class="overflow-auto p-2">
-          <p v-if="galleriesLoading" class="px-2 py-2 text-sm text-gray-500">Loading…</p>
-          <p v-else-if="galleryPaths.length === 0" class="px-2 py-2 text-sm text-gray-500">No galleries.</p>
+          <p v-if="galleriesLoading" class="px-2 py-2 text-sm text-fg-3">Loading…</p>
+          <p v-else-if="galleryPaths.length === 0" class="px-2 py-2 text-sm text-fg-3">No galleries.</p>
           <ul v-else class="m-0 list-none p-0">
             <li
               v-for="p in galleryPaths"
               :key="p"
-              class="cursor-pointer rounded px-2 py-1.5 text-sm hover:bg-gray-100"
+              class="cursor-pointer rounded px-2 py-1.5 text-sm hover:bg-surface-raised"
               @click="pickGallery(p)"
             >
               {{ p }}
@@ -341,28 +341,28 @@ const tbBtn =
 
     <div
       v-if="pickerKind === 'page'"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-overlay"
       @click.self="closePicker"
     >
-      <div class="flex w-[min(560px,92vw)] flex-col overflow-visible rounded-lg bg-white shadow-lg">
-        <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+      <div class="flex w-[min(560px,92vw)] flex-col overflow-visible rounded-lg bg-surface shadow-lg">
+        <div class="flex items-center justify-between border-b border-line-2 px-4 py-3">
           <h2 class="font-medium">Pick a page</h2>
-          <button class="text-gray-500 hover:text-gray-900" @click="closePicker">×</button>
+          <button class="text-fg-3 hover:text-fg-1" @click="closePicker">×</button>
         </div>
         <div class="p-4">
           <PathPicker v-model="pickerPagePath" namespace="page" placeholder="section/page" />
         </div>
-        <div class="flex justify-end gap-2 border-t border-gray-200 px-4 py-2">
+        <div class="flex justify-end gap-2 border-t border-line-2 px-4 py-2">
           <button
             type="button"
-            class="rounded border border-gray-300 px-3 py-1.5 text-sm hover:border-gray-500"
+            class="rounded border border-line-1 px-3 py-1.5 text-sm hover:border-line-strong"
             @click="closePicker"
           >
             Cancel
           </button>
           <button
             type="button"
-            class="rounded bg-gray-800 px-3 py-1.5 text-sm text-white hover:bg-gray-700 disabled:opacity-50"
+            class="rounded button-primary px-3 py-1.5 text-sm disabled:opacity-50"
             :disabled="!pickerPagePath.trim()"
             @click="confirmPagePick"
           >

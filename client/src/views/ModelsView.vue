@@ -147,7 +147,7 @@ async function remove(id: number, label: string) {
     <div class="flex items-center justify-between">
       <h1 class="text-xl font-semibold">LLM models</h1>
       <button
-        class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 text-sm"
+        class="rounded button-primary px-3 py-1.5 text-sm"
         :disabled="assistant.providers.length === 0"
         @click="showCreate = !showCreate"
       >
@@ -155,12 +155,12 @@ async function remove(id: number, label: string) {
       </button>
     </div>
 
-    <p v-if="assistant.providers.length === 0" class="text-sm text-amber-700">
+    <p v-if="assistant.providers.length === 0" class="text-sm text-warning">
       Add a provider first under
       <router-link to="/providers" class="underline">LLM providers</router-link>.
     </p>
 
-    <div v-if="showCreate" class="bg-white rounded-lg shadow p-4 space-y-3">
+    <div v-if="showCreate" class="bg-surface rounded-lg shadow p-4 space-y-3">
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="block text-sm font-medium mb-1">Provider</label>
@@ -213,13 +213,13 @@ async function remove(id: number, label: string) {
         <input v-model="draft.is_default" type="checkbox" /> default for new chats
       </label>
       <div class="flex justify-end">
-        <button class="rounded bg-gray-800 text-white px-4 py-2 text-sm" @click="create">Save</button>
+        <button class="rounded bg-primary text-fg-inverse px-4 py-2 text-sm" @click="create">Save</button>
       </div>
     </div>
 
-    <div class="bg-white rounded-lg shadow overflow-x-auto">
+    <div class="bg-surface rounded-lg shadow overflow-x-auto">
       <table class="min-w-full text-sm">
-        <thead class="bg-gray-100 text-gray-600">
+        <thead class="bg-surface-raised text-fg-2">
           <tr>
             <th class="text-left px-4 py-2">Label</th>
             <th class="text-left px-4 py-2">Provider</th>
@@ -232,33 +232,33 @@ async function remove(id: number, label: string) {
         </thead>
         <tbody>
           <template v-for="m in assistant.models" :key="m.id">
-            <tr class="border-t border-gray-100">
+            <tr class="border-t border-line-3">
               <td class="px-4 py-2 font-medium">{{ m.label }}</td>
-              <td class="px-4 py-2 text-gray-600">{{ m.provider_label }} ({{ m.provider_kind }})</td>
+              <td class="px-4 py-2 text-fg-2">{{ m.provider_label }} ({{ m.provider_kind }})</td>
               <td class="px-4 py-2 font-mono text-xs">{{ m.model }}</td>
-              <td class="px-4 py-2 text-gray-600">{{ m.context_window ?? '—' }}</td>
+              <td class="px-4 py-2 text-fg-2">{{ m.context_window ?? '—' }}</td>
               <td class="px-4 py-2 space-x-1 text-xs">
                 <span
                   class="rounded px-1.5 py-0.5"
-                  :class="m.supports_temperature ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'"
+                  :class="m.supports_temperature ? 'bg-success-bg text-success-strong' : 'bg-surface-raised text-fg-4'"
                   title="Temperature"
                 >T</span>
                 <span
                   class="rounded px-1.5 py-0.5"
-                  :class="m.supports_reasoning_effort ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'"
+                  :class="m.supports_reasoning_effort ? 'bg-success-bg text-success-strong' : 'bg-surface-raised text-fg-4'"
                   title="Reasoning effort"
                 >R</span>
                 <span
                   class="rounded px-1.5 py-0.5"
-                  :class="m.supports_thinking ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'"
+                  :class="m.supports_thinking ? 'bg-success-bg text-success-strong' : 'bg-surface-raised text-fg-4'"
                   title="Thinking budget"
                 >Th</span>
               </td>
               <td class="px-4 py-2">
-                <span v-if="m.is_default" class="text-xs text-emerald-700 font-semibold">default</span>
+                <span v-if="m.is_default" class="text-xs text-success-strong font-semibold">default</span>
                 <button
                   v-else
-                  class="text-xs text-blue-600 hover:underline"
+                  class="text-xs text-accent hover:underline"
                   @click="makeDefault(m.id)"
                 >
                   make default
@@ -267,24 +267,24 @@ async function remove(id: number, label: string) {
               <td class="px-4 py-2 text-right space-x-3">
                 <button
                   v-if="editingId !== m.id"
-                  class="text-xs text-blue-600 hover:underline"
+                  class="text-xs text-accent hover:underline"
                   @click="startEdit(m)"
                 >
                   edit
                 </button>
                 <button
                   v-else
-                  class="text-xs text-gray-600 hover:underline"
+                  class="text-xs text-fg-2 hover:underline"
                   @click="cancelEdit"
                 >
                   cancel
                 </button>
-                <button class="text-xs text-red-500 hover:underline" @click="remove(m.id, m.label)">
+                <button class="text-xs text-danger hover:underline" @click="remove(m.id, m.label)">
                   delete
                 </button>
               </td>
             </tr>
-            <tr v-if="editingId === m.id" class="border-t border-gray-100 bg-gray-50">
+            <tr v-if="editingId === m.id" class="border-t border-line-3 bg-surface-alt">
               <td colspan="7" class="px-4 py-3">
                 <div class="space-y-3">
                   <div class="grid grid-cols-2 gap-3">
@@ -328,7 +328,7 @@ async function remove(id: number, label: string) {
                   </label>
                   <div class="flex justify-end">
                     <button
-                      class="rounded bg-gray-800 text-white px-4 py-2 text-sm"
+                      class="rounded bg-primary text-fg-inverse px-4 py-2 text-sm"
                       @click="saveEdit(m)"
                     >
                       Save changes
@@ -339,7 +339,7 @@ async function remove(id: number, label: string) {
             </tr>
           </template>
           <tr v-if="assistant.models.length === 0">
-            <td colspan="7" class="px-4 py-6 text-center text-gray-400">
+            <td colspan="7" class="px-4 py-6 text-center text-fg-4">
               No models yet.
             </td>
           </tr>

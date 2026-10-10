@@ -64,15 +64,15 @@ async function remove(item: MenuItem) {
     <div class="flex items-center justify-between">
       <h1 class="text-xl font-semibold">Menu</h1>
       <button
-        class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 text-sm"
+        class="rounded button-primary px-3 py-1.5 text-sm"
         @click="startNew"
       >
         New entry
       </button>
     </div>
-    <div class="bg-white rounded-lg shadow overflow-x-auto">
+    <div class="bg-surface rounded-lg shadow overflow-x-auto">
       <table class="min-w-full text-sm">
-        <thead class="bg-gray-100 text-gray-600">
+        <thead class="bg-surface-raised text-fg-2">
           <tr>
             <th class="text-left px-4 py-2">#</th>
             <th class="text-left px-4 py-2">Title</th>
@@ -81,42 +81,42 @@ async function remove(item: MenuItem) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="m in menu.items" :key="m.id" class="border-t border-gray-100">
-            <td class="px-4 py-2 text-gray-500">{{ m.order_index }}</td>
+          <tr v-for="m in menu.items" :key="m.id" class="border-t border-line-3">
+            <td class="px-4 py-2 text-fg-3">{{ m.order_index }}</td>
             <td class="px-4 py-2">
               {{ m.title }}
-              <span v-if="m.private" class="ml-1 text-xs bg-gray-200 px-1 rounded">private</span>
+              <span v-if="m.private" class="ml-1 text-xs bg-surface-muted px-1 rounded">private</span>
             </td>
-            <td class="px-4 py-2 text-gray-600">{{ m.path }}</td>
+            <td class="px-4 py-2 text-fg-2">{{ m.path }}</td>
             <td class="px-4 py-2 text-right space-x-3">
-              <button class="text-blue-600 hover:underline" @click="startEdit(m)">Edit</button>
-              <button class="text-red-600 hover:underline" @click="remove(m)">Delete</button>
+              <button class="text-accent hover:underline" @click="startEdit(m)">Edit</button>
+              <button class="text-danger hover:underline" @click="remove(m)">Delete</button>
             </td>
           </tr>
           <tr v-if="menu.items.length === 0">
-            <td colspan="4" class="px-4 py-6 text-center text-gray-400">No menu entries.</td>
+            <td colspan="4" class="px-4 py-6 text-center text-fg-4">No menu entries.</td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <div v-if="editing !== null" class="bg-white shadow rounded p-4 space-y-3 max-w-2xl">
+    <div v-if="editing !== null" class="bg-surface shadow rounded p-4 space-y-3 max-w-2xl">
       <h2 class="font-medium">{{ editing === -1 ? 'New entry' : 'Edit entry' }}</h2>
       <div class="grid grid-cols-2 gap-3">
         <label class="block">
-          <span class="text-sm text-gray-600">Title</span>
-          <input v-model="draft.title" class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5" />
+          <span class="text-sm text-fg-2">Title</span>
+          <input v-model="draft.title" class="mt-1 w-full rounded border border-line-1 px-2 py-1.5" />
         </label>
         <label class="block">
-          <span class="text-sm text-gray-600">Path</span>
+          <span class="text-sm text-fg-2">Path</span>
           <PathPicker v-model="draft.path" namespace="all" class="mt-1" />
         </label>
         <label class="block">
-          <span class="text-sm text-gray-600">Order index</span>
+          <span class="text-sm text-fg-2">Order index</span>
           <input
             v-model.number="draft.order_index"
             type="number"
-            class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5"
+            class="mt-1 w-full rounded border border-line-1 px-2 py-1.5"
           />
         </label>
         <label class="inline-flex items-center gap-2 mt-6 text-sm">
@@ -125,13 +125,13 @@ async function remove(item: MenuItem) {
         </label>
       </div>
       <label class="block">
-        <span class="text-sm text-gray-600">Markdown</span>
+        <span class="text-sm text-fg-2">Markdown</span>
         <MarkdownEditor v-model="draft.markdown" :rows="6" class="mt-1" />
       </label>
       <div class="space-x-2 text-sm">
-        <button class="text-gray-600 hover:underline" @click="editing = null">Cancel</button>
+        <button class="text-fg-2 hover:underline" @click="editing = null">Cancel</button>
         <button
-          class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5"
+          class="rounded button-primary px-3 py-1.5"
           @click="save"
         >
           Save

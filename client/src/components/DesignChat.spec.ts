@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
+import { defineComponent, h } from 'vue'
 import DesignChat from './DesignChat.vue'
 import { useAssistantStore } from '../stores/assistant'
+import { useDesignStore } from '../stores/design'
 import type { AssistantSession, AssistantSessionDetail, LlmModel } from '../types'
 
 function session(id: number, agent_profile: string, parent_session_id: number | null = null): AssistantSession {
@@ -29,7 +31,7 @@ function detail(s: AssistantSession): AssistantSessionDetail {
   return { ...s, messages: [] } as unknown as AssistantSessionDetail
 }
 
-const stubs = { AssistantChat: true, AssistantSessionToolbar: true }
+const stubs = { ChatPanel: true }
 
 function setup(sessions: AssistantSession[]) {
   const assistant = useAssistantStore()
@@ -81,5 +83,31 @@ describe('DesignChat', () => {
     await flushPromises()
     expect(create).toHaveBeenCalledWith({ title: 'Design', agent_profile: 'designer' })
     expect(loadSession).toHaveBeenLastCalledWith(9)
+  })
+
+  it('"Attach asset…" uploads into the draft and notes the path in the composer', async () => {
+    setup([session(3, 'designer')])
+    const design = useDesignStore()
+    const save = vi.spyOn(design, 'save').mockResolvedValue()
+    const insert = vi.fn()
+    // Renders the `actions` slot (where the attach control lives) and
+    // exposes `insert` like the real panel.
+    const ChatPanel = defineComponent({
+      setup(_, { expose, slots }) {
+        expose({ insert })
+        return () => h('div', slots.actions?.())
+      },
+    })
+    const wrapper = mount(DesignChat, { global: { stubs: { ChatPanel } } })
+    await flushPromises()
+
+    const input = wrapper.find('input[type="file"]')
+    const file = new File(['x'], 'logo.png', { type: 'image/png' })
+    Object.defineProperty(input.element, 'files', { value: [file] })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(save).toHaveBeenCalledWith('assets/img/logo.png', file)
+    expect(insert).toHaveBeenCalledWith('I uploaded assets/img/logo.png to the draft.')
   })
 })

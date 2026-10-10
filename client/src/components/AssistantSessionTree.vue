@@ -64,20 +64,20 @@ function subline(session: AssistantSession, childCount: number): string {
       :aria-level="node.depth + 1"
       :aria-expanded="node.children.length > 0 ? expanded.has(node.session.id) : undefined"
       :aria-selected="node.session.id === currentId"
-      class="flex items-stretch border-b border-gray-100"
-      :class="node.session.id === currentId ? 'bg-gray-100' : 'hover:bg-gray-50'"
+      class="flex items-stretch border-b border-line-3"
+      :class="node.session.id === currentId ? 'bg-surface-raised' : 'hover:bg-surface-alt'"
     >
       <!-- One guide rule per nesting step: cheap depth cue that stays legible
            when a sub-agent spawns its own sub-agent. -->
       <span
         v-for="level in node.depth"
         :key="level"
-        class="w-3 shrink-0 border-r border-gray-100"
+        class="w-3 shrink-0 border-r border-line-3"
       ></span>
       <button
         v-if="node.children.length > 0"
         type="button"
-        class="w-5 shrink-0 text-xs text-gray-400 hover:text-gray-700"
+        class="w-5 shrink-0 text-xs text-fg-4 hover:text-fg-1"
         :aria-label="
           (expanded.has(node.session.id) ? 'Collapse ' : 'Expand ') + node.session.title
         "
@@ -99,19 +99,19 @@ function subline(session: AssistantSession, childCount: number): string {
         @keydown.left="setExpanded(node.session.id, false)"
       >
         <div class="text-sm truncate" :class="isRoot(node.session) ? 'font-medium' : ''">
-          <span v-if="!isRoot(node.session)" class="text-gray-400">{{
+          <span v-if="!isRoot(node.session)" class="text-fg-4">{{
             profileIcon(node.session.agent_profile)
           }}</span>
           {{ node.session.title }}
         </div>
-        <div class="text-xs text-gray-500 truncate">
+        <div class="text-xs text-fg-3 truncate">
           {{ subline(node.session, node.children.length) }}
         </div>
       </button>
       <button
         v-if="isRoot(node.session)"
         type="button"
-        class="px-2 text-xs text-gray-400 hover:text-red-500 shrink-0"
+        class="px-2 text-xs text-fg-4 hover:text-danger shrink-0"
         :aria-label="`Delete ${node.session.title}`"
         title="Delete"
         @click="emit('delete', node.session.id)"
@@ -120,6 +120,6 @@ function subline(session: AssistantSession, childCount: number): string {
       </button>
       <span v-else class="w-6 shrink-0"></span>
     </div>
-    <div v-if="rows.length === 0" class="p-4 text-sm text-gray-400">No chats yet.</div>
+    <div v-if="rows.length === 0" class="p-4 text-sm text-fg-4">No chats yet.</div>
   </div>
 </template>

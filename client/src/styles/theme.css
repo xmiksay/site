@@ -1,0 +1,74 @@
+/* Semantic design tokens.
+ *
+ * Named by role, not by shade — so a value can change (dark mode, rebrand)
+ * without renaming anything. Two roles get two tokens even when they would
+ * plausibly diverge under theming.
+ *
+ * Values reference Tailwind's default palette (--color-gray-*, --color-red-*,
+ * --color-amber-*, --color-emerald-*, --color-blue-*, --color-white/-black)
+ * directly via var() wherever they match a stock shade exactly. A few
+ * dark-mode surfaces use a hand-picked low-chroma scale with no Tailwind
+ * equivalent — those stay as literal oklch(), noted inline as "custom". */
+@theme {
+  /* --- surfaces --- */
+  /* Dark-mode surfaces use a hand-picked low-chroma scale (H≈258, C≈0.013-0.017),
+   * not raw Tailwind gray-800/900/950 — that palette's chroma (~0.03) reads as
+   * near-neutral at high lightness but visibly blue at low lightness. Steps are
+   * kept tight (page vs. card ~5pt gap) so the body doesn't feel like a hard cut. */
+  --color-surface: light-dark(var(--color-white), oklch(24% 0.013 258)); /* card, wysiwyg body; dark: custom */
+  --color-surface-alt: light-dark(var(--color-gray-50), oklch(19% 0.013 258)); /* page bg; dark: custom */
+  --color-surface-raised: light-dark(var(--color-gray-100), oklch(30% 0.014 258)); /* dark: custom */
+  --color-surface-muted: light-dark(var(--color-gray-200), oklch(36% 0.015 258)); /* dark: custom */
+  --color-surface-dark: light-dark(var(--color-gray-800), oklch(15% 0.016 258)); /* sidebar; darkest anchor panel in both themes; dark: custom */
+  --color-surface-dark-hover: color-mix(in oklch, var(--color-surface-dark) 85%, var(--color-white) 15%);
+  --color-overlay: oklch(0% 0 0 / 0.4); /* black/40 — modal backdrop; a dimming scrim, not a themed surface */
+  --color-overlay-subtle: light-dark(oklch(0% 0 0 / 0.06), oklch(100% 0 0 / 0.08)); /* darkens in light mode, lightens in dark mode — same relative wash over whatever surface it sits on */
+
+  /* --- text --- */
+  --color-fg-1: light-dark(var(--color-gray-900), var(--color-gray-100));
+  --color-fg-2: light-dark(var(--color-gray-600), var(--color-gray-400)); /* default body text */
+  --color-fg-3: light-dark(var(--color-gray-500), var(--color-gray-500)); /* muted */
+  --color-fg-4: light-dark(var(--color-gray-400), var(--color-gray-600)); /* placeholder, disabled */
+  --color-fg-on-dark: var(--color-gray-100); /* text on the sidebar panel, which is dark in both themes */
+  --color-fg-inverse: var(--color-white); /* text on a saturated fill (button/badge), independent of theme */
+
+  /* --- lines ---
+   * Dark values are calibrated against the surface scale above (15-36%),
+   * not against raw Tailwind gray shades — a line must stay lighter than
+   * whatever surface it sits on, or it reads as a cut instead of a divider. */
+  --color-line-1: light-dark(var(--color-gray-300), oklch(44% 0.017 258)); /* default border; dark: custom */
+  --color-line-2: light-dark(var(--color-gray-200), oklch(38% 0.016 258)); /* dark: custom */
+  --color-line-3: light-dark(var(--color-gray-100), oklch(33% 0.015 258)); /* barely-there dividers, still above surface-raised (30%); dark: custom */
+  --color-line-strong: light-dark(var(--color-gray-500), var(--color-gray-500)); /* border on hover */
+  --color-line-on-dark: var(--color-gray-700); /* border inside the sidebar panel, dark in both themes */
+  --color-focus: light-dark(var(--color-gray-500), var(--color-gray-400));
+
+  /* --- primary action (buttons) --- */
+  --color-primary: var(--color-gray-600);
+  
+  /* --- accent (links, selected state) --- */
+  --color-accent: light-dark(var(--color-blue-600), var(--color-blue-500)); /* lighter for vibrance against a dark bg */
+  --color-accent-strong: light-dark(var(--color-blue-800), var(--color-blue-300)); /* text on an accent wash */
+  --color-accent-soft: light-dark(var(--color-blue-200), var(--color-blue-800)); /* info banner border */
+  --color-accent-bg: light-dark(var(--color-blue-50), oklch(22% 0.045 260)); /* info banner, selected row; dark: custom desaturated blue wash */
+
+  /* --- danger --- */
+  --color-danger: light-dark(var(--color-red-600), var(--color-red-500));
+  --color-danger-strong: light-dark(var(--color-red-700), var(--color-red-300)); /* text on a danger fill */
+  --color-danger-soft: light-dark(var(--color-red-300), var(--color-red-800)); /* banner border */
+  --color-danger-bg: light-dark(var(--color-red-50), oklch(22% 0.05 27.325)); /* dark: custom desaturated red wash */
+  --color-danger-on-dark: var(--color-red-400); /* danger text on the sidebar panel, dark in both themes */
+
+  /* --- success --- */
+  --color-success: light-dark(var(--color-emerald-600), var(--color-emerald-500));
+  --color-success-strong: light-dark(var(--color-emerald-700), var(--color-emerald-300));
+  --color-success-soft: light-dark(var(--color-emerald-300), var(--color-emerald-800));
+  --color-success-bg: light-dark(var(--color-emerald-50), oklch(22% 0.045 163)); /* dark: custom desaturated emerald wash */
+
+  /* --- warning --- */
+  --color-warning: light-dark(var(--color-amber-700), var(--color-amber-400));
+  --color-warning-soft: light-dark(var(--color-amber-300), var(--color-amber-800));
+  --color-warning-bg: light-dark(var(--color-amber-50), oklch(22% 0.045 95)); /* dark: custom desaturated amber wash */
+}
+
+@custom-variant dark (&:where([data-scheme='dark'], [data-scheme='dark'] *));

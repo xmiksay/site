@@ -114,48 +114,48 @@ function splitError(line: string): [string, string] {
 <template>
   <div class="space-y-2">
     <div class="flex flex-wrap items-center gap-2 text-sm">
-      <span v-if="changeCount" class="text-xs rounded px-2 py-0.5 bg-amber-100 text-amber-800">Draft — not live</span>
-      <span v-else class="text-xs rounded px-2 py-0.5 bg-gray-200 text-gray-700">Draft matches live</span>
-      <span class="text-gray-600" data-test="change-count">{{ changeCount }} unpublished change(s)</span>
+      <span v-if="changeCount" class="text-xs rounded px-2 py-0.5 bg-warning-bg text-warning">Draft — not live</span>
+      <span v-else class="text-xs rounded px-2 py-0.5 bg-surface-muted text-fg-2">Draft matches live</span>
+      <span class="text-fg-2" data-test="change-count">{{ changeCount }} unpublished change(s)</span>
       <button
         :disabled="busy"
-        class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 disabled:opacity-50"
+        class="rounded button-primary px-3 py-1.5 disabled:opacity-50"
         @click="publish"
       >
         {{ busy ? 'Pracuji…' : 'Publikovat' }}
       </button>
       <button
         :disabled="busy || changeCount === 0"
-        class="rounded border border-gray-300 px-3 py-1.5 hover:bg-gray-50 disabled:opacity-50"
+        class="rounded border border-line-1 px-3 py-1.5 hover:bg-surface-raised disabled:opacity-50"
         @click="discard"
       >
         Zahodit draft
       </button>
       <button
-        class="rounded border border-gray-300 px-3 py-1.5 hover:bg-gray-50"
-        :class="{ 'bg-gray-100': showHistory }"
+        class="rounded border border-line-1 px-3 py-1.5 hover:bg-surface-raised"
+        :class="{ 'bg-surface-raised': showHistory }"
         @click="showHistory = !showHistory"
       >
         Historie
       </button>
       <button
         :disabled="busy"
-        class="ml-auto rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-50"
+        class="ml-auto rounded border border-line-1 px-2 py-1 text-xs hover:bg-surface-raised disabled:opacity-50"
         title="Reload design/ from storage after editing it directly in the bucket"
         @click="reload"
       >
         Reload
       </button>
-      <span v-if="lastReload && !lastReload.ok" class="text-xs text-red-600">
+      <span v-if="lastReload && !lastReload.ok" class="text-xs text-danger">
         Last reload failed — {{ lastReload.error }}
       </span>
     </div>
 
-    <p v-if="notice" class="text-sm text-green-800 bg-green-50 border border-green-200 rounded p-2">{{ notice }}</p>
-    <p v-if="error" class="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2 whitespace-pre-wrap">
+    <p v-if="notice" class="text-sm text-success-strong bg-success-bg border border-success-soft rounded p-2">{{ notice }}</p>
+    <p v-if="error" class="text-sm text-danger-strong bg-danger-bg border border-danger-soft rounded p-2 whitespace-pre-wrap">
       {{ error }}
     </p>
-    <div v-if="invalid.length" class="text-sm text-red-800 bg-red-50 border border-red-200 rounded p-2">
+    <div v-if="invalid.length" class="text-sm text-danger-strong bg-danger-bg border border-danger-soft rounded p-2">
       <p class="font-semibold">Not published — the design failed the render check:</p>
       <ul class="mt-1 space-y-0.5 font-mono text-xs">
         <li v-for="(line, i) in invalid" :key="i">

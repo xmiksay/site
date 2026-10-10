@@ -49,26 +49,26 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnload))
   <div class="flex flex-col gap-3 h-[calc(100vh-8rem)] md:h-[calc(100vh-3rem)]">
     <div class="flex flex-wrap items-center gap-3">
       <h1 class="text-xl font-semibold">Design studio</h1>
-      <span v-if="design.state" class="text-xs rounded px-2 py-0.5 bg-gray-200 text-gray-700">
+      <span v-if="design.state" class="text-xs rounded px-2 py-0.5 bg-surface-muted text-fg-2">
         storage: {{ design.state.storage }}
       </span>
     </div>
 
     <DesignStudioToolbar v-if="design.state" :dirty="dirty" @reset="filesPanel?.reset()" />
 
-    <p v-if="error" class="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-2 whitespace-pre-wrap">
+    <p v-if="error" class="text-sm text-danger-strong bg-danger-bg border border-danger-soft rounded p-2 whitespace-pre-wrap">
       {{ error }}
     </p>
     <p
       v-if="design.state?.local_dir"
-      class="text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded p-2"
+      class="text-sm text-accent-strong bg-accent-bg border border-accent-soft rounded p-2"
     >
       DESIGN_DIR is set: the live site serves files from that local folder first. The preview shows the draft
       regardless.
     </p>
 
     <template v-if="design.state">
-      <nav class="xl:hidden flex gap-1 border-b border-gray-300" role="tablist">
+      <nav class="xl:hidden flex gap-1 border-b border-line-1" role="tablist">
         <button
           v-for="t in tabs"
           :key="t.id"
@@ -76,7 +76,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnload))
           role="tab"
           :aria-selected="tab === t.id"
           class="px-3 py-1.5 text-sm -mb-px border-b-2"
-          :class="tab === t.id ? 'border-gray-800 font-semibold' : 'border-transparent text-gray-500'"
+          :class="tab === t.id ? 'border-fg-1 font-semibold' : 'border-transparent text-fg-3'"
           @click="tab = t.id"
         >
           {{ t.label }}
@@ -85,13 +85,13 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', warnUnload))
       <div
         class="flex-1 min-h-0 grid gap-3 xl:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)_minmax(0,1fr)]"
       >
-        <section class="bg-white rounded-lg shadow flex-col min-h-0" :class="panelClass('chat')">
+        <section class="bg-surface rounded-lg shadow flex-col min-h-0" :class="panelClass('chat')">
           <DesignChat />
         </section>
         <section class="flex-col min-h-0" :class="panelClass('files')">
           <DesignFilesPanel ref="filesPanel" @dirty="dirty = $event" />
         </section>
-        <section class="bg-white rounded-lg shadow flex-col min-h-0 overflow-hidden" :class="panelClass('preview')">
+        <section class="bg-surface rounded-lg shadow flex-col min-h-0 overflow-hidden" :class="panelClass('preview')">
           <DesignPreview />
         </section>
       </div>

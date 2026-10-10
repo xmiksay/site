@@ -53,53 +53,53 @@ async function remove(id: number, username: string) {
   <div class="space-y-4">
     <h1 class="text-xl font-semibold">Users</h1>
 
-    <form class="bg-white shadow rounded p-3 flex gap-2 items-end" @submit.prevent="add">
+    <form class="bg-surface shadow rounded p-3 flex gap-2 items-end" @submit.prevent="add">
       <label class="flex-1">
-        <span class="text-xs text-gray-500">Username</span>
-        <input v-model="newUsername" class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5" />
+        <span class="text-xs text-fg-3">Username</span>
+        <input v-model="newUsername" class="mt-1 w-full rounded border border-line-1 px-2 py-1.5" />
       </label>
       <label class="flex-1">
-        <span class="text-xs text-gray-500">Password</span>
+        <span class="text-xs text-fg-3">Password</span>
         <input
           v-model="newPassword"
           type="password"
           autocomplete="new-password"
-          class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5"
+          class="mt-1 w-full rounded border border-line-1 px-2 py-1.5"
         />
       </label>
-      <button class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 text-sm">
+      <button class="rounded button-primary px-3 py-1.5 text-sm">
         Create
       </button>
     </form>
 
-    <div v-if="error" class="bg-red-50 border border-red-200 text-red-700 rounded p-2 text-sm">
+    <div v-if="error" class="bg-danger-bg border border-danger-soft text-danger-strong rounded p-2 text-sm">
       {{ error }}
     </div>
 
-    <div class="bg-white rounded-lg shadow overflow-x-auto">
+    <div class="bg-surface rounded-lg shadow overflow-x-auto">
       <table class="min-w-full text-sm">
-        <thead class="bg-gray-100 text-gray-600">
+        <thead class="bg-surface-raised text-fg-2">
           <tr>
             <th class="text-left px-4 py-2">Username</th>
             <th class="px-4 py-2"></th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="u in users.items" :key="u.id" class="border-t border-gray-100">
+          <tr v-for="u in users.items" :key="u.id" class="border-t border-line-3">
             <td class="px-4 py-2">
               {{ u.username }}
-              <span v-if="u.is_self" class="ml-2 text-xs text-gray-400">(you)</span>
+              <span v-if="u.is_self" class="ml-2 text-xs text-fg-4">(you)</span>
             </td>
             <td class="px-4 py-2 text-right space-x-3">
               <button
-                class="text-blue-600 hover:underline"
+                class="text-accent hover:underline"
                 @click="changePassword(u.id, u.username)"
               >
                 Change password
               </button>
               <button
                 v-if="!u.is_self"
-                class="text-red-600 hover:underline"
+                class="text-danger hover:underline"
                 @click="remove(u.id, u.username)"
               >
                 Delete
@@ -107,7 +107,7 @@ async function remove(id: number, username: string) {
             </td>
           </tr>
           <tr v-if="users.items.length === 0">
-            <td colspan="2" class="px-4 py-6 text-center text-gray-400">No users.</td>
+            <td colspan="2" class="px-4 py-6 text-center text-fg-4">No users.</td>
           </tr>
         </tbody>
       </table>

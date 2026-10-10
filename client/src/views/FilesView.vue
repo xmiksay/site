@@ -23,9 +23,9 @@ async function remove(id: number, title: string) {
       <div
         v-for="f in files.items"
         :key="f.id"
-        class="bg-white rounded shadow overflow-hidden"
+        class="bg-surface rounded shadow overflow-hidden"
       >
-        <div class="aspect-square bg-gray-100 flex items-center justify-center">
+        <div class="aspect-square bg-surface-raised flex items-center justify-center">
           <img
             v-if="f.has_thumbnail"
             :src="`/files/${f.hash}/nahled`"
@@ -33,24 +33,24 @@ async function remove(id: number, title: string) {
             class="object-cover w-full h-full"
             loading="lazy"
           />
-          <div v-else class="text-xs text-gray-400 p-2 text-center break-all">
+          <div v-else class="text-xs text-fg-4 p-2 text-center break-all">
             {{ f.mimetype }}
           </div>
         </div>
         <div class="p-2 text-sm">
           <div class="truncate font-medium" :title="f.title">{{ f.title }}</div>
-          <div class="text-xs text-gray-500 truncate">{{ formatBytes(f.size_bytes) }}</div>
+          <div class="text-xs text-fg-3 truncate">{{ formatBytes(f.size_bytes) }}</div>
           <div class="mt-2 flex justify-between text-xs">
-            <router-link :to="`/files/${f.id}/edit`" class="text-blue-600 hover:underline">
+            <router-link :to="`/files/${f.id}/edit`" class="text-accent hover:underline">
               Edit
             </router-link>
-            <button class="text-red-600 hover:underline" @click="remove(f.id, f.title)">
+            <button class="text-danger hover:underline" @click="remove(f.id, f.title)">
               Delete
             </button>
           </div>
         </div>
       </div>
-      <p v-if="files.items.length === 0" class="text-gray-400 col-span-full">No files yet.</p>
+      <p v-if="files.items.length === 0" class="text-fg-4 col-span-full">No files yet.</p>
     </div>
   </div>
 </template>

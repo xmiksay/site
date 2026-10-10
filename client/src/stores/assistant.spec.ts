@@ -210,4 +210,23 @@ describe('assistant store — session summaries', () => {
     expect(store.sending).toBe(false)
     expect(store.current?.id).toBe(1)
   })
+
+  it('updateTitle renames the session it started on, even after a switch', async () => {
+    const store = useAssistantStore()
+    const first = { id: 1, title: 'old', messages: [] } as any
+    store.current = first
+    let finish!: (d: unknown) => void
+    apiMock.mockReturnValueOnce(new Promise((r) => (finish = r)) as never)
+    const rename = store.updateTitle('new')
+    store.current = { id: 2, title: 'other', messages: [] } as any
+
+    finish({ id: 1, title: 'new' })
+    await rename
+    expect(apiMock).toHaveBeenCalledWith('/api/assistant/sessions/1', {
+      method: 'PATCH',
+      body: JSON.stringify({ title: 'new' }),
+    })
+    expect(first.title).toBe('new')
+    expect(store.current?.title).toBe('other')
+  })
 })

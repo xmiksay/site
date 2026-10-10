@@ -44,14 +44,14 @@ async function remove(id: number, name: string) {
     <div class="flex items-center justify-between">
       <h1 class="text-xl font-semibold">Tool permissions</h1>
       <button
-        class="rounded bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 text-sm"
+        class="rounded button-primary px-3 py-1.5 text-sm"
         @click="showCreate = !showCreate"
       >
         {{ showCreate ? 'Cancel' : 'Add rule' }}
       </button>
     </div>
 
-    <p class="text-sm text-gray-600">
+    <p class="text-sm text-fg-2">
       The assistant runs every tool call against these rules in priority order (lower runs first).
       Default for unmatched calls is <code>prompt</code> — you'll see approve / reject buttons in
       the chat. A rule name is a literal tool name (e.g. <code>page_edit</code>), the catch-all
@@ -63,7 +63,7 @@ async function remove(id: number, name: string) {
       exposes one yet). A capability key accepts scoping too, e.g. <code>write(obsidian/*)</code>.
     </p>
 
-    <div v-if="showCreate" class="bg-white rounded-lg shadow p-4 space-y-3">
+    <div v-if="showCreate" class="bg-surface rounded-lg shadow p-4 space-y-3">
       <div class="grid grid-cols-3 gap-3">
         <div class="col-span-2">
           <label class="block text-sm font-medium mb-1">Tool name</label>
@@ -91,13 +91,13 @@ async function remove(id: number, name: string) {
         />
       </div>
       <div class="flex justify-end">
-        <button class="rounded bg-gray-800 text-white px-4 py-2 text-sm" @click="create">Save</button>
+        <button class="rounded bg-primary text-fg-inverse px-4 py-2 text-sm" @click="create">Save</button>
       </div>
     </div>
 
-    <div class="bg-white rounded-lg shadow overflow-x-auto">
+    <div class="bg-surface rounded-lg shadow overflow-x-auto">
       <table class="min-w-full text-sm">
-        <thead class="bg-gray-100 text-gray-600">
+        <thead class="bg-surface-raised text-fg-2">
           <tr>
             <th class="text-left px-4 py-2">Priority</th>
             <th class="text-left px-4 py-2">Tool name</th>
@@ -106,7 +106,7 @@ async function remove(id: number, name: string) {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in assistant.permissions" :key="r.id" class="border-t border-gray-100">
+          <tr v-for="r in assistant.permissions" :key="r.id" class="border-t border-line-3">
             <td class="px-4 py-2">
               <input
                 type="number"
@@ -128,13 +128,13 @@ async function remove(id: number, name: string) {
               </select>
             </td>
             <td class="px-4 py-2 text-right">
-              <button class="text-xs text-red-500 hover:underline" @click="remove(r.id, r.name)">
+              <button class="text-xs text-danger hover:underline" @click="remove(r.id, r.name)">
                 delete
               </button>
             </td>
           </tr>
           <tr v-if="assistant.permissions.length === 0">
-            <td colspan="4" class="px-4 py-6 text-center text-gray-400">
+            <td colspan="4" class="px-4 py-6 text-center text-fg-4">
               No rules — every tool call requires explicit approval.
             </td>
           </tr>

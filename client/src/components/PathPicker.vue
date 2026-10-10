@@ -178,7 +178,7 @@ function onBrowseSelectLeaf(v: string) {
         ref="inputEl"
         v-model="value"
         type="text"
-        class="flex-1 rounded border border-gray-300 px-2 py-1.5"
+        class="flex-1 rounded border border-line-1 px-2 py-1.5"
         :placeholder="placeholder"
         :readonly="readonly"
         :id="id"
@@ -192,7 +192,7 @@ function onBrowseSelectLeaf(v: string) {
       <button
         v-if="!readonly"
         type="button"
-        class="rounded border border-gray-300 px-3 py-1.5 text-sm hover:border-gray-500"
+        class="rounded border border-line-1 px-3 py-1.5 text-sm hover:border-line-strong"
         title="Browse existing folders"
         @click="openBrowse"
       >
@@ -202,52 +202,52 @@ function onBrowseSelectLeaf(v: string) {
 
     <ul
       v-if="open && !readonly && (suggestions.length > 0 || noMatchHint)"
-      class="absolute left-0 right-0 z-20 mt-1 max-h-72 overflow-y-auto rounded border border-gray-300 bg-white py-1 shadow-lg"
+      class="absolute left-0 right-0 z-20 mt-1 max-h-72 overflow-y-auto rounded border border-line-1 bg-surface py-1 shadow-lg"
     >
       <li
         v-for="(s, i) in suggestions"
         :key="(s.isFolder ? 'f:' : 'l:') + s.name"
         class="grid cursor-pointer grid-cols-[1.2rem_1fr_auto] items-center gap-2 px-2 py-1 text-sm"
-        :class="{ 'bg-gray-100': i === cursor }"
+        :class="{ 'bg-surface-raised': i === cursor }"
         @mousedown.prevent="applySuggestion(i)"
         @mouseenter="cursor = i"
       >
-        <span class="text-center text-gray-400">{{ s.isFolder ? '▸' : '·' }}</span>
+        <span class="text-center text-fg-4">{{ s.isFolder ? '▸' : '·' }}</span>
         <span class="truncate">
-          {{ s.name }}<span v-if="s.isFolder" class="text-gray-400">/</span>
+          {{ s.name }}<span v-if="s.isFolder" class="text-fg-4">/</span>
         </span>
-        <span class="flex items-center gap-1 whitespace-nowrap text-xs text-gray-500">
+        <span class="flex items-center gap-1 whitespace-nowrap text-xs text-fg-3">
           <template v-if="s.isFolder">
             <span
               v-if="s.folder!.page_count"
-              class="rounded-full border border-gray-300 px-1.5 text-[0.65rem] uppercase"
+              class="rounded-full border border-line-1 px-1.5 text-[0.65rem] uppercase"
             >
               p {{ s.folder!.page_count }}
             </span>
             <span
               v-if="s.folder!.gallery_count"
-              class="rounded-full border border-gray-300 px-1.5 text-[0.65rem] uppercase"
+              class="rounded-full border border-line-1 px-1.5 text-[0.65rem] uppercase"
             >
               g {{ s.folder!.gallery_count }}
             </span>
             <span
               v-if="s.folder!.file_count"
-              class="rounded-full border border-gray-300 px-1.5 text-[0.65rem] uppercase"
+              class="rounded-full border border-line-1 px-1.5 text-[0.65rem] uppercase"
             >
               f {{ s.folder!.file_count }}
             </span>
           </template>
           <template v-else>
-            <span class="rounded-full border border-gray-300 px-1.5 text-[0.65rem] uppercase">
+            <span class="rounded-full border border-line-1 px-1.5 text-[0.65rem] uppercase">
               {{ s.leaf!.namespace }}
             </span>
-            <span v-if="s.leaf!.title" class="text-gray-400">{{ s.leaf!.title }}</span>
+            <span v-if="s.leaf!.title" class="text-fg-4">{{ s.leaf!.title }}</span>
           </template>
         </span>
       </li>
       <li
         v-if="suggestions.length === 0 && noMatchHint"
-        class="px-2 py-1 text-sm italic text-gray-500"
+        class="px-2 py-1 text-sm italic text-fg-3"
       >
         {{ noMatchHint }}
       </li>
