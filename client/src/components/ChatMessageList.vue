@@ -21,12 +21,15 @@ function scrollToBottom() {
 
 // Opening a sub-agent's card can fail (e.g. the child was deleted); show it
 // here rather than leave an unhandled rejection.
+// A slow failure that lands after a chat switch belongs to the chat it was
+// opened from, so it is dropped rather than shown in the new one.
 async function selectSession(id: number) {
+  const from = assistant.current?.id
   error.value = ''
   try {
     await assistant.loadSession(id)
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    if (assistant.current?.id === from) error.value = e instanceof Error ? e.message : String(e)
   }
 }
 
@@ -73,49 +76,54 @@ watch(
 </script>
 
 <template>
-  <div ref="messageBox" class="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
-    <p v-if="error" class="text-sm text-danger-strong bg-danger-bg border border-danger-soft rounded p-2">
+  <div class="flex-1 flex flex-col min-h-0">
+    <p
+      v-if="error"
+      class="shrink-0 m-4 mb-0 text-sm text-danger-strong bg-danger-bg border border-danger-soft rounded p-2"
+    >
       {{ error }}
     </p>
-    <AssistantMessageContent
-      v-for="m in messageList"
-      :key="m.id"
-      :role="m.role"
-      :content="m.content"
-      :message-id="m.id"
-      @decided="scrollToBottom"
-      @select-session="selectSession"
-    />
-    <div v-if="liveTurn" class="space-y-1">
-      <div
-        v-if="liveTurn.retrying"
-        class="inline-flex items-center gap-1 rounded-full bg-warning-bg text-warning text-xs px-2 py-0.5"
-      >
-        model stalled — retrying…
+    <div ref="messageBox" class="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+      <AssistantMessageContent
+        v-for="m in messageList"
+        :key="m.id"
+        :role="m.role"
+        :content="m.content"
+        :message-id="m.id"
+        @decided="scrollToBottom"
+        @select-session="selectSession"
+      />
+      <div v-if="liveTurn" class="space-y-1">
+        <div
+          v-if="liveTurn.retrying"
+          class="inline-flex items-center gap-1 rounded-full bg-warning-bg text-warning text-xs px-2 py-0.5"
+        >
+          model stalled — retrying…
+        </div>
+        <div
+          v-if="liveTurn.reasoning"
+          class="max-w-2xl rounded-lg px-3 py-2 bg-surface-alt text-fg-3 text-xs italic whitespace-pre-wrap"
+        >
+          {{ liveTurn.reasoning }}
+        </div>
+        <div
+          v-if="liveTurn.text"
+          class="assistant-markdown max-w-2xl rounded-lg px-3 py-2 bg-surface-raised text-fg-1"
+          v-html="renderMarkdown(liveTurn.text)"
+        ></div>
+        <LiveToolCallList
+          :tool-calls="liveTurn.toolCalls"
+          :session-id="liveTurn.sessionId"
+          @decided="scrollToBottom"
+        />
       </div>
-      <div
-        v-if="liveTurn.reasoning"
-        class="max-w-2xl rounded-lg px-3 py-2 bg-surface-alt text-fg-3 text-xs italic whitespace-pre-wrap"
-      >
-        {{ liveTurn.reasoning }}
-      </div>
-      <div
-        v-if="liveTurn.text"
-        class="assistant-markdown max-w-2xl rounded-lg px-3 py-2 bg-surface-raised text-fg-1"
-        v-html="renderMarkdown(liveTurn.text)"
-      ></div>
-      <LiveToolCallList
-        :tool-calls="liveTurn.toolCalls"
-        :session-id="liveTurn.sessionId"
+      <LiveSubAgentTurnCard
+        v-for="turn in liveSubAgentsForCurrent"
+        :key="turn.agentSessionId"
+        :turn="turn"
         @decided="scrollToBottom"
       />
+      <div v-if="assistant.sending && !liveTurn" class="text-xs text-fg-3">thinking…</div>
     </div>
-    <LiveSubAgentTurnCard
-      v-for="turn in liveSubAgentsForCurrent"
-      :key="turn.agentSessionId"
-      :turn="turn"
-      @decided="scrollToBottom"
-    />
-    <div v-if="assistant.sending && !liveTurn" class="text-xs text-fg-3">thinking…</div>
   </div>
 </template>

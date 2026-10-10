@@ -37,4 +37,18 @@ describe('ChatMessageList', () => {
     await nextTick()
     expect(wrapper.text()).not.toContain('session not found')
   })
+
+  it('drops a slow failure that lands after a chat switch', async () => {
+    const assistant = open(1)
+    let fail!: (e: Error) => void
+    vi.spyOn(assistant, 'loadSession').mockReturnValue(new Promise((_, r) => (fail = r)))
+    const wrapper = mount(ChatMessageList, { global: { stubs: { AssistantMessageContent } } })
+
+    await wrapper.find('button.card').trigger('click')
+    open(2)
+    await nextTick()
+    fail(new Error('session not found'))
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('session not found')
+  })
 })
