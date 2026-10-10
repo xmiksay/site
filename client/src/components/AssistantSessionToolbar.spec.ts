@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import AssistantSessionToolbar from './AssistantSessionToolbar.vue'
 import { useAssistantStore } from '../stores/assistant'
+import { ApiError } from '../api'
 
 // A sub-agent session (#99) runs under the model/profile its parent spawned it
 // with, and the server refuses to switch either or to compact it (#101) — so
@@ -10,7 +11,7 @@ vi.mock('../stores/assistant', () => ({ useAssistantStore: vi.fn() }))
 
 const useAssistantStoreMock = vi.mocked(useAssistantStore)
 
-function withSession(overrides: Record<string, any>) {
+function withSession(overrides: Record<string, any>, store: Record<string, any> = {}) {
   useAssistantStoreMock.mockReturnValue({
     current: {
       id: 2,
@@ -26,6 +27,7 @@ function withSession(overrides: Record<string, any>) {
     models: [],
     mcpServers: [],
     sending: false,
+    ...store,
   } as any)
 }
 
@@ -63,5 +65,25 @@ describe('AssistantSessionToolbar', () => {
     expect(wrapper.text()).not.toContain('Gen')
     // Nothing clickable is left that would write to the server.
     expect(wrapper.findAll('button')).toHaveLength(0)
+  })
+
+  it('shows the 409 for a switch to Designer and keeps the current profile', async () => {
+    const updateSession = vi
+      .fn()
+      .mockRejectedValue(new ApiError(409, 'start a new Designer chat'))
+    const loadSession = vi.fn()
+    withSession({}, { updateSession, loadSession })
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    const wrapper = mount(AssistantSessionToolbar)
+    const profile = wrapper.findAll('select')[1]!
+
+    await profile.setValue('designer')
+    await Promise.resolve()
+
+    expect(updateSession).toHaveBeenCalledWith(2, { agent_profile: 'designer' })
+    expect(alert).toHaveBeenCalledWith('start a new Designer chat')
+    expect((profile.element as HTMLSelectElement).value).toBe('build')
+    expect(loadSession).not.toHaveBeenCalled()
+    alert.mockRestore()
   })
 })

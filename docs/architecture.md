@@ -341,7 +341,7 @@ An admin sees the real site rendered with the draft (#116): `POST /api/design/pr
 
 ### JSON API `/api/*` (session cookie required)
 
-Everything below needs the session cookie (`require_login_api`), except the design **draft** routes (`/api/design/draft`, `/api/design/draft/{*path}`), which also accept the MCP Bearer token — OAuth access token or service token (`require_login_or_bearer_api`, #118). Publish, discard, history/restore and reload stay session-only: a Bearer request gets 401.
+Everything below needs the session cookie (`require_login_api`), except the design **draft** routes (`/api/design/draft`, `/api/design/draft/{*path}`), which also accept the MCP Bearer token — OAuth access token or service token (`require_login_or_bearer_api`, #118). Publish, discard, history/restore, reload and the draft preview toggle (`POST /api/design/preview`, `GET /api/design/preview/exit`) stay session-only: a Bearer request gets 401.
 
 `auth/{login,logout,me}`, `users` (`GET/POST /`, `DELETE /{id}`, `PUT /{id}/password`), `pages` CRUD + `paths` + revision restore, `tags` CRUD, `files` CRUD (multipart upload, 50 MB), `galleries` CRUD + `paths`, `menu` CRUD, `tokens` (list/create/delete), `markdown/render`, `paths/children`, `export/pages/{id}` (below), and everything under `assistant/*`: `sessions` CRUD + `sessions/{id}/messages` + `sessions/{id}/messages/{message_id}/approve` + `sessions/{id}/compact` (manual context compaction, #40), `mcp-servers` CRUD, `providers` CRUD + `providers/status` (live per-provider throttle posture, #89), `models` CRUD (`context_window` field, #40), `permissions` CRUD (tool-permission rules).
 
@@ -714,7 +714,17 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   profile-specific default. The executor grades a call as the minimum over
   the session's whole ancestor chain, so a `designer` *spawned* by `build`
   still asks (its task came from a profile that reads outside content): the
-  approval-free path is a chat switched to the Designer profile. The design
+  approval-free path is a chat running as Designer. **Designer only for
+  fresh chats:** a chat may enter `designer` only when created with it or
+  before its first prompt — `PATCH /api/assistant/sessions/{id}` to
+  `designer` answers **409** ("start a new Designer chat") once the session's
+  `assistant_events` hold an `InMsg::Prompt` (a compacted successor too: it
+  is seeded with one), because its history may carry instructions injected
+  through content another profile read (`web_fetch`, page text, MCP output),
+  which would then act without approval
+  (`handlers/sessions/mutate.rs::check_designer_switch`). Switching *out* of
+  `designer`, or staying in it, is always allowed; a sub-agent spawn is
+  covered by the chain minimum above. The design
   tools are `read`/`write` capability members, and `design_read`/
   `design_write`/`design_delete` scope by `path` (`write(assets/*)`).
 - `handlers/` — `/api/assistant/*`: `sessions/` (CRUD + `messages`/`approve`,
@@ -775,7 +785,9 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     against `engine::SWITCHABLE_PROFILES` (`build`/`researcher`/
     `page-writer`/`designer`) at the API boundary — `entanglement_core` itself imposes
     no reachability gate on a direct `SetAgent` — so an unknown/invalid value
-    is rejected `400` before any DB write. All four generation knobs persist
+    is rejected `400` before any DB write; switching a session that already
+    has a prompt into `designer` is `409` (see `tool_permissions/` below,
+    #118). All four generation knobs persist
     onto the session row verbatim as partial overrides (an omitted field
     leaves the column untouched, SeaORM `NotSet`, mirroring `title`/
     `model_id`'s existing convention) — the row is a display cache of the

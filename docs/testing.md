@@ -167,6 +167,12 @@ executes on every PR rather than self-skipping.
   and the design tools' per-profile default permissions (writes
   approval-free only under `designer`) in
   `src/ai/engine/profiles.rs` and `src/ai/tool_permissions/tests.rs`.
+- `tests/assistant_session_designer.rs` — a chat may enter `designer` only
+  before its first prompt (#118): `PATCH` to `designer` on a fresh session
+  succeeds, on one with a persisted prompt answers 409 with the profile
+  unchanged; created-as-Designer chats may leave it, not come back. The
+  client side (the 409 shown, the picker reset) is in
+  `client/src/components/AssistantSessionToolbar.spec.ts`.
 - `tests/design_smoke.rs` — `templates::smoke::smoke_render` (#117): the baked
   design renders clean and every contract template is exercised; an
   undefined variable (in a partial and in `base.html`, reported once) and a

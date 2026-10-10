@@ -8,10 +8,12 @@
 //! own 400-line cap) — this file keeps only what both share.
 
 use entanglement_core::{GenerationParams, InMsg, SessionId};
+use entanglement_runtime::session_store::LogPayload;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-use crate::ai::engine::{SWITCHABLE_PROFILES, SiteEngine};
-use crate::entity::{llm_model, llm_provider, user_mcp_server};
+use super::turn;
+use crate::ai::engine::{DESIGNER_PROFILE, SWITCHABLE_PROFILES, SiteEngine};
+use crate::entity::{assistant_session, llm_model, llm_provider, user_mcp_server};
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
@@ -34,6 +36,39 @@ fn validate_agent_profile(name: &str) -> ApiResult<()> {
             "unknown agent profile `{name}` (expected one of {SWITCHABLE_PROFILES:?})"
         )))
     }
+}
+
+/// Message of the 409 for switching a chat with history into `designer`.
+pub(crate) const DESIGNER_NEEDS_FRESH_CHAT: &str = "only a new chat can switch to the Designer \
+     profile: its draft edits need no approval, and this chat's history may carry instructions \
+     from outside content (web pages, page text, MCP tools) — start a new Designer chat";
+
+/// A session may enter `designer` only before its first prompt. That
+/// profile writes the design draft without approval
+/// (`tool_permissions::DESIGN_WRITE_TOOLS`), and the draft runs on the
+/// site's origin in an admin's preview; an existing chat's history may hold
+/// injected instructions from content another profile read (`web_fetch`,
+/// page text, MCP output), which would then act without approval. A
+/// compacted successor counts as history too: it is seeded with a prompt.
+async fn check_designer_switch(
+    state: &AppState,
+    session: &assistant_session::Model,
+    target: &str,
+) -> ApiResult<()> {
+    if target != DESIGNER_PROFILE || session.agent_profile == DESIGNER_PROFILE {
+        return Ok(());
+    }
+    let Some(engine_id) = &session.engine_session_id else {
+        return Ok(());
+    };
+    let records = turn::load_prior_records(&state.db, &SessionId::new(engine_id.clone())).await?;
+    let has_prompt = records
+        .iter()
+        .any(|r| matches!(r.payload, LogPayload::In(InMsg::Prompt { .. })));
+    if has_prompt {
+        return Err(ApiError::Conflict(DESIGNER_NEEDS_FRESH_CHAT.into()));
+    }
+    Ok(())
 }
 
 /// Send whichever of `SetModel`/`SetAgent`/`SetGeneration` this call actually
