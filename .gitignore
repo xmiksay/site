@@ -9,3 +9,4 @@
 # Deploy manifests with inlined secrets — never commit
 /blog.yml
 /orechov.yml
+/miksanik-net.yml
