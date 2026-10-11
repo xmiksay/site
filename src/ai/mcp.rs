@@ -50,6 +50,7 @@ use crate::repo::tokens;
 
 mod transport;
 
+pub use transport::NO_SHARED_ENDPOINT_STATE_ENV;
 use transport::{CONNECT_TIMEOUT, LIST_TOOLS_TIMEOUT, bounded, connect_with_timeout};
 
 const CACHE_TTL: Duration = Duration::from_secs(60);

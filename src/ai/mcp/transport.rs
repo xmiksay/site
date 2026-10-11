@@ -54,15 +54,42 @@ pub(super) const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
 /// arithmetically but reads like an accident.
 pub(super) const MCP_ENDPOINT_RPM: u32 = 60_000;
 
+/// Set (to `1`) to switch off `entanglement_provider`'s cross-process endpoint
+/// gate (ADR-0144) for the whole process. Its admission and its release each
+/// run a locked read-modify-write with two `fsync`s on
+/// `$XDG_DATA_HOME/entanglement/endpoints/<sha256(url)>.state` — the release
+/// synchronously in `Drop`, on a runtime worker — so one MCP handshake plus
+/// `tools/list` cost twelve `fsync`s: tens of ms idle, past [`CONNECT_TIMEOUT`]
+/// under heavy disk load, which silently dropped the server from the user's
+/// tool list (#124). Its concurrency cap is also keyed by URL across every
+/// process and connection, undoing the per-connect isolation
+/// [`mcp_pool_client`] exists for. Every gate held inside one `HttpClient`
+/// (pacing, concurrency, `Retry-After`) stays on for LLM and MCP traffic
+/// alike. What is given up: the file also joined *separate* clients for the
+/// same endpoint + key, and `ai::catalog`'s `refresh()` builds a fresh client
+/// per provider on every refresh — so after an admin edit, sessions still on
+/// the old client and those on the new one no longer share a 429 cool-down or
+/// a concurrency cap until the old ones finish their turn. A narrow, brief
+/// overlap, against a fixed fsync tax on every request. The provider reads it
+/// per endpoint, so it must be set
+/// before any thread exists: `site_server`'s `main`, and `.cargo/config.toml`
+/// for `cargo test`/`cargo run`.
+pub const NO_SHARED_ENDPOINT_STATE_ENV: &str = "ENTANGLEMENT_NO_SHARED_ENDPOINT_STATE";
+
+/// [`RetryConfig::default`] with the pacing gate opened up — see
+/// [`MCP_ENDPOINT_RPM`].
+pub(super) fn mcp_retry_config() -> RetryConfig {
+    RetryConfig {
+        rpm: MCP_ENDPOINT_RPM,
+        ..Default::default()
+    }
+}
+
 /// The provider endpoint-pool client one MCP connection rides. One pool per
 /// connect keeps each connection on its own endpoint bucket — the pre-0.6
 /// isolation; the site has no cross-user endpoint budget to pool against.
 pub(super) fn mcp_pool_client() -> anyhow::Result<PoolHttpClient> {
-    PoolHttpClient::with_config(RetryConfig {
-        rpm: MCP_ENDPOINT_RPM,
-        ..Default::default()
-    })
-    .context("building the MCP endpoint HTTP client")
+    PoolHttpClient::with_config(mcp_retry_config()).context("building the MCP endpoint HTTP client")
 }
 
 /// Run one MCP request on its own task, giving up after `limit` and reporting

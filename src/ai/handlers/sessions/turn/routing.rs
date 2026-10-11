@@ -4,97 +4,163 @@
 //! write. Split out of `turn.rs` to keep that file under the project's
 //! 400-line cap.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use entanglement_core::{OutEvent, SessionId};
 use entanglement_runtime::session_store::{LogPayload, LogRecord};
+use sea_orm::sea_query::Expr;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 use super::load_prior_records;
 use crate::ai::tool_permissions::Effect;
-use crate::entity::tool_permission;
+use crate::entity::{assistant_event, tool_permission};
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
-/// Every `(session, request_id)` still awaiting a decision *before* this
-/// request's own decisions are applied — passed to `send_and_collect` purely
-/// as a readiness signal (see its doc): a batch with several pending calls
-/// only resumes once *all* of them resolve
+/// Every `(session, request_id)` in `prior` still awaiting a decision — a
+/// batch with several pending calls only resumes once *all* of them resolve
 /// (`entanglement_core::session::TurnState::is_drained`), so `approve`'s own
 /// decisions settling isn't enough on its own to know whether it's safe to
-/// also wait for that session's continuation — this says whether anything
-/// *else* is still open. `ToolCall`/`ToolRequest`/`ToolOutput` records are
-/// never pruned (same fact `session_for_call`'s doc relies on), so a linear
-/// scan of `prior` for a `ToolRequest` with no later matching `ToolOutput` is
-/// exact, not a heuristic.
-pub(super) fn open_tool_requests(prior: &[LogRecord]) -> Vec<(SessionId, String)> {
-    let resolved: std::collections::HashSet<&str> = prior
-        .iter()
-        .filter_map(|r| match &r.payload {
-            LogPayload::Out(OutEvent::ToolOutput { request_id, .. }) => Some(request_id.as_str()),
-            _ => None,
-        })
-        .collect();
-    prior
-        .iter()
-        .filter_map(|r| match &r.payload {
-            LogPayload::Out(OutEvent::ToolRequest { request_id, .. })
-                if !resolved.contains(request_id.as_str()) =>
-            {
-                Some((r.session.clone(), request_id.clone()))
+/// also wait for that session's continuation; this says whether anything
+/// *else* is still open (via [`open_calls_after`]). `ToolCall`/`ToolRequest`/
+/// `ToolOutput` records are never pruned (same fact `session_for_call`'s doc
+/// relies on), so an in-order scan — a call is open from its latest
+/// `ToolRequest` until a `ToolOutput` for the same session and id follows —
+/// is exact for the records it is given, even when a later round reuses an id
+/// (e.g. Gemini's `{name}#{ordinal}`).
+fn open_tool_requests(prior: &[LogRecord]) -> Vec<(SessionId, String)> {
+    let mut order: Vec<(SessionId, String)> = Vec::new();
+    let mut open: HashMap<(SessionId, String), bool> = HashMap::new();
+    for r in prior {
+        match &r.payload {
+            LogPayload::Out(OutEvent::ToolRequest { request_id, .. }) => {
+                let key = (r.session.clone(), request_id.clone());
+                if open.insert(key.clone(), true).is_none() {
+                    order.push(key);
+                }
             }
-            _ => None,
-        })
-        .collect()
+            LogPayload::Out(OutEvent::ToolOutput { request_id, .. }) => {
+                if let Some(state) = open.get_mut(&(r.session.clone(), request_id.clone())) {
+                    *state = false;
+                }
+            }
+            _ => {}
+        }
+    }
+    order.retain(|key| open.get(key) == Some(&true));
+    order
 }
 
-/// [`open_tool_requests`], but re-read against a fresh `assistant_events` load
-/// until the *other* (see `own_call_ids` below) open entries stop changing —
-/// closes the same `DbSink` TOCTOU window [`session_for_call_awaiting`]
-/// already closes for its own lookup (#104): `prior` is a snapshot that can be
-/// missing a `ToolOutput` the async writer hasn't flushed yet, so a call
-/// resolved moments ago by an earlier, already-answered request can still read
-/// as open here. Trusting that stale entry as a genuine "something else is
-/// still open" readiness signal makes [`send_and_collect`](super::collect::
-/// send_and_collect) refuse to graduate the session into `session_targets`,
-/// so it returns the instant *this* request's own decisions settle — before
-/// the model's closing reply, which is still coming.
+/// How long [`open_calls_after`] waits for `DbSink` to land the `ToolOutput`
+/// it barriers on. Only a shed or failed insert ever exhausts it; a slow
+/// writer under load just takes longer to pass.
+const PERSIST_BARRIER_TIMEOUT: Duration = Duration::from_secs(30);
+const PERSIST_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// The calls still open on `session` (under `root`'s log), read once
+/// `assistant_events` holds `session`'s `ToolOutput` for `output` at `seq` —
+/// the one [`send_and_collect`](super::collect::send_and_collect) just
+/// observed live. `seq` (unique per session) is what tells it apart from an
+/// earlier round's output under a reused request id.
 ///
-/// `own_call_ids` — this same request's own `decisions` — are excluded before
-/// checking for staleness: they are *expected* to read as open (this very
-/// request is what resolves them, and hasn't sent anything to the engine
-/// yet), so retrying on their account would add a DB round trip to every
-/// ordinary approve for no reason. Only when some *other* call still reads
-/// open — the actual shape of this race — do we pay for a bounded re-read,
-/// stopping as soon as two consecutive reads agree (the writer has caught up)
-/// or [`CALL_LOOKUP_RETRY_ATTEMPTS`] is exhausted, whichever comes first.
-pub(super) async fn open_tool_requests_settled(
+/// That row is an exact barrier: the persistence tap and `DbSink`'s single
+/// writer append the engine broadcast in order, so once it has landed, every
+/// event broadcast before it has too — including a sibling call's
+/// `ToolOutput` that resolved before this request subscribed. A history
+/// snapshot taken when the request began can still lack that row, and
+/// reading the sibling as open made `approve` return before the model's
+/// closing reply (#104, #124). Anything broadcast after the barrier the
+/// caller has seen live, so it subtracts those itself. A row that never lands
+/// within [`PERSIST_BARRIER_TIMEOUT`] leaves the answer as of the last read.
+pub(super) async fn open_calls_after(
     db: &sea_orm::DatabaseConnection,
-    session_id: &SessionId,
-    prior: &[LogRecord],
-    own_call_ids: &std::collections::HashSet<&str>,
+    root: &SessionId,
+    session: &SessionId,
+    output: &str,
+    seq: u64,
 ) -> ApiResult<Vec<(SessionId, String)>> {
-    let others =
-        |pending: Vec<(SessionId, String)>| -> std::collections::HashSet<(SessionId, String)> {
-            pending
-                .into_iter()
-                .filter(|(_, id)| !own_call_ids.contains(id.as_str()))
-                .collect()
-        };
-    let mut current = others(open_tool_requests(prior));
-    if current.is_empty() {
-        return Ok(Vec::new());
-    }
-    for _ in 0..CALL_LOOKUP_RETRY_ATTEMPTS {
-        tokio::time::sleep(CALL_LOOKUP_RETRY_DELAY).await;
-        let reloaded = load_prior_records(db, session_id).await?;
-        let next = others(open_tool_requests(&reloaded));
-        if next == current {
+    let barrier = barrier_probe(session, output, seq);
+    let deadline = tokio::time::Instant::now() + PERSIST_BARRIER_TIMEOUT;
+    loop {
+        let landed = assistant_event::Entity::find()
+            .filter(assistant_event::Column::RootSessionId.eq(root.0.clone()))
+            .filter(Expr::cust_with_values("payload @> $1", [barrier.clone()]))
+            .one(db)
+            .await?
+            .is_some();
+        if landed {
             break;
         }
-        current = next;
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!(
+                request_id = output,
+                "tool output never reached assistant_events; open calls may be stale"
+            );
+            break;
+        }
+        tokio::time::sleep(PERSIST_POLL_INTERVAL).await;
     }
-    Ok(current.into_iter().collect())
+    let records = load_prior_records(db, root).await?;
+    Ok(open_tool_requests(&records)
+        .into_iter()
+        .filter(|(s, _)| s == session)
+        .collect())
+}
+
+/// The `jsonb @>` probe for one persisted `ToolOutput` row — the stored
+/// `LogRecord` shape is `{"payload": {"kind": "tool_output", "seq": …}}`.
+fn barrier_probe(session: &SessionId, output: &str, seq: u64) -> serde_json::Value {
+    serde_json::json!({ "payload": {
+        "kind": "tool_output", "session": session.0, "request_id": output, "seq": seq,
+    }})
+}
+
+/// Whether `session`'s latest `ToolRequest` for `call_id` in `records` already
+/// has its `ToolOutput` — a decision for it can only be a no-op. The latest
+/// one, since a later round may reuse a request id.
+fn call_resolved(records: &[LogRecord], session: &SessionId, call_id: &str) -> bool {
+    let Some(asked) = records.iter().rposition(|r| {
+        r.session == *session
+            && matches!(&r.payload,
+                LogPayload::Out(OutEvent::ToolRequest { request_id, .. }) if request_id == call_id)
+    }) else {
+        return false;
+    };
+    records[asked..].iter().any(|r| {
+        r.session == *session
+            && matches!(&r.payload,
+                LogPayload::Out(OutEvent::ToolOutput { request_id, .. }) if request_id == call_id)
+    })
+}
+
+/// Where a decision for one call stands before `approve` sends it.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Readiness {
+    /// A waiter is parked in the engine right now: send.
+    Parked,
+    /// Not parked, and `prior` shows its latest request answered: refuse.
+    Resolved,
+    /// Neither yet — a resumed session's re-offer or a lagging log: wait.
+    Unknown,
+}
+
+/// `parked` (the engine's live waiter set) wins over `prior`: a later round
+/// can re-ask the same id before its new `ToolRequest` row is persisted, and
+/// the snapshot would then read round one's answer as this call's.
+pub(super) fn decision_readiness(
+    parked: bool,
+    prior: &[LogRecord],
+    session: &SessionId,
+    call_id: &str,
+) -> Readiness {
+    if parked {
+        Readiness::Parked
+    } else if call_resolved(prior, session, call_id) {
+        Readiness::Resolved
+    } else {
+        Readiness::Unknown
+    }
 }
 
 /// Persist an "always deny" `tool_permissions` rule for the tool behind
@@ -231,3 +297,6 @@ pub async fn session_for_call_awaiting(
         "tool call `{call_id}` is unknown or already resolved"
     )))
 }
+
+#[cfg(test)]
+mod tests;

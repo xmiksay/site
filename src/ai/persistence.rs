@@ -10,7 +10,7 @@
 //! session) to purge the log.
 
 use anyhow::Context;
-use entanglement_core::{Holly, SessionId};
+use entanglement_core::{Holly, OutEvent, SessionId};
 use entanglement_runtime::persistence::RecordSink;
 use entanglement_runtime::session_store::{LogPayload, LogRecord, integrity_gap, pair_records};
 use sea_orm::{
@@ -19,7 +19,7 @@ use sea_orm::{
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::entity::assistant_event;
 
@@ -137,16 +137,107 @@ async fn flush_gaps(db: &DatabaseConnection, dropped: &Mutex<HashMap<SessionId, 
 /// — the tail after the gap is permanently lost, but the session itself
 /// stays resumable forever after, instead of every future `ensure_live`
 /// failing (issue #28). See [`truncate_at_gap`].
+///
+/// The tree is resumed **one session at a time, parent before child**
+/// ([`live_tree`]), each from its own records only, rather than handing
+/// `Holly` the root and letting its cascade (ADR-0112) spawn every live
+/// sub-agent at once. The cascade starts all those tasks together, so a
+/// resumed child can re-offer its parked tool call before its parent has
+/// announced itself; the tool executor then sees an unknown ancestor, fails
+/// closed, and permanently refuses the call ("restricted by ancestor agent
+/// `unknown`"), and the persistence tap files the child's new records under
+/// the child's own id (#124). Waiting for each session's start announcement
+/// before resuming its children orders the broadcast for both. Holly's
+/// cascade only ever used a session's live-children list to know whom to
+/// spawn, so spawning them ourselves leaves the same sessions running.
 pub async fn resume_session(
     db: &DatabaseConnection,
     holly: &Holly,
     root: SessionId,
 ) -> anyhow::Result<SessionId> {
     let records = load_tree_records(db, &root).await?;
-    holly
-        .resume(root.clone(), pair_records(&records))
-        .await
-        .map_err(|_| anyhow::anyhow!("engine inbox closed"))
+    let mut events = holly.subscribe();
+    for session in live_tree(&records, &root) {
+        let own: Vec<LogRecord> = records
+            .iter()
+            .filter(|r| r.session == session)
+            .cloned()
+            .collect();
+        holly
+            .resume(session.clone(), pair_records(&own))
+            .await
+            .map_err(|_| anyhow::anyhow!("engine inbox closed"))?;
+        await_started(&mut events, &session).await;
+    }
+    Ok(root)
+}
+
+/// Ceiling on waiting for one resumed session's start announcement. A
+/// refused resume answers with an `Error` instead, which ends the wait too.
+const RESUME_START_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Wait for `session`'s `AgentChanged` — the last of the events a session
+/// task emits on start, so every subscriber (the tool executor included)
+/// has folded its identity and profile once it is seen.
+async fn await_started(events: &mut broadcast::Receiver<OutEvent>, session: &SessionId) {
+    let deadline = tokio::time::Instant::now() + RESUME_START_TIMEOUT;
+    loop {
+        match tokio::time::timeout_at(deadline, events.recv()).await {
+            Ok(Ok(
+                OutEvent::AgentChanged { session: s, .. } | OutEvent::Error { session: s, .. },
+            )) if s == *session => {
+                return;
+            }
+            Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) => {}
+            Ok(Err(broadcast::error::RecvError::Closed)) => return,
+            Err(_) => {
+                tracing::warn!(session = %session.0, "resumed session never announced its start");
+                return;
+            }
+        }
+    }
+}
+
+/// `root` plus every sub-agent still live as of where its log stops (a
+/// `SessionStarted` not followed by its `SessionEnded`/`SessionHibernated`),
+/// breadth-first so a parent always precedes its children — the same set
+/// `Holly`'s resume cascade would spawn, in a safe order.
+fn live_tree(records: &[LogRecord], root: &SessionId) -> Vec<SessionId> {
+    let mut parent_of: HashMap<SessionId, SessionId> = HashMap::new();
+    let mut live: std::collections::HashSet<SessionId> = std::collections::HashSet::new();
+    for r in records {
+        match &r.payload {
+            LogPayload::Out(OutEvent::SessionStarted {
+                session,
+                parent: Some(parent),
+                ..
+            }) => {
+                parent_of.insert(session.clone(), parent.clone());
+                live.insert(session.clone());
+            }
+            LogPayload::Out(
+                OutEvent::SessionEnded { session, .. }
+                | OutEvent::SessionHibernated { session, .. },
+            ) => {
+                live.remove(session);
+            }
+            _ => {}
+        }
+    }
+    let mut order = vec![root.clone()];
+    let mut cursor = 0;
+    while cursor < order.len() {
+        let parent = order[cursor].clone();
+        cursor += 1;
+        let mut children: Vec<SessionId> = parent_of
+            .iter()
+            .filter(|(child, p)| **p == parent && live.contains(*child) && !order.contains(child))
+            .map(|(child, _)| child.clone())
+            .collect();
+        children.sort_by(|a, b| a.0.cmp(&b.0));
+        order.extend(children);
+    }
+    order
 }
 
 /// Resume a sub-agent **child** session on its own, from its slice of `root`'s

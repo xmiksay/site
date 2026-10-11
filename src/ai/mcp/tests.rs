@@ -1,7 +1,9 @@
 //! Unit tests for `src/ai/mcp.rs`, split out to keep that file under the
 //! 400-line cap.
 
+use super::transport::{MCP_ENDPOINT_RPM, mcp_retry_config};
 use super::*;
+use entanglement_provider::RetryConfig;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::net::TcpListener;
 
@@ -41,26 +43,40 @@ async fn spawn_mock_mcp_server() -> String {
 /// moved the transport onto the provider pool, whose default 50 rpm forces
 /// 1.2s between two requests to one endpoint — so an instantly-answering
 /// server would still take ~1.2s to hand back a connection and ~2.4s to reach
-/// `tools/list`, per server, sequentially, on every cache refresh. Drives the
-/// real handshake + listing against a local mock and fails if that spacing is
-/// ever back.
+/// `tools/list`, per server, sequentially, on every cache refresh. The pool's
+/// pacing gate spaces requests `60_000 / rpm` ms apart, so this checks that
+/// spacing for the config every MCP connection is built with rather than a
+/// stopwatch, which would measure machine load as much as pacing (#124).
+#[test]
+fn mcp_requests_are_not_paced() {
+    let config = mcp_retry_config();
+    assert_eq!(config.rpm, MCP_ENDPOINT_RPM);
+    let spacing = Duration::from_millis(60_000 / u64::from(config.rpm));
+    assert!(
+        spacing <= Duration::from_millis(1),
+        "{spacing:?} between two requests to one MCP server; the pool's \
+         default pacing (1.2s) looks to be back on"
+    );
+    let default = RetryConfig::default();
+    assert_eq!(
+        (config.max_attempts, config.concurrency),
+        (default.max_attempts, default.concurrency),
+        "only the pacing is meant to differ from the pool defaults"
+    );
+}
+
+/// The real handshake + listing against a local mock, through the same pool
+/// client production uses.
 #[tokio::test]
-async fn connect_and_list_tools_are_not_paced() {
+async fn connect_and_list_tools_against_a_live_server() {
     let url = spawn_mock_mcp_server().await;
 
-    let started = tokio::time::Instant::now();
     let client = connect_with_timeout("mock", &url, &HashMap::new(), CONNECT_TIMEOUT)
         .await
         .expect("the mock server completes the handshake");
     let tools = client.list_tools().await.expect("tools/list");
-    let elapsed = started.elapsed();
 
     assert_eq!(tools.len(), 1, "the mock server advertises one tool");
-    assert!(
-        elapsed < Duration::from_secs(1),
-        "handshake + tools/list took {elapsed:?}; the pool's default pacing \
-         (~2.4s to reach tools/list) looks to be back on"
-    );
 }
 
 /// A remote MCP server that accepts the TCP connection but never answers
@@ -68,7 +84,12 @@ async fn connect_and_list_tools_are_not_paced() {
 /// `connect_with_timeout` returns in bounded time instead of hanging for
 /// as long as the underlying HTTP client's own (much longer) per-request
 /// timeout.
-#[tokio::test]
+///
+/// On a paused clock, so `elapsed` counts timer time only: the bound firing
+/// reads as exactly `bound`, and a missing bound as the outer hour (nothing
+/// else in the request path arms a timer that would end it), never as
+/// scheduling delay on a loaded machine.
+#[tokio::test(start_paused = true)]
 async fn connect_with_timeout_bounds_a_server_that_never_answers() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -87,13 +108,17 @@ async fn connect_with_timeout_bounds_a_server_that_never_answers() {
 
     let bound = Duration::from_millis(200);
     let started = tokio::time::Instant::now();
-    let result = connect_with_timeout(
-        "black-hole",
-        &format!("http://{addr}/mcp"),
-        &HashMap::new(),
-        bound,
+    let result = tokio::time::timeout(
+        Duration::from_secs(3600),
+        connect_with_timeout(
+            "black-hole",
+            &format!("http://{addr}/mcp"),
+            &HashMap::new(),
+            bound,
+        ),
     )
-    .await;
+    .await
+    .expect("connect_with_timeout must give up on its own bound, not hang");
     let elapsed = started.elapsed();
 
     assert!(

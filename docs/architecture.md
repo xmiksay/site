@@ -505,13 +505,14 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   catalog's default model (`catalog.default_model()`) so a freshly-spawned
   session budgets sensibly before any `SetModel` narrows it to the session's
   actual pinned model — which is why that default must resolve
-  deterministically (see `catalog.rs` below). Three submodules (kept under the 400-line cap):
+  deterministically (see `catalog.rs` below). Submodules (kept under the 400-line cap):
   `engine/profiles.rs` (the `researcher`/`page-writer`/`designer` profile roster and their prompt suffixes, below),
   `engine/session_tree.rs`
   (`root_session_of`/`user_id_from_session`/`user_id_from_session_awaiting`,
   re-exported from `engine.rs` so every existing `crate::ai::engine::...` call
-  site is unchanged), and `engine/prompt_cache.rs` (the system-prompt
-  read-and-refresh loop).
+  site is unchanged), `engine/prompt_cache.rs` (the system-prompt
+  read-and-refresh loop), `engine/live.rs` (the live-session set and the
+  session watcher task) and `engine/awaiting.rs` (parked approval waiters).
   - **Tool registry (issue #38):** `spawn` builds the local (built-in,
     non-MCP) `ToolRegistry` once and wraps it in a `SharedRegistry`
     (`entanglement_runtime::tools::SharedRegistry`, an
@@ -640,11 +641,25 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   rpm, because the default 50 rpm (1.2s between requests to one endpoint,
   ~2.4s to reach `tools/list`, per server, sequentially, per cache refresh) is
   calibrated for a rate-limited LLM API, not for a user's own servers — LLM
-  traffic in `catalog.rs` keeps the defaults. Because each endpoint's pool
-  state is a `.state`/`.lock` pair on disk that nothing else evicts,
-  `state.rs::create_state` runs a best-effort `prune_stale` sweep
-  (`prune_endpoint_state`) at startup — idle >1h and provably dead pairs only,
-  logged, never fatal. Holds the same `SharedRegistry` handle
+  traffic in `catalog.rs` keeps the defaults. The pool's *cross-process*
+  gate (ADR-0144) is off for the whole process (#124): `site_server`'s `main`
+  sets `ENTANGLEMENT_NO_SHARED_ENDPOINT_STATE=1` before the runtime starts
+  (`transport::NO_SHARED_ENDPOINT_STATE_ENV`; `.cargo/config.toml` does the
+  same for `cargo test`/`cargo run`). That gate `fsync`s a file-backed lease
+  on every admission and release — twelve `fsync`s per MCP handshake +
+  `tools/list`, enough under disk load to blow the 10s bounds and drop the
+  server — and caps concurrency per URL across every process and
+  connection. Pacing, concurrency and `Retry-After` gates inside each
+  `HttpClient` stay on. What the site gives up is small: besides sibling
+  processes (a single `site_server` has none), the file also joined
+  separate `HttpClient`s for the same endpoint + key within this process,
+  and `catalog.rs`'s `refresh()` builds a fresh client per provider on every
+  refresh — so right after an admin edit, sessions still on the old client
+  and those on the new one no longer share a 429 cool-down or a concurrency
+  cap until the old turns finish. With the gate off nothing is written under
+  `${data_dir}/entanglement/endpoints/` and nothing is swept; `.state`/
+  `.lock` pairs left there by earlier versions are inert and can be deleted
+  by hand. Holds the same `SharedRegistry` handle
   `engine.rs` wraps at spawn (issue #38): every time `routes_for_user`
   (re)connects a user's servers — a cold cache or a 60s TTL expiry —
   `register_routes` registers each newly discovered `"{server}__{tool}"`
@@ -664,12 +679,27 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   broadcast-lag path — and `resume_session` (issue #28) no longer hard-refuses
   a session with a detected gap; it resumes from the intact prefix strictly
   before the gap (`truncate_at_gap`), so a session stays resumable forever
-  instead of every future `ensure_live` failing. `resume_session` passes
+  instead of every future `ensure_live` failing. `resume_session` loads
   `assistant_events`' whole root file (root + any sub-agent children, since
-  they share one `root_session_id`) to `Holly::resume` in one call —
-  entanglement 0.6.0's `resume` cascades over the *whole* spawn sub-tree
-  itself (ADR-0112), re-materializing a child that was still live as of where
-  the log stopped, so no per-child loop is needed here. That one shared
+  they share one `root_session_id`) but resumes it **one session at a time,
+  parent first** (`live_tree`: the root, then every sub-agent still live as
+  of where the log stopped, breadth-first), each from its own records, and
+  waits for each one's start `AgentChanged` before resuming its children
+  (#124). Entanglement 0.6.0's own cascade (ADR-0112) spawns the whole live
+  sub-tree at once, so a child could re-offer its parked call before its
+  parent announced itself — the executor then failed closed on the unknown
+  ancestor ("restricted by ancestor agent `unknown`") and refused the call,
+  and the persistence tap filed the child's new records under the child's
+  own id. Holly only used the cascade's children list to spawn them, so the
+  same sessions end up live. `approve` additionally waits for the call's
+  approval waiter (`SiteEngine::await_decision_waiter`, `engine/awaiting.rs`,
+  folded from `ToolRequest`s by the session watcher in `engine/live.rs`): a
+  resumed session re-offers asynchronously, and a decision that reaches the
+  engine before its waiter exists is silently dropped. A call whose latest
+  `ToolRequest` already has a persisted `ToolOutput` (a stale UI, a double
+  click) is refused with `400` instead of waited for — unless its waiter is
+  parked right now, since request ids repeat across rounds (Gemini's
+  `{name}#{ordinal}`) and the snapshot may lack the re-asked row. That one shared
   `root_session_id` is exactly why `assistant_sessions.root_engine_session_id`
   (m_032, #99) stores an *engine* id rather than a pointer to the root row:
   every one of these three filters (`resume_session`,
@@ -684,7 +714,13 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   `assistant_events` after a turn settles — reassessed for #43 and unrelated
   to `entanglement_runtime`'s own guarantees either way: it exists solely
   because `DbSink`'s async writer task gives no read-your-writes guarantee at
-  the instant this handler observes e.g. `Done`.
+  the instant this handler observes e.g. `Done`. Where `approve` must know
+  whether *other* calls of a batch are still open (to decide whether to wait
+  for the turn's continuation), `turn/routing.rs`'s `open_calls_after` reads
+  them only once its own just-observed `ToolOutput` row (matched by `seq`,
+  which survives a reused request id) has landed: the tap
+  and the single writer persist the broadcast in order, so that row is an
+  exact barrier for every earlier event (#104, #124).
 - `projection/` — pure fold of **one** session's `assistant_events` rows into
   the `{role, content}` shape the admin client renders (`role` one of
   `user | assistant | tool_result | error`). `assistant_events` for a whole
@@ -855,7 +891,7 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
     leaves pre-compaction children on the older key). `GET` and
     `POST .../messages`/`approve` *are* allowed on a child: upstream never
     closes a finished sub-agent, so `ensure_target_live` (`sessions/turn.rs`)
-    resumes the **root** (whose ADR-0112 cascade re-materializes descendants),
+    resumes the **root** (`resume_session` re-materializes live descendants),
     checks `SiteEngine::await_live` for the child, and only then rebuilds it
     from its own slice of the root's log via
     `persistence::resume_child_session`. `load_prior_records` stays

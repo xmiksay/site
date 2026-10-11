@@ -35,7 +35,7 @@ use axum::Json;
 use axum::extract::{Extension, Path, State};
 use entanglement_core::{ApprovalScope, InMsg, SessionId};
 use entanglement_runtime::session_store::LogRecord;
-use routing::{open_tool_requests_settled, remember_deny};
+use routing::{Readiness, decision_readiness, remember_deny};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 
 use super::tree::root_engine_id;
@@ -45,6 +45,11 @@ use crate::ai::projection::{self, ProjectedMessage};
 use crate::entity::{assistant_event, assistant_session};
 use crate::routes::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
+
+/// How long `approve` waits for a call's approval waiter to be (re-)parked.
+/// Re-offering is a policy check and a task hop; only a call that is no
+/// longer pending reaches this.
+const DECISION_WAITER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(serde::Deserialize)]
 pub struct SendMessage {
@@ -86,7 +91,7 @@ pub async fn send_message(
     let prior = load_prior_records(&state.db, &root).await?;
 
     let msg = InMsg::prompt(target.clone(), input.text);
-    let collected = collect::send_and_collect(engine, &target, vec![msg], Vec::new()).await?;
+    let collected = collect::send_and_collect(engine, &target, vec![msg], None).await?;
 
     build_detail(&state, id, &target, prior, collected).await
 }
@@ -117,7 +122,7 @@ pub async fn approve(
     let engine = &state.agent_engine;
     ensure_target_live(&state, &root, &target).await?;
     // Root-keyed on purpose, even when approving from a child's own view:
-    // `session_for_call_awaiting` and `open_tool_requests` scan *every*
+    // `session_for_call_awaiting` and `open_calls_after` scan *every*
     // session's records to find who owns a `tool_call_id`, so narrowing this to
     // the child would break routing a decision to a sibling or to the root.
     let prior = load_prior_records(&state.db, &root).await?;
@@ -148,6 +153,37 @@ pub async fn approve(
         // wrong for a stale/unknown/misrouted sub-agent call id.
         let target_session =
             session_for_call_awaiting(&state.db, &root, &prior, &d.tool_call_id).await?;
+        // The in-memory waiter set first: request ids repeat across rounds
+        // (e.g. Gemini's `{name}#{ordinal}`), so a snapshot still missing a
+        // re-asked call's new `ToolRequest` row reads as "resolved".
+        let readiness = decision_readiness(
+            engine.decision_parked(&target_session, &d.tool_call_id),
+            &prior,
+            &target_session,
+            &d.tool_call_id,
+        );
+        // A stale UI or a double click: nothing is parked, so a decision
+        // would be a silent no-op the request then waits out.
+        if readiness == Readiness::Resolved {
+            return Err(ApiError::BadRequest(format!(
+                "tool call `{}` is already resolved",
+                d.tool_call_id
+            )));
+        }
+        // A just-resumed session re-offers its parked call asynchronously; a
+        // decision sent before its waiter exists is dropped and this request
+        // would sit out `TURN_TIMEOUT` (#124). Sent anyway on a miss: the
+        // call's output may only be lagging behind in `assistant_events`.
+        if readiness == Readiness::Unknown
+            && !engine
+                .await_decision_waiter(&target_session, &d.tool_call_id, DECISION_WAITER_TIMEOUT)
+                .await
+        {
+            tracing::warn!(
+                tool_call_id = %d.tool_call_id,
+                "no parked approval waiter for this call; sending the decision anyway"
+            );
+        }
         if d.approve {
             msgs.push(InMsg::Approve {
                 session: target_session,
@@ -170,17 +206,8 @@ pub async fn approve(
         }
     }
 
-    // #104: a plain `open_tool_requests(&prior)` trusts `prior` at face value,
-    // but `prior` can be missing a `ToolOutput` `DbSink`'s async writer hasn't
-    // flushed yet for a call this same handler already resolved on a *prior*
-    // request — see `open_tool_requests_settled`'s doc.
-    let own_call_ids: std::collections::HashSet<&str> = body
-        .decisions
-        .iter()
-        .map(|d| d.tool_call_id.as_str())
-        .collect();
-    let extra_pending = open_tool_requests_settled(&state.db, &root, &prior, &own_call_ids).await?;
-    let collected = collect::send_and_collect(engine, &target, msgs, extra_pending).await?;
+    let collected =
+        collect::send_and_collect(engine, &target, msgs, Some((&state.db, &root))).await?;
     build_detail(&state, id, &target, prior, collected).await
 }
 

@@ -167,23 +167,22 @@ async fn wait_for(
     }
 }
 
-async fn engine_session_id(db: &DatabaseConnection, session_db_id: i32) -> SessionId {
-    let row = assistant_session::Entity::find_by_id(session_db_id)
-        .one(db)
-        .await
-        .expect("query session")
-        .expect("session exists");
-    SessionId::new(row.engine_session_id.expect("engine_session_id set"))
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn update_session_model_rebinds_live_and_emits_model_changed() {
-    let Some(db_url) = test_db_url().await else {
-        eprintln!("skipping: DATABASE_URL not set");
-        return;
-    };
-    let fx = setup(&db_url, "model").await;
-
+/// `POST /assistant/sessions` on `fx.model_id`, returning `sub` positioned
+/// after every event that create caused. The handler only *enqueues* the new
+/// session's `SetModel`; the engine spawns the session (`AgentChanged
+/// { build }`) and rebinds it (`ModelChanged { model-a }`) after the response,
+/// so a receiver opened after it can take those for a later `PATCH`'s events.
+/// The create's `ModelChanged` is its last event (a session's spawn events
+/// precede its first `InMsg`), so consuming up to it is an exact barrier.
+async fn create_settled_session(
+    fx: &Fixture,
+) -> (
+    i32,
+    SessionId,
+    tokio::sync::broadcast::Receiver<OutEvent>,
+    serde_json::Value,
+) {
+    let mut sub = fx.state.agent_engine.holly.subscribe();
     let (status, created) = send(
         &fx.app,
         "POST",
@@ -194,9 +193,31 @@ async fn update_session_model_rebinds_live_and_emits_model_changed() {
     .await;
     assert_eq!(status, axum::http::StatusCode::CREATED, "create: {created}");
     let session_db_id = created["id"].as_i64().expect("session id") as i32;
-    let session_id = engine_session_id(&fx.db, session_db_id).await;
+    let row = assistant_session::Entity::find_by_id(session_db_id)
+        .one(&fx.db)
+        .await
+        .expect("query session")
+        .expect("session exists");
+    let session_id = SessionId::new(row.engine_session_id.expect("engine_session_id set"));
+    wait_for(
+        &mut sub,
+        &session_id,
+        |ev| matches!(ev, OutEvent::ModelChanged { model, .. } if model == "model-a"),
+    )
+    .await;
+    (session_db_id, session_id, sub, created)
+}
 
-    let mut sub = fx.state.agent_engine.holly.subscribe();
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn update_session_model_rebinds_live_and_emits_model_changed() {
+    let Some(db_url) = test_db_url().await else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let fx = setup(&db_url, "model").await;
+
+    let (session_db_id, session_id, mut sub, _) = create_settled_session(&fx).await;
+
     let (status, updated) = send(
         &fx.app,
         "PATCH",
@@ -236,20 +257,9 @@ async fn update_session_generation_merges_partial_overrides() {
     };
     let fx = setup(&db_url, "gen").await;
 
-    let (status, created) = send(
-        &fx.app,
-        "POST",
-        "/assistant/sessions",
-        &fx.cookie,
-        Some(json!({ "model_id": fx.model_id })),
-    )
-    .await;
-    assert_eq!(status, axum::http::StatusCode::CREATED, "create: {created}");
-    let session_db_id = created["id"].as_i64().expect("session id") as i32;
-    let session_id = engine_session_id(&fx.db, session_db_id).await;
+    let (session_db_id, session_id, mut sub, _) = create_settled_session(&fx).await;
 
     // First partial override: temperature only.
-    let mut sub = fx.state.agent_engine.holly.subscribe();
     let (status, updated) = send(
         &fx.app,
         "PATCH",
@@ -397,20 +407,9 @@ async fn update_session_model_switch_preserves_generation_overrides() {
     };
     let fx = setup(&db_url, "switch").await;
 
-    let (status, created) = send(
-        &fx.app,
-        "POST",
-        "/assistant/sessions",
-        &fx.cookie,
-        Some(json!({ "model_id": fx.model_id })),
-    )
-    .await;
-    assert_eq!(status, axum::http::StatusCode::CREATED, "create: {created}");
-    let session_db_id = created["id"].as_i64().expect("session id") as i32;
-    let session_id = engine_session_id(&fx.db, session_db_id).await;
+    let (session_db_id, session_id, mut sub, _) = create_settled_session(&fx).await;
 
     // model-a (fx.model_id) supports all three knobs — set all of them.
-    let mut sub = fx.state.agent_engine.holly.subscribe();
     let (status, updated) = send(
         &fx.app,
         "PATCH",
@@ -494,20 +493,9 @@ async fn update_session_agent_profile_switches_live_and_rejects_unknown() {
     };
     let fx = setup(&db_url, "agent").await;
 
-    let (status, created) = send(
-        &fx.app,
-        "POST",
-        "/assistant/sessions",
-        &fx.cookie,
-        Some(json!({ "model_id": fx.model_id })),
-    )
-    .await;
-    assert_eq!(status, axum::http::StatusCode::CREATED, "create: {created}");
-    let session_db_id = created["id"].as_i64().expect("session id") as i32;
+    let (session_db_id, session_id, mut sub, created) = create_settled_session(&fx).await;
     assert_eq!(created["agent_profile"], json!("build"));
-    let session_id = engine_session_id(&fx.db, session_db_id).await;
 
-    let mut sub = fx.state.agent_engine.holly.subscribe();
     let (status, updated) = send(
         &fx.app,
         "PATCH",

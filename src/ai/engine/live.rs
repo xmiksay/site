@@ -31,7 +31,49 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashSet;
-use entanglement_core::SessionId;
+use entanglement_core::{Holly, OutEvent, SessionId};
+use tokio::sync::broadcast;
+
+use super::awaiting::AwaitingDecisions;
+use super::session_tree::{evict_on_hibernate_or_end, record_session_started};
+
+/// The session watcher: folds session liveness (`live`), sub-agent parent
+/// links (`session_tree`, #17) and parked approval waiters (`awaiting`) from
+/// the same `Holly::subscribe()` broadcast `mcp.rs`/`ws_bridge.rs` also tap.
+pub(super) fn spawn_watcher(
+    holly: &Holly,
+    live: &LiveSessions,
+    awaiting: &AwaitingDecisions,
+) -> tokio::task::JoinHandle<()> {
+    let (live, awaiting) = (live.handle(), awaiting.clone());
+    let mut sub = holly.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match sub.recv().await {
+                Ok(ev) => {
+                    evict_on_hibernate_or_end(&live, &ev);
+                    awaiting.fold(&ev);
+                    if let OutEvent::SessionStarted {
+                        session, parent, ..
+                    } = &ev
+                    {
+                        record_session_started(session.clone(), parent.clone());
+                        // #101: children count as live too. A sub-agent is
+                        // never `mark_live`d by a handler (nothing here mints
+                        // its id), so without this the cache could only ever
+                        // say "unknown" for one — and `send_message` on a
+                        // child needs to tell an already-running child (just
+                        // prompt it) from a hibernated one (resume it first),
+                        // since `Holly::resume` refuses a live id.
+                        live.insert(session.clone());
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
+}
 
 /// How many times [`LiveSessions::await_live`] checks before concluding a
 /// session really has no in-memory task, and how long it waits between checks.

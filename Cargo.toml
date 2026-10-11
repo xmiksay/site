@@ -71,3 +71,4 @@ entanglement-provider = "0.6"
 [dev-dependencies]
 tower           = { version = "0.5", features = ["util"] }
 http-body-util  = "0.1"
+tokio           = { version = "1.52.1", features = ["test-util"] }
