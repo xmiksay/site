@@ -343,6 +343,12 @@ impl SiteEngine {
         self.live_sessions.await_live(session).await
     }
 
+    /// Whether `session`'s `request_id` has an approval waiter parked right
+    /// now (see [`awaiting`]'s module doc).
+    pub fn decision_parked(&self, session: &SessionId, request_id: &str) -> bool {
+        self.awaiting.contains(session, request_id)
+    }
+
     /// Wait (up to `limit`) until `session`'s `request_id` has an approval
     /// waiter parked in the engine — see [`awaiting`]'s module doc for why
     /// `approve` must not send a decision before then.

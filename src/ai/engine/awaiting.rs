@@ -60,6 +60,11 @@ impl AwaitingDecisions {
         }
     }
 
+    pub(super) fn contains(&self, session: &SessionId, request_id: &str) -> bool {
+        self.calls
+            .contains(&(session.clone(), request_id.to_string()))
+    }
+
     /// Wait until `(session, request_id)` has a parked waiter, up to `limit`.
     /// `false` means it never showed up: the call is already resolved, or was
     /// never re-offered.

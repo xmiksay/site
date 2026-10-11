@@ -697,7 +697,9 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   resumed session re-offers asynchronously, and a decision that reaches the
   engine before its waiter exists is silently dropped. A call whose latest
   `ToolRequest` already has a persisted `ToolOutput` (a stale UI, a double
-  click) is refused with `400` instead of waited for. That one shared
+  click) is refused with `400` instead of waited for — unless its waiter is
+  parked right now, since request ids repeat across rounds (Gemini's
+  `{name}#{ordinal}`) and the snapshot may lack the re-asked row. That one shared
   `root_session_id` is exactly why `assistant_sessions.root_engine_session_id`
   (m_032, #99) stores an *engine* id rather than a pointer to the root row:
   every one of these three filters (`resume_session`,
@@ -715,7 +717,8 @@ agentic loop — one `Holly` actor for every tenant, sessions namespaced
   the instant this handler observes e.g. `Done`. Where `approve` must know
   whether *other* calls of a batch are still open (to decide whether to wait
   for the turn's continuation), `turn/routing.rs`'s `open_calls_after` reads
-  them only once its own just-observed `ToolOutput` row has landed: the tap
+  them only once its own just-observed `ToolOutput` row (matched by `seq`,
+  which survives a reused request id) has landed: the tap
   and the single writer persist the broadcast in order, so that row is an
   exact barrier for every earlier event (#104, #124).
 - `projection/` — pure fold of **one** session's `assistant_events` rows into

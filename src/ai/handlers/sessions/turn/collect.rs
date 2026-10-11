@@ -191,7 +191,10 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
         if !ours {
             continue; // an unrelated session's event on the shared fan-out
         }
-        if let OutEvent::ToolOutput { request_id, .. } = &ev {
+        if let OutEvent::ToolOutput {
+            request_id, seq, ..
+        } = &ev
+        {
             let key = (ev_session.clone(), request_id.clone());
             pending_calls.remove(&key);
             open_others.remove(&key);
@@ -202,7 +205,7 @@ pub(in crate::ai::handlers::sessions) async fn send_and_collect(
                 && let Some((db, root)) = drain_check
                 && drain_checked.insert(ev_session.clone())
             {
-                match routing::open_calls_after(db, root, &ev_session, request_id).await {
+                match routing::open_calls_after(db, root, &ev_session, request_id, *seq).await {
                     Ok(open) => {
                         open_others.extend(open.into_iter().filter(|k| !seen_outputs.contains(k)))
                     }

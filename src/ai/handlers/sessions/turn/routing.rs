@@ -4,6 +4,7 @@
 //! write. Split out of `turn.rs` to keep that file under the project's
 //! 400-line cap.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use entanglement_core::{OutEvent, SessionId};
@@ -24,27 +25,31 @@ use crate::state::AppState;
 /// also wait for that session's continuation; this says whether anything
 /// *else* is still open (via [`open_calls_after`]). `ToolCall`/`ToolRequest`/
 /// `ToolOutput` records are never pruned (same fact `session_for_call`'s doc
-/// relies on), so a linear scan for a `ToolRequest` with no later matching
-/// `ToolOutput` is exact for the records it is given.
+/// relies on), so an in-order scan — a call is open from its latest
+/// `ToolRequest` until a `ToolOutput` for the same session and id follows —
+/// is exact for the records it is given, even when a later round reuses an id
+/// (e.g. Gemini's `{name}#{ordinal}`).
 fn open_tool_requests(prior: &[LogRecord]) -> Vec<(SessionId, String)> {
-    let resolved: std::collections::HashSet<&str> = prior
-        .iter()
-        .filter_map(|r| match &r.payload {
-            LogPayload::Out(OutEvent::ToolOutput { request_id, .. }) => Some(request_id.as_str()),
-            _ => None,
-        })
-        .collect();
-    prior
-        .iter()
-        .filter_map(|r| match &r.payload {
-            LogPayload::Out(OutEvent::ToolRequest { request_id, .. })
-                if !resolved.contains(request_id.as_str()) =>
-            {
-                Some((r.session.clone(), request_id.clone()))
+    let mut order: Vec<(SessionId, String)> = Vec::new();
+    let mut open: HashMap<(SessionId, String), bool> = HashMap::new();
+    for r in prior {
+        match &r.payload {
+            LogPayload::Out(OutEvent::ToolRequest { request_id, .. }) => {
+                let key = (r.session.clone(), request_id.clone());
+                if open.insert(key.clone(), true).is_none() {
+                    order.push(key);
+                }
             }
-            _ => None,
-        })
-        .collect()
+            LogPayload::Out(OutEvent::ToolOutput { request_id, .. }) => {
+                if let Some(state) = open.get_mut(&(r.session.clone(), request_id.clone())) {
+                    *state = false;
+                }
+            }
+            _ => {}
+        }
+    }
+    order.retain(|key| open.get(key) == Some(&true));
+    order
 }
 
 /// How long [`open_calls_after`] waits for `DbSink` to land the `ToolOutput`
@@ -54,8 +59,10 @@ const PERSIST_BARRIER_TIMEOUT: Duration = Duration::from_secs(30);
 const PERSIST_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// The calls still open on `session` (under `root`'s log), read once
-/// `assistant_events` holds `session`'s `ToolOutput` for `output` — the one
-/// [`send_and_collect`](super::collect::send_and_collect) just observed live.
+/// `assistant_events` holds `session`'s `ToolOutput` for `output` at `seq` —
+/// the one [`send_and_collect`](super::collect::send_and_collect) just
+/// observed live. `seq` (unique per session) is what tells it apart from an
+/// earlier round's output under a reused request id.
 ///
 /// That row is an exact barrier: the persistence tap and `DbSink`'s single
 /// writer append the engine broadcast in order, so once it has landed, every
@@ -71,11 +78,9 @@ pub(super) async fn open_calls_after(
     root: &SessionId,
     session: &SessionId,
     output: &str,
+    seq: u64,
 ) -> ApiResult<Vec<(SessionId, String)>> {
-    // Matches the persisted `LogRecord` shape: `{"payload": {"kind": …}}`.
-    let barrier = serde_json::json!({ "payload": {
-        "kind": "tool_output", "session": session.0, "request_id": output,
-    }});
+    let barrier = barrier_probe(session, output, seq);
     let deadline = tokio::time::Instant::now() + PERSIST_BARRIER_TIMEOUT;
     loop {
         let landed = assistant_event::Entity::find()
@@ -103,10 +108,18 @@ pub(super) async fn open_calls_after(
         .collect())
 }
 
+/// The `jsonb @>` probe for one persisted `ToolOutput` row — the stored
+/// `LogRecord` shape is `{"payload": {"kind": "tool_output", "seq": …}}`.
+fn barrier_probe(session: &SessionId, output: &str, seq: u64) -> serde_json::Value {
+    serde_json::json!({ "payload": {
+        "kind": "tool_output", "session": session.0, "request_id": output, "seq": seq,
+    }})
+}
+
 /// Whether `session`'s latest `ToolRequest` for `call_id` in `records` already
 /// has its `ToolOutput` — a decision for it can only be a no-op. The latest
 /// one, since a later round may reuse a request id.
-pub(super) fn call_resolved(records: &[LogRecord], session: &SessionId, call_id: &str) -> bool {
+fn call_resolved(records: &[LogRecord], session: &SessionId, call_id: &str) -> bool {
     let Some(asked) = records.iter().rposition(|r| {
         r.session == *session
             && matches!(&r.payload,
@@ -119,6 +132,35 @@ pub(super) fn call_resolved(records: &[LogRecord], session: &SessionId, call_id:
             && matches!(&r.payload,
                 LogPayload::Out(OutEvent::ToolOutput { request_id, .. }) if request_id == call_id)
     })
+}
+
+/// Where a decision for one call stands before `approve` sends it.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Readiness {
+    /// A waiter is parked in the engine right now: send.
+    Parked,
+    /// Not parked, and `prior` shows its latest request answered: refuse.
+    Resolved,
+    /// Neither yet — a resumed session's re-offer or a lagging log: wait.
+    Unknown,
+}
+
+/// `parked` (the engine's live waiter set) wins over `prior`: a later round
+/// can re-ask the same id before its new `ToolRequest` row is persisted, and
+/// the snapshot would then read round one's answer as this call's.
+pub(super) fn decision_readiness(
+    parked: bool,
+    prior: &[LogRecord],
+    session: &SessionId,
+    call_id: &str,
+) -> Readiness {
+    if parked {
+        Readiness::Parked
+    } else if call_resolved(prior, session, call_id) {
+        Readiness::Resolved
+    } else {
+        Readiness::Unknown
+    }
 }
 
 /// Persist an "always deny" `tool_permissions` rule for the tool behind
@@ -257,53 +299,4 @@ pub async fn session_for_call_awaiting(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn request(session: &SessionId, id: &str) -> LogRecord {
-        LogRecord::new(
-            session.clone(),
-            LogPayload::Out(OutEvent::ToolRequest {
-                session: session.clone(),
-                seq: 1,
-                request_id: id.into(),
-                tool: "tag_create".into(),
-                input: "{}".into(),
-            }),
-        )
-    }
-
-    fn output(session: &SessionId, id: &str) -> LogRecord {
-        LogRecord::new(
-            session.clone(),
-            LogPayload::Out(OutEvent::ToolOutput {
-                session: session.clone(),
-                seq: 2,
-                request_id: id.into(),
-                tool: "tag_create".into(),
-                output: "ok".into(),
-                content: Vec::new(),
-            }),
-        )
-    }
-
-    #[test]
-    fn call_resolved_only_once_its_latest_request_has_an_output() {
-        let s = SessionId::new("s");
-        let other = SessionId::new("other");
-        assert!(!call_resolved(&[request(&s, "a")], &s, "a"));
-        assert!(call_resolved(&[request(&s, "a"), output(&s, "a")], &s, "a"));
-        // Same id answered on another session, or reused by a later round.
-        assert!(!call_resolved(
-            &[request(&s, "a"), output(&other, "a")],
-            &s,
-            "a"
-        ));
-        assert!(!call_resolved(
-            &[request(&s, "a"), output(&s, "a"), request(&s, "a")],
-            &s,
-            "a"
-        ));
-        assert!(!call_resolved(&[], &s, "a"));
-    }
-}
+mod tests;
